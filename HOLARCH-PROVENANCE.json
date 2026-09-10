@@ -1,0 +1,8 @@
+{
+  "framework": "HOLARCH",
+  "version": "1.1.0",
+  "source_repo": "https://github.com/Movida/holon-v2.git",
+  "source_commit": "de8a0328aef4caee5eb28783651bef5f773af38f",
+  "publie_le": "2026-09-10",
+  "outil": "tools/holarch-publish"
+}

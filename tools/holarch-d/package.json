@@ -1,0 +1,11 @@
+{
+  "name": "holarch-d",
+  "private": true,
+  "description": "Démon HOLARCH à la demande (spec tools/holarch-d/README.md) — porte MCP, CLI, démon HTTP local.",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "_comment": "Réglages Claude Code injectés par framework/bin/holarch-spawn.js (--settings) dans chaque session d'instance HOLARCH. Ne pas y mettre de règle de chemin en /... (elle serait ancrée sur ce répertoire). Les chemins mission/ et framework/ sont relatifs au répertoire de lancement (racine du dépôt).",
+  "autoMemoryEnabled": false,
+  "env": {
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_CODE_PROMPT_CACHE_TTL": "1h",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+    "BASH_MAX_OUTPUT_LENGTH": "20000",
+    "BASH_DEFAULT_TIMEOUT_MS": "3600000",
+    "BASH_MAX_TIMEOUT_MS": "14400000"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(node framework/bin/holarch-spawn.js *)",
+      "Bash(git init)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git mv *)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git switch *)",
+      "Bash(git branch *)",
+      "Bash(git merge *)",
+      "Bash(mkdir *)",
+      "Bash(python3 *)",
+      "Bash(pytest *)",
+      "Bash(node *)",
+      "Bash(npm test *)",
+      "Bash(npm run *)"
+    ],
+    "deny": [
+      "Write(framework/**)", "Edit(framework/**)",
+      "Write(mission/OBJECTIVE.md)", "Edit(mission/OBJECTIVE.md)"
+    ]
+  },
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" sleep-guard", "timeout": 30 } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" spawn-guard", "timeout": 30 } ] },
+      { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" wake-guard", "timeout": 30 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" context-watch", "timeout": 30 } ] }
+    ]
+  }
+}

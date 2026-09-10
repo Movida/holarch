@@ -1,0 +1,17 @@
+# Node — dépendance externe unique (tools/holarch-d/), jamais committée
+node_modules/
+
+# Claude Code — overrides personnelles
+.claude/settings.local.json
+
+# HOLARCH — journaux bruts du lanceur (résultats JSON, stderr des sessions)
+mission/.holarch/
+
+# Python (outils annexes)
+__pycache__/
+*.py[cod]
+.venv/
+
+.DS_Store
+.vscode/
+.idea/

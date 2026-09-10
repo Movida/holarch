@@ -1,0 +1,9 @@
+# HOLARCH — repères pour une session Claude Code dans ce projet
+
+- Ce dépôt a été créé depuis le modèle HOLARCH (version dans `framework/VERSION`, provenance dans `HOLARCH-PROVENANCE.json`). `framework/` est le contrat et le harnais ; `mission/` est l'espace vivant de **la** mission de ce dépôt (une seule par dépôt) ; `docs/holarch.md` fait foi pour la conception (§16 pour le harnais).
+- Une instance HOLARCH se lance **uniquement** avec `node framework/bin/holarch-spawn.js <chemin>` (ou `npm run bootstrap` pour la toute première session) — jamais `claude -p` à la main : le lanceur fixe modèle/effort par profil, applique les plafonds et les garde-fous, et journalise le coût dans `mission/registry/SESSIONS.md`.
+- Si ton prompt commence par « Tu incarnes l'instance », tu es une instance : ton contrat est déjà dans ton prompt système — ne le relis pas.
+- Avant le premier lancement : rédiger `mission/OBJECTIVE.md` et `framework/CONFIG.md` (à la main depuis un preset de `framework/presets/`, ou avec `node tools/holarch-init/holarch-init.js`), puis `npm run lint` et `npm run dry-run`.
+- Garde-fous de maintenance actifs (`.claude/settings.json`, `tools/holarch-session/`) : bascule de branche refusée pendant qu'une mission tourne, écriture sous `mission/` soumise à confirmation — le mainteneur n'écrit pas les fichiers d'une instance.
+- **Mise à jour du framework** : `npm run upgrade` compare `framework/` à la dernière version publiée du modèle et rapporte ce qui change (dont la validité de `CONFIG.md` contre le nouveau `MANIFEST.md`) ; `npm run upgrade -- --apply` l'applique, seulement quand aucune session de mission ne tourne, sans jamais toucher `framework/CONFIG.md`. Un changement de version majeure se lit dans `framework/CHANGELOG.md` avant d'être appliqué.
+- **Lis économe** : jamais `docs/holarch.md` en entier — `grep` puis la section utile.

@@ -1,0 +1,21 @@
+{
+  "name": "holarch-projet",
+  "private": true,
+  "description": "Projet créé depuis le modèle HOLARCH (voir docs/holarch.md)",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test framework/tests/*.test.js tools/module-forge/test-*.js tools/holarch-init/test-*.js tools/holarch-d/test-*.js tools/config-lint/*.test.js tools/holarch-transcript/test-*.js tools/holarch-session/test-*.js tools/holarch-upgrade/test-*.js",
+    "lint": "node tools/config-lint/config-lint.js framework/CONFIG.md && node tools/module-forge/validate-module.js config framework/CONFIG.md",
+    "dry-run": "node framework/bin/holarch-spawn.js --bootstrap --dry-run",
+    "etat": "node tools/holarch-session/etat.js",
+    "bootstrap": "node framework/bin/holarch-spawn.js --bootstrap",
+    "mission": "node framework/bin/holarch-spawn.js",
+    "upgrade": "node tools/holarch-upgrade/holarch-upgrade.js"
+  },
+  "holarch": {
+    "modele": "https://github.com/Movida/holarch.git",
+    "version": "1.1.0"
+  }
+}

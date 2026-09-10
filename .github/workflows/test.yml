@@ -1,0 +1,22 @@
+name: Harnais HOLARCH
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dépendance externe unique (tools/holarch-d)
+        run: npm install
+        working-directory: tools/holarch-d
+      - name: Valide framework/CONFIG.md (config-lint + module-forge)
+        run: npm run lint
+      - run: npm test
+      - name: Le lanceur se résout sans erreur
+        run: npm run dry-run
