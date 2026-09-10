@@ -499,9 +499,10 @@ test('buildUserPromptDetail : blocs mesurés, notes de troncature sur JOURNAL et
   assert.ok(launcher.prepareLaunch(root, 'concepteur/enfant', {}).blocs.find((b) => b.nom === 'JOURNAL').chars <= 2000);
 });
 
-test('buildUserPrompt sur le corpus archivé (concepteur de holon-v2, état final) : moins de 60 000 caractères', () => {
+const ARCHIVE_V2 = path.join(ROOT, 'docs', 'archive', 'mission-holon-v2');
+test('buildUserPrompt sur le corpus archivé (concepteur de holon-v2, état final) : moins de 60 000 caractères', { skip: !fs.existsSync(ARCHIVE_V2) && 'docs/archive/ absent (modèle publié, sans archive)' }, () => {
   const root = makeRoot();
-  const archive = path.join(ROOT, 'docs', 'archive', 'mission-holon-v2');
+  const archive = ARCHIVE_V2;
   for (const f of ['ROLE.md', 'MEMORY.md', 'STATUS.md', 'INBOX.md', 'JOURNAL.md']) fs.copyFileSync(path.join(archive, 'concepteur', f), path.join(root, 'mission/concepteur', f));
   fs.copyFileSync(path.join(archive, 'registry', 'PROGRESS.md'), path.join(root, 'mission/registry/PROGRESS.md'));
   fs.writeFileSync(path.join(root, 'mission/registry/instances/concepteur.md'), fiche('concepteur', { profil: 'conception', alloue: 30 }));

@@ -10,6 +10,14 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.1.1 — 2026-09-10
+
+Patch (harnais seul) : la CI du modèle publié en 1.1.0 échouait sur deux tests qui supposaient le
+dépôt canonique — `framework/tests/holarch.test.js` (corpus `docs/archive/`, désormais sauté quand
+l'archive est absente) et `tools/holarch-upgrade/test-upgrade.js` (dépendait de `holarch-publish`,
+exclu du modèle, et lisait la source du modèle depuis `package.json`, donc le réseau ; désormais
+autonome, source construite dans un répertoire jetable). Aucun fichier du contrat touché.
+
 ## 1.1.0 — 2026-09-10
 
 Première version numérotée ; elle fige l'état du contrat « v1.1 » déjà cité dans l'en-tête des
