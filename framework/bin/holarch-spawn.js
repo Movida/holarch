@@ -52,6 +52,7 @@ const DEFAULTS = {
   autocompact_tokens: '180000',
   outils_cli: 'Read,Write,Edit,Bash,Glob,Grep,Agent,TodoWrite',
   relances_max: '2',
+  sessions_max_par_instance: '24',
   changements_regime_max: '1',
   commit_par_session: 'oui',
   // Bornes du prompt de réveil (chantier 0, diagnostic 2026-09-09 : les bornes en lignes ne bornaient rien,
@@ -460,9 +461,9 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg) {
   const blocs = [];
   const num = (k, d) => { const v = Number(params[k]); return Number.isFinite(v) && v > 0 ? v : d; };
   const harnais = [
-    `Harnais de cette session : profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}${meta.origine_effort === 'fiche' ? ' (posé dans ta fiche registre)' : ''}, au plus ${params.max_tours_par_session} tours et ${params.budget_usd_par_session} USD (tarif liste) ; un hook te préviendra si ton contexte dépasse ${Math.round(Number(params.seuil_contexte_tokens) / 1000)}k tokens — tu devras alors hiberner volontairement (KERNEL §5.8 : MEMORY.md complet, STATUS.md laissé à son état réel avec la note « hibernation volontaire (contexte) », commit, fin de session ; le lanceur te ré-incarne avec un contexte neuf).`,
+    `Harnais de cette session : profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}${meta.origine_effort === 'fiche' ? ' (posé dans ta fiche registre)' : ''}, au plus ${params.max_tours_par_session} tours et ${params.budget_usd_par_session} USD (tarif liste) ; un hook te préviendra si ton contexte dépasse ${Math.round(Number(params.seuil_contexte_tokens) / 1000)}k tokens — tu devras alors hiberner volontairement (KERNEL §5.8 : MEMORY.md complet, STATUS.md laissé à son état réel avec la note « hibernation volontaire (contexte) », commit, fin de session ; le lanceur te ré-incarne avec un contexte neuf tant que chaque session laisse une trace de progrès — une fiche d'unité ou un commit [${chemin}] — au plus ${params.relances_max} session(s) consécutive(s) sans progrès et ${params.sessions_max_par_instance} sessions en tout, après quoi il alerte ton parent).`,
     `Ton modèle et ton effort sont fixés pour toute cette session ; changer de régime n'est possible qu'entre deux sessions (module d'orchestration, ON_PLAN) : ligne \`Profil\` ou \`Effort\` de ta propre fiche registre, justification dans JOURNAL.md et PROGRESS.md, puis hibernation volontaire avec la note « hibernation volontaire (changement de régime : <ancien> → <nouveau>) » — le lanceur te ré-incarne sur le nouveau régime (au plus ${params.changements_regime_max} fois, décompté à part des ré-incarnations de contexte).`,
-    "Commandes Bash exécutables sans approbation : git add/commit/mv/status/log/diff/show, mkdir, python3, pytest, node, npm test, npm run, et `node framework/bin/holarch-spawn.js <chemin-enfant>` pour incarner un enfant. Toute autre commande est refusée immédiatement (pas de blocage) : adapte-toi au lieu de réessayer. Toute écriture sous framework/ ou dans mission/OBJECTIVE.md est refusée mécaniquement (KERNEL §4).",
+    "Commandes Bash exécutables sans approbation : git add/commit/mv/status/log/diff/show/branch/switch/merge (toujours depuis la racine, jamais `git -C`), mkdir, ls, wc, head, tail, grep, find, diff, date, echo, printf, pwd, python3, pytest, node, npm test, npm run, et `node framework/bin/holarch-spawn.js <chemin-enfant>` pour incarner un enfant. Une commande composée (`;`, `&&`, `|`) n'est acceptée que si chacun de ses segments l'est. Toute autre commande est refusée immédiatement (pas de blocage) : adapte-toi au lieu de réessayer. Toute écriture sous framework/ ou dans mission/OBJECTIVE.md est refusée mécaniquement (KERNEL §4).",
     "Un garde-fou empêche la fin de session tant que STATUS.md indique WORKING sans note d'hibernation volontaire, ou tant que des modifications de mission/ ne sont pas committées : passe toujours par ON_SLEEP.",
   ];
   if (bootstrap) {
@@ -839,11 +840,45 @@ function finishLaunch(root, chemin, code, sessions) {
   return wakeWaiters(root, chemin);
 }
 
+/** Traces de progrès d'une instance — fiches d'unité (`memoire/U<n>-*.md`) et commits `[<chemin>]` — ce qui
+ *  distingue une hibernation utile d'une boucle qui relit et hiberne sans rien produire. */
+function progressSnapshot(root, chemin) {
+  let fiches = 0;
+  try { fiches = fs.readdirSync(path.join(root, 'mission', chemin, 'memoire')).filter((f) => /^U\d+-.*\.md$/.test(f)).length; } catch (_) { /* pas de mémoire adressée */ }
+  let commits = null;
+  try {
+    const r = spawnSync('git', ['log', '--format=%s', '-500'], { cwd: root, encoding: 'utf8' });
+    if (r.status === 0) commits = r.stdout.split('\n').filter((s) => s.startsWith(`[${chemin}]`)).length;
+  } catch (_) { /* pas un dépôt git */ }
+  return { fiches, commits };
+}
+function hasProgressed(avant, apres) {
+  if (apres.fiches > avant.fiches) return true;
+  return avant.commits !== null && apres.commits !== null && apres.commits > avant.commits;
+}
+/** Sessions déjà journalisées pour l'instance dans registry/SESSIONS.md (toutes invocations du lanceur). */
+function countSessions(root, chemin) {
+  const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
+  return text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin).length;
+}
+/** ALERT du lanceur dans l'INBOX du parent (KERNEL §7, provenance `harnais`) : l'enfant ne sera plus ré-incarné
+ *  tout seul, le parent décide — relance détachée, TASK correctif ou FAILED. Rien pour une racine (pas de parent). */
+function appendAlertToParent(root, chemin, corps) {
+  if (!chemin.includes('/')) return null;
+  const parent = chemin.slice(0, chemin.lastIndexOf('/'));
+  const p = path.join(root, 'mission', parent, 'INBOX.md');
+  if (!fs.existsSync(p)) return null;
+  const date = nowIso();
+  const id = `MSG-harnais-${chemin.replace(/\//g, '-')}-${date.replace(/[^0-9]/g, '').slice(0, 14)}`;
+  fs.appendFileSync(p, `\n---\nid: ${id}\nfrom: harnais\nto: ${parent}\ntype: ALERT\nref: —\ndate: ${date}\n---\n${corps}\n`);
+  return id;
+}
+
 function launchWithRelaunches(root, chemin, opts, runner) {
   runner = runner || runOnce;
   const sessions = [];
   let attempt = 0;
-  let relances = 0; // ré-incarnations de contexte (relances_max)
+  let relances = 0; // ré-incarnations de contexte consécutives SANS progrès (relances_max)
   let changements = 0; // ré-incarnations après un changement de régime (changements_regime_max)
   for (;;) {
     attempt += 1;
@@ -853,6 +888,7 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     // T4 réel session n°4→5 : la ré-incarnation recevait l'état de la session n°3).
     const launch = prepareLaunch(root, chemin, opts);
     if (opts.timeoutMin > 0) launch.timeoutMs = opts.timeoutMin * 60 * 1000;
+    const avant = progressSnapshot(root, chemin);
     const out = runner(launch, attempt);
     const status = readStatusOf(root, chemin);
     const line = appendSessionLine(root, launch.cfg.nom, chemin, launch.meta, out.res, out.elapsedMs, status.etat || '(absent)', { systeme: launch.systemPrompt.length, utilisateur: launch.prompt.length });
@@ -876,9 +912,27 @@ function launchWithRelaunches(root, chemin, opts, runner) {
       process.stderr.write(`HOLARCH ▸ ${chemin} ▸ changement de régime ${changements}/${maxChangements} : ${regime(launch.meta)} → ${regime(next)} (profil ${next.profil}) — ré-incarnation\n`);
       continue;
     }
-    if (relances >= maxRelances) return sessions;
-    relances += 1;
-    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ hibernation volontaire (contexte) — ré-incarnation ${relances}/${maxRelances}\n`);
+    // Ré-incarnation de contexte : tant que chaque session laisse une trace de progrès (fiche d'unité, commit
+    // [<chemin>]), on continue — relances_max borne les sessions consécutives SANS progrès, sessions_max_par_instance
+    // borne le total (toutes invocations). Épuisé : ALERT au parent, qui décide (relance détachée, TASK, FAILED) —
+    // plus d'humain dans la boucle (revue du 2026-09-10, holarch.md §15 décision 23).
+    if (hasProgressed(avant, progressSnapshot(root, chemin))) relances = 0; else relances += 1;
+    const total = countSessions(root, chemin);
+    const maxSessions = Number(launch.params.sessions_max_par_instance) || 0;
+    let arret = null;
+    if (maxSessions && total >= maxSessions) arret = { motif: 'plafond', max: maxSessions, total };
+    else if (relances > maxRelances) arret = { motif: 'sans-progres', sansProgres: relances, max: maxRelances };
+    if (arret) {
+      const note = (status.note || '').slice(0, 200);
+      const suite = `Il ne sera plus ré-incarné tout seul : relance-le en tâche détachée (\`node framework/bin/holarch-spawn.js ${chemin} --detach\`) après lecture de sa mémoire, recadre-le (\`TASK\`), ou passe-le \`FAILED\`.`;
+      arret.alerte = appendAlertToParent(root, chemin, arret.motif === 'plafond'
+        ? `**Enfant \`${chemin}\` arrêté par le lanceur** : plafond \`sessions_max_par_instance\` (${maxSessions}) atteint, STATUS encore WORKING (hibernation volontaire). Dernière note : « ${note} ». ${suite}`
+        : `**Enfant \`${chemin}\` arrêté par le lanceur** : ${relances} session(s) consécutive(s) en hibernation volontaire sans progrès (aucune nouvelle fiche \`memoire/U<n>-*.md\`, aucun commit \`[${chemin}]\`). Dernière note : « ${note} ». ${suite}`);
+      sessions[sessions.length - 1].arret = arret;
+      process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ré-incarnations arrêtées (${arret.motif === 'plafond' ? `plafond ${maxSessions} sessions` : `${relances} sans progrès`})${arret.alerte ? ` — ALERT ${arret.alerte} au parent` : ''}\n`);
+      return sessions;
+    }
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ hibernation volontaire (contexte) — ré-incarnation (${relances} sans progrès sur ${maxRelances} ; ${total}${maxSessions ? `/${maxSessions}` : ''} sessions)\n`);
   }
 }
 
@@ -909,7 +963,14 @@ function summarize(launch, sessions) {
   else if (last.res.is_error) { lines.push(`⚠ fin anormale : ${last.res.subtype} — voir ${last.logBase}.result.json`); code = 2; }
   if (isArret) { lines.push('ℹ arrêt propre demandé (--arret) : session terminée sans ré-incarnation.'); }
   else if (status.etat === 'WORKING' && !voluntary) { lines.push('⚠ STATUS.md est resté à WORKING : session plantée ou ON_SLEEP non exécuté (direct-spawn : relancer une fois, puis FAILED + recadrage).'); code = 2; }
-  else if (voluntary) { lines.push(`⚠ hibernations volontaires épuisées (${sessions.length}) : STATUS encore WORKING — relancer manuellement ou augmenter relances_max.`); code = 3; }
+  else if (voluntary) {
+    const a = last.arret || {};
+    const decision = a.alerte ? `ALERT ${a.alerte} déposé dans l'INBOX du parent, qui décide (relance détachée, TASK, FAILED)` : 'relancer manuellement (racine sans parent) ou relever le plafond';
+    lines.push(a.motif === 'plafond'
+      ? `⚠ plafond sessions_max_par_instance (${a.max}) atteint, STATUS encore WORKING (hibernation volontaire) — ${decision}.`
+      : `⚠ ${a.sansProgres || sessions.length} session(s) en hibernation volontaire sans progrès (ni fiche d'unité ni commit [${launch.chemin}] nouveaux) : STATUS encore WORKING — ${decision}.`);
+    code = 3;
+  }
   // §3.1 : une condition de réveil invalide vaut « aucune condition » — dit ici, sinon l'instance attend sans jamais être réveillée.
   if (status.reveil && status.reveil !== '—' && !reveil.parseReveil(status.reveil)) lines.push(`⚠ ligne Réveil de STATUS.md invalide (« ${status.reveil} ») : traitée comme « aucune condition », le harnais ne réveillera pas cette instance — grammaire dans docs/IMPLEMENTATION.md §3.1.`);
   const denials = sessions.reduce((a, s) => a + ((s.res && s.res.permission_denials && s.res.permission_denials.length) || 0), 0);
@@ -1039,7 +1100,7 @@ function main() {
       `racine        : ${root}`,
       `instance      : ${launch.chemin}${launch.bootstrap ? ' (bootstrap)' : ''} · profil ${launch.meta.profil} · profondeur ${launch.meta.depth}`,
       `modèle/effort : ${launch.meta.modele} / ${launch.meta.effort} (effort : ${launch.meta.origine_effort})${launch.params.modele_repli ? ` (repli ${launch.params.modele_repli})` : ''}`,
-      `fusibles      : ${launch.maxTours} tours · ${launch.budget} USD · contexte ${launch.params.seuil_contexte_tokens} tokens (autocompact ${launch.params.autocompact_tokens}) · relances ${launch.params.relances_max} · changements de régime ${launch.params.changements_regime_max}`,
+      `fusibles      : ${launch.maxTours} tours · ${launch.budget} USD · contexte ${launch.params.seuil_contexte_tokens} tokens (autocompact ${launch.params.autocompact_tokens}) · relances sans progrès ${launch.params.relances_max} · sessions/instance ${launch.params.sessions_max_par_instance} · changements de régime ${launch.params.changements_regime_max}`,
       `prompt système: ${launch.systemPrompt.length} caractères (KERNEL + CONFIG + ${launch.cfg.modules.length} modules${launch.bootstrap ? ' + BOOTSTRAP + MANIFEST' : ''})`,
       `prompt        : ${launch.prompt.length} caractères (transmis par stdin, pas en argument — voir D41)`,
       `blocs         : ${launch.blocs.map((b) => `${b.nom} ${b.chars}${b.note ? ` (${b.note})` : ''}`).join(' · ')}`,
@@ -1064,6 +1125,7 @@ module.exports = {
   buildUserPromptDetail, tailBounded, tailInboxBounded, moduleActive, parseUniteHeader,
   buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason,
   isLive, wakeWaiters, detachLaunch, finishLaunch, lastStatusCommitIso, stopPath, liveLockPath,
+  progressSnapshot, hasProgressed, countSessions, appendAlertToParent,
 };
 
 if (require.main === module) main();

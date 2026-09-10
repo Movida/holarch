@@ -1,6 +1,6 @@
 # Module : direct-spawn
 > Catégorie : orchestration
-> Version : 1.3.0
+> Version : 1.4.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : fork-join, dependency-graph, instance-budget, max-depth, context-budget
@@ -17,7 +17,8 @@
 | seuil_contexte_tokens | 120000 | Contexte réel (tokens) au-delà duquel le hook `context-watch` ordonne l'hibernation volontaire. |
 | autocompact_tokens | 180000 | Dernier recours si l'instance ignore l'ordre d'hiberner : fenêtre de compaction automatique de Claude Code (`--autocompact`). |
 | outils_cli | Read,Write,Edit,Bash,Glob,Grep,Agent,TodoWrite | Outils Claude Code disponibles (`--tools`) ; les autres n'entrent pas dans le contexte. |
-| relances_max | 2 | Ré-incarnations automatiques par le lanceur après une hibernation volontaire de contexte. |
+| relances_max | 2 | Sessions consécutives **sans progrès** (aucune nouvelle fiche `memoire/U<n>-*.md`, aucun commit `[<chemin>]`) que le lanceur tolère après une hibernation volontaire de contexte avant d'arrêter de ré-incarner ; une session qui progresse remet le compte à zéro. Arrêt ⇒ `ALERT` du lanceur dans l'INBOX du parent (provenance `harnais`), qui décide : relance détachée, `TASK`, `FAILED`. |
+| sessions_max_par_instance | 24 | Plafond absolu de sessions d'une instance, toutes invocations du lanceur confondues (compté dans `registry/SESSIONS.md`) ; atteint ⇒ même `ALERT` au parent. `0` : sans plafond. |
 | changements_regime_max | 1 | Ré-incarnations automatiques par le lanceur après un changement de régime décidé par l'instance (ligne `Profil` ou `Effort` de sa fiche registre modifiée, puis hibernation volontaire — règle `ON_PLAN`), décomptées à part de `relances_max`. |
 | mode_attente | synchrone | `synchrone` : `ON_SUPERVISE` attend la fin complète du processus de chaque enfant avant de passer au suivant (comportement historique de ce module, inchangé). `detache` : chaque enfant `READY` est lancé avec `--detach` (§ « Réveil par condition » ci-dessous) — aucune session parent ne reste vivante à l'attendre. |
 

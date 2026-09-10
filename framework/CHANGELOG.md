@@ -10,6 +10,25 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.5.0 — 2026-09-10
+
+Mineure (paramètre de module ajouté) : « chantier coût », premier volet — plus d'humain dans la boucle
+de continuation, moins de tours perdus.
+
+- Continuation autonome (`direct-spawn` 1.4.0, lanceur) : `relances_max` ne compte plus les
+  ré-incarnations mais les sessions consécutives **sans progrès** (aucune nouvelle fiche
+  `memoire/U<n>-*.md`, aucun commit `[<chemin>]`) — une session qui progresse remet le compte à zéro ;
+  nouveau plafond absolu `sessions_max_par_instance` (24, toutes invocations confondues, compté dans
+  `SESSIONS.md`). Épuisé : le lanceur dépose un `ALERT` (provenance `harnais`) dans l'INBOX du
+  parent, dont la condition `message:ALERT` le réveille — il décide (relance détachée, `TASK`,
+  `FAILED`). Observé avant : un enfant détaché épuisait ses 2 relances au bout de 3 sessions et la
+  mission s'arrêtait en silence, aucune condition du parent n'étant vraie (mission `holarch-isolation`,
+  10:40 UTC). Test `tests/relances-progres.test.js` ; B2 adapté au nouveau libellé.
+- Allowlist des instances (`claude/instance-settings.json`) : `ls`, `wc`, `head`, `tail`, `grep`,
+  `find`, `diff`, `date`, `echo`, `printf`, `pwd`, `true` — 3 à 5 refus par session observés sur ces
+  commandes et sur des commandes composées (`… ; echo …`), chacun un tour perdu ; la description du
+  harnais injectée au réveil liste les commandes et rappelle « jamais `git -C` ».
+
 ## 1.4.1 — 2026-09-10
 
 Patch (outils, aucun fichier du contrat ni du harnais touché) : la CI du dépôt canonique cassait par

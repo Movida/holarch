@@ -119,7 +119,7 @@ test('summarize : hibernations volontaires épuisées → code 3, distinct du pl
   ];
   const { text, code } = sum(sessions);
   assert.equal(code, 3);
-  assert.match(text, /hibernations volontaires épuisées \(2\)/);
+  assert.match(text, /2 session\(s\) en hibernation volontaire sans progrès/);
   // Ne doit surtout pas être présenté comme une session plantée : le parent relance sans recadrer.
   assert.doesNotMatch(text, /session plantée/);
   assert.doesNotMatch(text, /FAILED \+ recadrage/);
@@ -131,7 +131,7 @@ test('summarize : un plantage pendant une hibernation volontaire reste signalé,
   const { text, code } = sum([session({ res: null, exitCode: 1, status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } })]);
   assert.equal(code, 3);
   assert.match(text, /aucun résultat JSON du CLI/);
-  assert.match(text, /hibernations volontaires épuisées/);
+  assert.match(text, /hibernation volontaire sans progrès/);
 });
 
 // ---------------------------------------------------------------------------
