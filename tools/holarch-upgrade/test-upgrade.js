@@ -14,7 +14,12 @@ const BIN = path.join(__dirname, 'holarch-upgrade.js');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-upgrade-test-'));
 const CALME = '1 bash\n2 node tools/x.js';
 const MISSION = '1 bash\n2 node framework/bin/holarch-spawn.js concepteur\n3 claude -p --model sonnet';
-const GIT_ENV = Object.assign({}, process.env, { GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@localhost', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@localhost' });
+// gc.auto=0 / maintenance.auto=false : pas de maintenance Git détachée dans les dépôts jetables du test
+// (elle écrivait encore dans .git/objects pendant leur suppression — ENOTEMPTY intermittent, 2026-09-10).
+const GIT_ENV = Object.assign({}, process.env, {
+  GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@localhost', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@localhost',
+  GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'gc.auto', GIT_CONFIG_VALUE_0: '0', GIT_CONFIG_KEY_1: 'maintenance.auto', GIT_CONFIG_VALUE_1: 'false',
+});
 const git = (args, cwd) => { const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV }); assert.equal(r.status, 0, `git ${args.join(' ')} : ${r.stderr}`); return r.stdout.trim(); };
 
 /** Un « modèle » : le périmètre de ce dépôt (sans node_modules), VERSION 1.1.0, package.json sans source. */

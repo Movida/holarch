@@ -183,7 +183,7 @@ function analyser(root, opts) {
     rap.statut = 'applique'; rap.code = 0;
     return rap;
   } finally {
-    if (src.temporaire) fs.rmSync(src.dir, { recursive: true, force: true });
+    if (src.temporaire) fs.rmSync(src.dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   }
 }
 

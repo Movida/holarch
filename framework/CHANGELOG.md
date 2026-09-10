@@ -10,6 +10,17 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.4.1 — 2026-09-10
+
+Patch (outils, aucun fichier du contrat ni du harnais touché) : la CI du dépôt canonique cassait par
+intermittence sur `tools/holarch-publish` (`ENOTEMPTY: directory not empty, rmdir …/.git/objects` à
+la suppression du clone temporaire de publication) et, de la même famille, sur le test « source Git :
+clone par tag » de `tools/holarch-upgrade`. Cause : une maintenance Git détachée (`gc --auto`,
+`maintenance run --auto`) écrivant encore dans `.git/objects` pendant `rmSync`. Correctif : `gc.auto=0`
+et `maintenance.auto=false` dans les clones jetables (outil et tests), suppression avec reprises
+(`maxRetries`/`retryDelay`) dans les deux outils. Republié dans le modèle pour que la CI d'un projet
+issu du modèle ne le subisse pas (`holarch-upgrade` en fait partie).
+
 ## 1.4.0 — 2026-09-10
 
 Mineure, après le dogfooding réel du §3.9 (`docs/diagnostics/2026-09-10-dogfooding-reveil-par-condition.md` :
