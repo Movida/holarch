@@ -137,6 +137,18 @@ test('T1 rejouable : deux modules incompatibles actifs, catégorie obligatoire m
   assert.match(e, /« module-fantome » absent du MANIFEST/);
 });
 
+test('les presets (bloc CONFIG extrait) sont valides contre le catalogue réel', () => {
+  const dir = path.join(RACINE, 'framework', 'presets');
+  const presets = fs.readdirSync(dir).filter((n) => n.endsWith('.md'));
+  assert.ok(presets.length >= 3, 'au moins trois presets');
+  for (const f of presets) {
+    const m = fs.readFileSync(path.join(dir, f), 'utf8').match(/```[a-z]*\n(# Configuration[\s\S]*?)\n```/);
+    assert.ok(m, `bloc CONFIG introuvable dans ${f}`);
+    const p = ecrire(`preset-${f}`, `${m[1]}\n`);
+    assert.deepStrictEqual(validerConfig(p, ctxReel()).erreurs, [], `preset non conforme : ${f}`);
+  }
+});
+
 test('un module candidat passé en --extra rend la configuration qui l\'active valide', () => {
   const mod = ecrire('essai-forge.md', MODULE_OK);
   const cfg = ecrire('CONFIG-candidat.md', `# Configuration — mission : test

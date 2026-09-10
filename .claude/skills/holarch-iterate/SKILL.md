@@ -19,6 +19,11 @@ Jamais `claude -p` à la main : le lanceur fixe modèle/effort par profil, pose 
     (dernier message `TASK` non encore traité) — c'est le signe qu'une itération est prête.
   - `STATUS.md` à `DELIVERED` sans mandat neuf dans `INBOX.md` → rien à lancer, le dire à
     l'utilisateur plutôt que de relancer pour rien.
+  - `STATUS.md` à `WAITING_CHILDREN` ou `BLOCKED` avec une ligne `Réveil` (chantier 2, framework
+    1.3.0) → ne pas relancer à la main : le harnais réveille l'instance quand sa condition est
+    satisfaite (à la fin de la session de l'enfant, ou `tools/holarch-watch/` pour `date:`/`fichier:`).
+    `node framework/bin/holarch-spawn.js --reveil --dry-run` montre qui attend quoi et si la condition
+    est satisfaite ; `--reveil` sans `--dry-run` déclenche le réveil à la main (geste du mainteneur).
 
 ## 2. Vérifier l'état du dépôt avant de (re)lancer
 
@@ -30,6 +35,7 @@ rattrapage à faire depuis lui (`docs/ROADMAP.md` §6). Avant de lancer :
 git status --short          # aucun fichier de mission/ non committé d'une session précédente
 npm run lint                # framework/CONFIG.md cohérent avec MANIFEST.md et les modules
 ps -ef | grep -E "holarch-spawn|native-binary/claude" | grep -v grep   # aucune instance déjà en cours
+node framework/bin/holarch-spawn.js --taches                            # aucune tâche détachée `running` (chantier 2)
 npm run upgrade -- --bref   # dans un projet issu du modèle : une version plus récente du framework est-elle publiée ?
 ```
 

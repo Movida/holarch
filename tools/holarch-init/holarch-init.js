@@ -88,7 +88,7 @@ function deriver(r) {
     : push('synchronisation', 'fork-join', 'les tâches sont indépendantes : tout le monde démarre, on attend la fin');
   r.audit
     ? push('memoire', 'journal-synthesis', 'audit fin demandé : journal append-only détaillé')
-    : push('memoire', 'monolithic', 'pas d\'audit fin demandé : MEMORY.md seul, plus simple');
+    : push('memoire', 'unites-indexees', 'pas d\'audit fin demandé : mémoire adressée — fiches d\'unité immuables, MEMORY.md court, index régénéré au réveil (défaut des presets depuis le framework 1.4.0)');
 
   push('recursion', 'self-assessment', 'garde-fou obligatoire avant tout spawn');
   push('recursion', 'max-depth', 'fusible contre l\'explosion de la holarchie');

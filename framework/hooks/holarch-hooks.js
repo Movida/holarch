@@ -5,7 +5,8 @@
  *
  * Branchés par framework/claude/instance-settings.json (passé via --settings par le lanceur) :
  *   Stop        → sleep-guard   : refuse la fin de session tant que STATUS.md est à WORKING sans note
- *                                 d'hibernation volontaire, ou que mission/ contient des changements non committés.
+ *                                 d'hibernation volontaire, ou que mission/ contient des changements non committés
+ *                                 (hors fichiers en vol d'une autre instance vivante — enfant détaché, parent).
  *   PreToolUse  → spawn-guard   : refuse `node framework/bin/holarch-spawn.js <enfant>` si la mécanique de spawn
  *                                 (KERNEL §9) est incomplète, si la cible n'est pas un enfant direct, si la
  *                                 profondeur dépasse profondeur_max, ou si le budget d'instances est nul/dépassé.
@@ -23,10 +24,16 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
+const reveil = require(path.join(__dirname, '..', 'bin', 'reveil.js'));
 
 const STOP_BLOCKS_MAX = 3;
 const WARN_STEP = 20000;
-const VALUE_OPTS = new Set(['--profil', '--modele', '--model', '--effort', '--budget-usd', '--max-tours', '--max-turns', '--permission-mode', '--root', '--timeout-min']);
+// Défauts du module memoire/unites-indexees.md (`ligne_max_chars`, `memoire_max_lignes`) — CONFIG.md
+// ne porte pas de mécanisme de surcharge par paramètre de module ; ces valeurs suivent donc le
+// module tel qu'il se lit, comme STOP_BLOCKS_MAX ci-dessus suit son propre module.
+const UNITES_LIGNE_MAX_CHARS = 200;
+const UNITES_MEMOIRE_MAX_LIGNES = 60;
+const VALUE_OPTS = new Set(['--profil', '--modele', '--model', '--effort', '--budget-usd', '--max-tours', '--max-turns', '--permission-mode', '--root', '--timeout-min', '--arret']);
 
 function readIf(p) { try { return fs.readFileSync(p, 'utf8'); } catch (_) { return null; } }
 function exists(p) { try { fs.accessSync(p); return true; } catch (_) { return false; } }
@@ -35,12 +42,14 @@ function ok() { emit({}); }
 function stripTicks(s) { return String(s || '').trim().replace(/^`+|`+$/g, '').trim(); }
 
 function parseStatus(text) {
-  const s = { etat: '', note: '' };
+  const s = { etat: '', note: '', reveil: '' };
   if (!text) return s;
   const e = text.match(/^\|\s*[ÉE]tat\s*\|\s*([A-Z_]+)/m);
   if (e) s.etat = e[1];
   const n = text.match(/^\|\s*Note\s*\|\s*(.*?)\s*\|\s*$/m);
   if (n) s.note = n[1];
+  const r = text.match(/^\|\s*R[ée]veil\s*\|\s*(.*?)\s*\|\s*$/m);
+  if (r) s.reveil = r[1];
   return s;
 }
 function parseFiche(text) {
@@ -57,6 +66,22 @@ function configParam(root, key) {
   return m ? stripTicks(m[1]) : '';
 }
 function fichePath(root, chemin) { return path.join(root, 'mission', 'registry', 'instances', `${chemin.replace(/\//g, '-')}.md`); }
+// Noms des modules de la table « Modules actifs » de CONFIG.md — `configParam` ne lit qu'un
+// paramètre scalaire `| clé | valeur |`, insuffisant pour une liste de lignes `| # | Catégorie | Module |`.
+function activeModules(root) {
+  const text = readIf(path.join(root, 'framework', 'CONFIG.md'));
+  if (!text) return [];
+  const section = text.match(/##\s*Modules actifs\s*\n([\s\S]*?)(?:\n##\s|\n*$)/);
+  if (!section) return [];
+  const mods = [];
+  for (const line of section[1].split('\n')) {
+    const cells = line.split('|').map((c) => c.trim()).filter((c) => c !== '');
+    if (cells.length < 3) continue;
+    if (cells[0] === '#' || /^-+$/.test(cells[0])) continue;
+    mods.push(cells[cells.length - 1]);
+  }
+  return mods;
+}
 
 function stateFile(sessionId) {
   const dir = path.join(os.tmpdir(), 'holarch-hooks');
@@ -66,10 +91,46 @@ function stateFile(sessionId) {
 function loadState(sessionId) { try { return JSON.parse(fs.readFileSync(stateFile(sessionId), 'utf8')); } catch (_) { return {}; } }
 function saveState(sessionId, st) { try { fs.writeFileSync(stateFile(sessionId), JSON.stringify(st)); } catch (_) { /* ignore */ } }
 
-function gitDirtyCount(root, paths) {
+function gitDirtyCount(root, paths, exclure) {
   const r = spawnSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all', '--', ...paths], { encoding: 'utf8' });
   if (r.status !== 0) return 0; // pas un dépôt git : rien à exiger
-  return r.stdout.split('\n').filter((l) => l.trim() && !/mission\/\.holarch\//.test(l)).length;
+  return r.stdout.split('\n').filter((l) => {
+    if (!l.trim() || /mission\/\.holarch\//.test(l)) return false;
+    const rel = l.slice(3).split(' -> ').pop().trim().replace(/^"|"$/g, '');
+    return !(exclure && exclure(rel));
+  }).length;
+}
+
+/** Toutes les instances de la mission (répertoires porteurs d'un STATUS.md), chemins `a/b/c`. */
+function allInstances(root) {
+  const out = [];
+  const walk = (chemin) => {
+    for (const c of reveil.listChildren(root, chemin)) { const full = chemin ? `${chemin}/${c}` : c; out.push(full); walk(full); }
+  };
+  walk('');
+  return out;
+}
+// Même verrou que le lanceur (liveLockPath/isLive), lu sans jamais le nettoyer.
+function isLiveInstance(root, chemin) {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(path.join(root, 'mission', '.holarch', 'live', `${chemin.replace(/\//g, '-')}.json`), 'utf8')); } catch (_) { return false; }
+  if (!data || !data.pid) return false;
+  try { process.kill(data.pid, 0); return true; } catch (_) { return false; }
+}
+// Fichiers qu'une AUTRE instance, vivante en ce moment (enfant détaché, parent en cours), est en train
+// d'écrire : ils ne sont pas à committer par celle-ci. Sans ce filtre, un parent qui clôt sa session
+// pendant que son enfant détaché travaille était forcé de committer les fichiers de l'enfant, à
+// mi-écriture (dogfooding §3.9 du 2026-09-10). Un ancêtre vivant ne masque que sa fiche registre :
+// son sous-arbre et sa zone shared/ contiennent ceux de l'instance courante.
+function enVolDAutrui(root, instance) {
+  const autres = allInstances(root).filter((i) => i !== instance && isLiveInstance(root, i));
+  if (!autres.length) return null;
+  const prefixes = [];
+  for (const a of autres) {
+    prefixes.push(`mission/registry/instances/${a.replace(/\//g, '-')}.md`);
+    if (!instance.startsWith(`${a}/`)) prefixes.push(`mission/${a}/`, `mission/shared/${a}/`);
+  }
+  return (rel) => prefixes.some((p) => rel === p || rel.startsWith(p));
 }
 
 // ---------------------------------------------------------------------------
@@ -82,11 +143,30 @@ function sleepGuard(ctx) {
   if (st.etat === 'WORKING' && !voluntary) {
     problems.push('`STATUS.md` indique encore WORKING — mets-le à ton état réel (DELIVERED, BLOCKED, WAITING_CHILDREN ou FAILED) ; laisse WORKING uniquement pour une hibernation volontaire, en écrivant dans sa Note « hibernation volontaire (contexte) » ou, après un changement de Profil/Effort dans ta fiche registre, « hibernation volontaire (changement de régime : <ancien> → <nouveau>) »');
   }
+  if (st.etat === 'WAITING_CHILDREN' || st.etat === 'BLOCKED') {
+    const ast = st.reveil && st.reveil !== '—' ? reveil.parseReveil(st.reveil) : null;
+    if (!ast) {
+      problems.push(`ligne \`Réveil\` de STATUS.md vide ou invalide pour un état ${st.etat} — écris une condition valide avant d'hiberner : \`terme | tous(liste) | lun(liste)\`, termes possibles \`message:TYPE\`, \`enfant:NOM:ETAT\`, \`enfants:ETAT\`, \`fichier:CHEMIN\`, \`date:ISO8601\` (docs/IMPLEMENTATION.md §3.1, module direct-spawn v1.2.0).`);
+    }
+  }
   if ((process.env.HOLARCH_COMMIT || 'oui') !== 'non') {
     // Racine : toute la mission (elle seule répond de l'ensemble) ; enfant : son sous-arbre, le registre et sa zone de publication.
     const scope = instance.includes('/') ? [`mission/${instance}`, 'mission/registry', `mission/shared/${instance}`] : ['mission'];
-    const dirty = gitDirtyCount(root, scope);
+    const dirty = gitDirtyCount(root, scope, enVolDAutrui(root, instance));
     if (dirty) problems.push(`${dirty} fichier(s) de mission/ non committé(s) — \`git add -A && git commit -m "[${instance}] <résumé>"\` (KERNEL §5.6)`);
+  }
+  // Bornes du module memoire/unites-indexees.md : ne s'appliquent que si ce module est actif (à la
+  // différence du fusible de budget ci-dessus, ce n'est pas une garantie du harnais mais le renfort
+  // d'un module optionnel — spec §2.4).
+  if (activeModules(root).includes('unites-indexees')) {
+    const mem = readIf(path.join(root, 'mission', instance, 'MEMORY.md'));
+    if (mem) {
+      const lines = mem.split('\n');
+      const tropLongue = lines.some((l) => l.length > UNITES_LIGNE_MAX_CHARS);
+      if (tropLongue) problems.push(`une ligne de \`MEMORY.md\` dépasse ${UNITES_LIGNE_MAX_CHARS} caractères (module unites-indexees) — reformule en plusieurs lignes courtes`);
+      const corps = lines.filter((l) => !/^#+\s/.test(l));
+      if (corps.length > UNITES_MEMOIRE_MAX_LIGNES) problems.push(`\`MEMORY.md\` dépasse ${UNITES_MEMOIRE_MAX_LIGNES} lignes hors titres de section (module unites-indexees) — synthétise, renvoie aux fiches \`memoire/U<n>-….md\` pour le détail`);
+    }
   }
   if (!problems.length) return ok();
   const state = loadState(input.session_id);
@@ -122,6 +202,8 @@ function spawnGuard(ctx) {
   if (!invoke) return ok();
   const deny = (why) => emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[HOLARCH · fusible spawn] ${why}` } });
   if (/--bootstrap/.test(invoke)) return deny("le bootstrap se lance une seule fois, par l'utilisateur — jamais depuis une instance.");
+  if (/(^|\s)--reveil(\s|$)/.test(invoke)) return deny("--reveil est réservé au harnais et à l'utilisateur : une instance ne réveille jamais elle-même le reste de la holarchie.");
+  if (/(^|\s)--arret(\s|$)/.test(invoke)) return deny("--arret est réservé au harnais et à l'utilisateur : une instance ne s'arrête ni n'arrête une autre instance par ce biais.");
   const after = invoke.split(/holarch-spawn\.js/)[1] || '';
   const tokens = after.trim().split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, '')).filter(Boolean);
   let target = '';
@@ -219,7 +301,20 @@ function lastAssistantUsage(transcriptPath) {
 }
 
 function contextWatch(ctx) {
-  const { input } = ctx;
+  const { root, instance, input } = ctx;
+  const stopFile = path.join(root, 'mission', '.holarch', 'stop', instance.replace(/\//g, '-'));
+  const state0 = loadState(input.session_id);
+  if (exists(stopFile) && !state0.stopRequested) {
+    state0.stopRequested = true;
+    saveState(input.session_id, state0);
+    emit({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: "[HOLARCH · arrêt demandé] Un arrêt propre a été demandé pour cette instance (--arret). Ne commence aucune nouvelle unité de travail : termine celle en cours, puis hiberne — MEMORY.md complet pour ton futur toi, entrée JOURNAL.md, STATUS.md laissé à ton état réel avec la Note « hibernation volontaire (arrêt demandé) », fiche registre à jour, commit, puis termine la session. Le lanceur ne te ré-incarnera pas automatiquement après cette note (à la différence d'une hibernation de contexte ou de budget).",
+      },
+    });
+    return;
+  }
   if (!input.transcript_path) return ok();
   const limit = Number(process.env.HOLARCH_CONTEXT_LIMIT) || 120000;
   const usage = lastAssistantUsage(input.transcript_path);
@@ -261,5 +356,5 @@ function main() {
   }
 }
 
-module.exports = { parseStatus, parseFiche, lastAssistantUsage, STOP_BLOCKS_MAX, WARN_STEP };
+module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES };
 if (require.main === module) main();

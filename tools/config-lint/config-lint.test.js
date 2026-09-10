@@ -299,17 +299,19 @@ test('sans --bootstrap-check, aucun contrôle de système de fichiers n\'est fai
 
 // ------------------------------------------------------------ parsing unitaire
 
-test('parseManifest lit 19 modules, leurs catégories et leurs incompatibilités', () => {
-  // 19 = 14 côté framework public + `milestone-reviews`/`git-branches` (propres à cette mission)
+test('parseManifest lit 20 modules, leurs catégories et leurs incompatibilités', () => {
+  // 20 = 14 côté framework public + `milestone-reviews`/`git-branches` (propres à cette mission)
   // - `activity-log` (non synchronisé, cf. registry/DECISIONS.md 2026-09-04T15:20:00Z)
   // + `reserve-hibernation`/`delegation-budget`/`role-personality` (mission holon-v2, itération 5-6,
   // catalogués le 2026-09-05, cf. registry/DECISIONS.md)
-  // + `role-composition` (2026-09-07, ajouté hors holarchie, cf. registry/DECISIONS.md).
+  // + `role-composition` (2026-09-07, ajouté hors holarchie, cf. registry/DECISIONS.md)
+  // + `unites-indexees` (chantier 1, promu le 2026-09-10, framework 1.2.0).
   const m = lint.parseManifest(MANIFEST);
-  assert.strictEqual(m.size, 19);
+  assert.strictEqual(m.size, 20);
   assert.strictEqual(m.get('direct-spawn').categorie, 'orchestration');
   assert.deepStrictEqual(m.get('fork-join').incompatible, ['dependency-graph']);
   assert.deepStrictEqual(m.get('sharded-files').incompatible, []);
+  assert.deepStrictEqual(m.get('unites-indexees').incompatible, ['monolithic', 'journal-synthesis']);
 });
 
 test('parseConfig lit modules, paramètres et politique du CONFIG.md réel', () => {

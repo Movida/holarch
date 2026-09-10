@@ -35,7 +35,7 @@ L'outil écrit dans le répertoire `--out` **uniquement**, et refuse d'écraser 
 | À quoi verras-tu que c'est réussi ? | critères de réussite — **facultatif**, et s'il est vide c'est écrit noir sur blanc dans `OBJECTIVE.md`, avec renvoi au droit de `CLARIFICATION` (KERNEL §6.1) plutôt qu'un remplissage inventé |
 | Tâche cadrée ou projet à plusieurs rôles ? | preset `solo-light` ou `team-standard` : budget d'instances (5/15), profondeur (2/3), plafonds de session, format du rapport final, `instance-budget` et `graveyard-handover` |
 | Les tâches dépendent-elles les unes des autres ? | `dependency-graph` si oui, `fork-join` sinon |
-| Besoin d'un audit fin a posteriori ? | `journal-synthesis` si oui, `monolithic` sinon |
+| Besoin d'un audit fin a posteriori ? | `journal-synthesis` si oui, `unites-indexees` sinon (mémoire adressée, défaut des presets depuis le framework 1.4.0 ; `monolithic` reste au catalogue, à la main) |
 | Suivre l'avancement en direct ? | `heartbeat-log` |
 
 `direct-spawn`, `self-assessment`, `max-depth`, `context-budget`, `typed-escalation` et `sharded-files` sont posés sans question : ce sont soit le seul choix de leur catégorie, soit des garde-fous qu'il n'y a pas lieu de proposer de désactiver à un utilisateur qui découvre le système.

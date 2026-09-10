@@ -1,8 +1,8 @@
 # Module : journal-synthesis
 > Catégorie : memoire
-> Version : 1.0.0
+> Version : 1.1.0
 > Requiert : —
-> Incompatible avec : monolithic
+> Incompatible avec : monolithic, unites-indexees
 > Complète bien : dependency-graph, instance-budget
 
 ## Paramètres

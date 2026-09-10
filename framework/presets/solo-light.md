@@ -14,7 +14,7 @@ Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (
 |---|---|---|
 | 1 | orchestration | direct-spawn |
 | 2 | synchronisation | fork-join |
-| 3 | memoire | monolithic |
+| 3 | memoire | unites-indexees |
 | 4 | recursion | max-depth |
 | 5 | recursion | self-assessment |
 | 6 | recursion | instance-budget |

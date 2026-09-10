@@ -12,6 +12,8 @@
  *     toutes les instances d'une mission → cache de prompt partagé, zéro lecture au réveil) ;
  *   - fichiers d'instance (ROLE, MEMORY, STATUS, fin d'INBOX, fin de JOURNAL, lignes PROGRESS) injectés
  *     dans le prompt utilisateur, bornés en caractères (paramètres reveil_*) → aucune relecture au ON_WAKE ;
+ *     si le module mémoire `unites-indexees` est actif : ROLE, MEMORY, STATUS, <reveil>, INBOX (sélection
+ *     ciblée), memoire/INDEX.md — ni JOURNAL.md ni PROGRESS.md (chantier 1, mémoire adressée) ;
  *   - outils restreints, skills/MCP désactivés, mémoire automatique coupée ;
  *   - fusibles durs : --max-turns, --max-budget-usd, --autocompact, hooks (framework/hooks/) ;
  *   - résultat JSON exploité : coût, tokens, tours, session → registry/SESSIONS.md (append-only).
@@ -31,7 +33,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { spawnSync } = require('child_process');
+const { spawnSync, spawn } = require('child_process');
+const reveil = require('./reveil');
 
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const VALID_PERMISSION_MODES = ['acceptEdits', 'default', 'manual', 'plan', 'auto', 'dontAsk', 'bypassPermissions'];
@@ -133,6 +136,28 @@ function tailInboxBounded(text, maxMessages, maxChars) {
   while (start < idx.length - 1 && header.length + (t.length - idx[start]) > maxChars) start += 1;
   return { content: header + t.slice(idx[start]), hidden: start };
 }
+/**
+ * Découpe un fichier de messages (INBOX.md/OUTBOX.md, KERNEL §7) en blocs `---\nid: ...`. Retourne
+ * l'en-tête avant le premier message et la liste des messages avec leurs champs `id`, `date`, `type`,
+ * `ref` extraits de l'en-tête YAML de chaque bloc.
+ */
+function parseMessageBlocks(text) {
+  const t = String(text || '');
+  const re = /^---\nid: /gm;
+  const idx = [];
+  let m;
+  while ((m = re.exec(t))) idx.push(m.index);
+  const header = idx.length ? t.slice(0, idx[0]) : t;
+  const msgs = [];
+  for (let i = 0; i < idx.length; i++) {
+    const start = idx[i];
+    const end = i + 1 < idx.length ? idx[i + 1] : t.length;
+    const block = t.slice(start, end);
+    const field = (name) => { const mm = block.match(new RegExp(`^${name}:\\s*(.*)$`, 'm')); return mm ? mm[1].trim() : ''; };
+    msgs.push({ start, end, block, id: field('id'), date: field('date'), type: field('type'), ref: field('ref') });
+  }
+  return { header, msgs };
+}
 function fmtDuration(ms) {
   const s = Math.round((ms || 0) / 1000);
   return s >= 60 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` : `${s}s`;
@@ -197,13 +222,20 @@ function parseFiche(text) {
 }
 
 function parseStatus(text) {
-  const s = { etat: '', note: '' };
+  const s = { etat: '', note: '', reveil: '' };
   if (!text) return s;
   const e = text.match(/^\|\s*[ÉE]tat\s*\|\s*([A-Z_]+)/m);
   if (e) s.etat = e[1];
   const n = text.match(/^\|\s*Note\s*\|\s*(.*?)\s*\|\s*$/m);
   if (n) s.note = n[1];
+  const r = text.match(/^\|\s*R[ée]veil\s*\|\s*(.*?)\s*\|\s*$/m);
+  if (r) s.reveil = r[1];
   return s;
+}
+
+/** true si `module` (catégorie `categorie`) figure dans la table « Modules actifs » de CONFIG.md. */
+function moduleActive(cfg, categorie, module) {
+  return ((cfg && cfg.modules) || []).some((m) => m.categorie === categorie && m.module === module);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,6 +271,158 @@ function resolveProfile(cfg, fiche, chemin, overrides) {
 }
 
 // ---------------------------------------------------------------------------
+// Mémoire adressée (chantier 1) : fiches d'unité, index, sélection d'INBOX, réveil
+// ---------------------------------------------------------------------------
+/**
+ * Lit l'en-tête d'une fiche d'unité (`framework/templates/UNITE.template.md`). Cherche les deux
+ * premières lignes `---` du texte (le commentaire HTML précédent est ignoré) et parse les paires
+ * `clé: valeur` entre elles. Retourne null si moins de deux lignes `---` ne sont trouvées. Les clés
+ * manquantes sont tolérées (chaîne vide).
+ */
+function parseUniteHeader(text) {
+  const lines = String(text || '').split('\n');
+  let start = -1;
+  let end = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].trim() === '---') {
+      if (start === -1) start = i;
+      else { end = i; break; }
+    }
+  }
+  if (start === -1 || end === -1) return null;
+  const header = { id: '', date: '', critere: '', resultat: '', preuve: '', commit: '', tags: '' };
+  for (const raw of lines.slice(start + 1, end)) {
+    const m = raw.match(/^([a-zA-Z][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
+    if (m && Object.prototype.hasOwnProperty.call(header, m[1].toLowerCase())) {
+      header[m[1].toLowerCase()] = m[2].trim();
+    }
+  }
+  return header;
+}
+
+/** Numéro d'unité extrait d'un id `U<n>` ou `U<n><lettre>` (reprise) ; NaN si non reconnu. */
+function uniteNumero(id) {
+  const m = String(id || '').match(/^U(\d+)/i);
+  return m ? Number(m[1]) : NaN;
+}
+
+/**
+ * Régénère `mission/<chemin>/memoire/INDEX.md` : une ligne par fiche `U<n>-*.md` de `memoire/`,
+ * triée par numéro d'unité croissant (U2 avant U10), format
+ * `| U12 | 2026-09-09 | PASS | <critere tronqué à 90 car.> | U12-slug.md |`, précédée d'un en-tête
+ * de table et d'un commentaire « régénéré par le lanceur, ne pas éditer ». Ne crée rien si
+ * `memoire/` n'existe pas. Idempotente : rappelée sans changement, produit le même contenu.
+ */
+function buildMemoryIndex(root, chemin) {
+  const dir = path.join(root, 'mission', chemin, 'memoire');
+  if (!fs.existsSync(dir)) return { lignes: 0, contenu: '' };
+  const files = fs.readdirSync(dir).filter((f) => f !== 'INDEX.md' && /^U\d+[a-zA-Z]*-.*\.md$/.test(f));
+  const entries = [];
+  for (const f of files) {
+    const h = parseUniteHeader(readIf(path.join(dir, f)));
+    if (!h) continue;
+    entries.push({ num: uniteNumero(h.id || f), file: f, h });
+  }
+  entries.sort((a, b) => (a.num - b.num) || a.file.localeCompare(b.file));
+  const header = [
+    '<!-- régénéré par le lanceur, ne pas éditer -->',
+    '| Unité | Date | Résultat | Critère | Fiche |',
+    '|---|---|---|---|---|',
+  ];
+  const rows = entries.map((e) => {
+    const critere = String(e.h.critere || '').slice(0, 90);
+    return `| ${e.h.id || '?'} | ${e.h.date || '—'} | ${e.h.resultat || '—'} | ${critere} | ${e.file} |`;
+  });
+  const contenu = `${header.concat(rows).join('\n')}\n`;
+  fs.writeFileSync(path.join(dir, 'INDEX.md'), contenu);
+  return { lignes: rows.length, contenu };
+}
+
+/** Date ISO (et sha) du dernier commit ayant touché mission/<chemin>/MEMORY.md (= dernière
+ *  hibernation), ou null si Git est absent, en échec, ou si le fichier n'a jamais été committé. */
+function lastHibernationCommit(root, chemin) {
+  const rel = path.join('mission', chemin, 'MEMORY.md').split(path.sep).join('/');
+  let r;
+  try { r = spawnSync('git', ['log', '-1', '--format=%H%n%cI', '--', rel], { cwd: root, encoding: 'utf8' }); }
+  catch (_) { return null; }
+  if (!r || r.error || r.status !== 0 || !r.stdout || !r.stdout.trim()) return null;
+  const lines = r.stdout.trim().split('\n');
+  if (lines.length < 2 || !lines[0] || !lines[1]) return null;
+  return { sha: lines[0], dateIso: lines[1] };
+}
+
+/**
+ * Messages d'INBOX.md « non traités » : union de (a) messages dont `date:` est postérieure à la
+ * date du dernier commit MEMORY.md, (b) les 2 derniers messages du fichier, (c) messages de type
+ * TASK ou RESPONSE dont l'`id` n'apparaît dans aucun `ref:` d'OUTBOX.md. Ordre du fichier conservé,
+ * puis borné par tailInboxBounded(reveil_inbox_messages, reveil_inbox_chars). Sans dépôt Git (git
+ * absent, en échec, ou MEMORY.md jamais committé) : repli sur tailInboxBounded seul.
+ */
+function selectInboxMessages(root, chemin, params) {
+  const inboxText = readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '';
+  const nMsg = Number(params.reveil_inbox_messages) || Number(DEFAULTS.reveil_inbox_messages);
+  const nChars = Number(params.reveil_inbox_chars) || Number(DEFAULTS.reveil_inbox_chars);
+  const hib = lastHibernationCommit(root, chemin);
+  if (!hib) {
+    const b = tailInboxBounded(inboxText, nMsg, nChars);
+    return { content: b.content, hidden: b.hidden, criteres: 'repli sans git : tailInboxBounded seul' };
+  }
+  const { header, msgs } = parseMessageBlocks(inboxText);
+  if (!msgs.length) return { content: inboxText, hidden: 0, criteres: 'aucun message' };
+  const outboxText = readIf(path.join(root, 'mission', chemin, 'OUTBOX.md')) || '';
+  const refs = new Set();
+  for (const m of outboxText.matchAll(/^ref:\s*(.*)$/gm)) { const v = m[1].trim(); if (v && v !== '—') refs.add(v); }
+  const selected = new Set();
+  for (const m of msgs) { if (m.date && m.date > hib.dateIso) selected.add(m); }
+  for (const m of msgs.slice(-2)) selected.add(m);
+  for (const m of msgs) { if ((m.type === 'TASK' || m.type === 'RESPONSE') && m.id && !refs.has(m.id)) selected.add(m); }
+  const ordered = msgs.filter((m) => selected.has(m));
+  const rawContent = header + ordered.map((m) => m.block).join('');
+  const hiddenParUnion = msgs.length - ordered.length;
+  const b = tailInboxBounded(rawContent, nMsg, nChars);
+  return {
+    content: b.content,
+    hidden: hiddenParUnion + b.hidden,
+    criteres: 'postérieurs au dernier commit MEMORY ; 2 derniers ; TASK/RESPONSE sans ref dans OUTBOX',
+  };
+}
+
+/**
+ * Bloc `<reveil>` injecté après STATUS.md : état et note de STATUS.md, identifiants des messages
+ * INBOX ajoutés depuis lastHibernationCommit, enfants directs dont STATUS.md a changé depuis ce
+ * commit (avec leur état courant). Condition de réveil (chantier 2) omise tant qu'il n'est pas en
+ * place. Sans Git : bloc réduit à l'état de STATUS.md.
+ */
+function describeWakeReason(root, chemin) {
+  const status = parseStatus(readIf(path.join(root, 'mission', chemin, 'STATUS.md')));
+  const lines = [`état : ${status.etat || '(absent)'}${status.note ? ` — ${status.note}` : ''}`];
+  const hib = lastHibernationCommit(root, chemin);
+  if (!hib) {
+    lines.push('sans Git : bloc réduit à l\'état de STATUS.md');
+    return lines.join('\n');
+  }
+  const { msgs } = parseMessageBlocks(readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '');
+  const nouveaux = msgs.filter((m) => m.date && m.date > hib.dateIso).map((m) => m.id || '?');
+  lines.push(nouveaux.length ? `messages INBOX nouveaux depuis ${hib.sha.slice(0, 8)} : ${nouveaux.join(', ')}` : 'aucun message INBOX nouveau depuis la dernière hibernation');
+  const relBase = path.join('mission', chemin).split(path.sep).join('/');
+  let diff;
+  try { diff = spawnSync('git', ['diff', '--name-only', hib.sha, '--', `${relBase}/*/STATUS.md`], { cwd: root, encoding: 'utf8' }); }
+  catch (_) { diff = null; }
+  const children = [];
+  if (diff && !diff.error && diff.status === 0 && diff.stdout) {
+    for (const f of diff.stdout.trim().split('\n').filter(Boolean)) {
+      const relToChild = path.relative(relBase, f).split(path.sep).join('/');
+      const childName = relToChild.split('/')[0];
+      if (!childName || children.some((c) => c.startsWith(`${childName} `))) continue;
+      const st = parseStatus(readIf(path.join(root, relBase, childName, 'STATUS.md')));
+      children.push(`${childName} → ${st.etat || '(absent)'}`);
+    }
+  }
+  lines.push(children.length ? `enfants dont le statut a changé : ${children.join(', ')}` : 'aucun enfant dont le statut a changé');
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Construction des prompts
 // ---------------------------------------------------------------------------
 function fileBlock(rel, content, note) {
@@ -271,7 +455,7 @@ function buildSystemPrompt(root, cfg, bootstrap) {
   return parts.join('\n');
 }
 
-function buildUserPromptDetail(root, chemin, meta, params, bootstrap) {
+function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg) {
   const p = [];
   const blocs = [];
   const num = (k, d) => { const v = Number(params[k]); return Number.isFinite(v) && v > 0 ? v : d; };
@@ -289,8 +473,12 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap) {
     p.push(...harnais);
     return { prompt: p.join('\n\n'), blocs };
   }
+  const uniteMode = moduleActive(cfg || {}, 'memoire', 'unites-indexees');
   p.push(`Tu incarnes l'instance \`${chemin}\` (profondeur ${meta.depth}, profil ${meta.profil}). Le KERNEL, CONFIG.md et les modules actifs sont dans ton prompt système. Voici l'état exact de tes fichiers d'instance au réveil — ne les relis pas, ils sont identiques sur disque :`);
   const base = path.join(root, 'mission', chemin);
+  // Dans les deux cas (unites-indexees actif ou non), l'index est régénéré avant assemblage du prompt
+  // s'il existe un répertoire memoire/ (spec §2.3) — écriture du lanceur, pas de l'instance (KERNEL §4).
+  buildMemoryIndex(root, chemin);
   const rappel = "relis le fichier complet si ON_ORIENT l'exige";
   const introuvable = (name) => `<fichier chemin="mission/${chemin}/${name}" note="INTROUVABLE"></fichier>`;
   const role = readIf(path.join(base, 'ROLE.md'));
@@ -316,10 +504,22 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap) {
   const st = readIf(path.join(base, 'STATUS.md'));
   p.push(st === null ? introuvable('STATUS.md') : fileBlock(`mission/${chemin}/STATUS.md`, st));
   blocs.push({ nom: 'STATUS', chars: st === null ? 0 : st.length, note: '' });
+  if (uniteMode) {
+    const reveil = describeWakeReason(root, chemin);
+    p.push(`<reveil>\n${reveil}\n</reveil>`);
+    blocs.push({ nom: 'REVEIL', chars: reveil.length, note: '' });
+  }
   const inbox = readIf(path.join(base, 'INBOX.md'));
   if (inbox === null) {
     p.push(introuvable('INBOX.md'));
     blocs.push({ nom: 'INBOX', chars: 0, note: '' });
+  } else if (uniteMode) {
+    const sel = selectInboxMessages(root, chemin, params);
+    const note = sel.hidden
+      ? `${sel.hidden} message(s) non sélectionné(s) (critères : ${sel.criteres}) — ${rappel}`
+      : `critères : ${sel.criteres}`;
+    p.push(fileBlock(`mission/${chemin}/INBOX.md`, sel.content, note));
+    blocs.push({ nom: 'INBOX', chars: sel.content.length, note: sel.hidden ? `${sel.hidden} masqué(s)` : '' });
   } else {
     const nMsg = num('reveil_inbox_messages', INBOX_TAIL_MESSAGES);
     const nChars = num('reveil_inbox_chars', 12000);
@@ -328,25 +528,36 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap) {
     blocs.push({ nom: 'INBOX', chars: content.length, note: hidden ? `${hidden} masqué(s)` : '' });
   }
   const detailDe = (r) => (r.droppedLines ? `${r.droppedLines} ligne(s) retirée(s)` : (r.truncatedLine ? 'dernière ligne tronquée' : ''));
-  const journal = readIf(path.join(base, 'JOURNAL.md'));
-  if (journal && journal.split('\n').length > 12) {
-    const jl = num('reveil_journal_lignes', 40);
-    const jc = num('reveil_journal_chars', 8000);
-    const j = tailBounded(journal, jl, jc);
-    const d = detailDe(j);
-    p.push(fileBlock(`mission/${chemin}/JOURNAL.md`, j.content, `${jl} dernières lignes, bornées à ${jc} caractères${d ? ` (${d})` : ''} — ${rappel}`));
-    blocs.push({ nom: 'JOURNAL', chars: j.content.length, note: d });
-  }
-  const progress = readIf(path.join(root, 'mission', 'registry', 'PROGRESS.md'));
-  if (progress) {
-    const mine = progress.split('\n').filter((l) => l.includes(` · ${chemin} · `));
-    if (mine.length) {
-      const pl = num('reveil_progress_lignes', 10);
-      const pc = num('reveil_progress_chars', 4000);
-      const pr = tailBounded(mine.join('\n'), pl, pc);
-      const d = detailDe(pr);
-      p.push(fileBlock('mission/registry/PROGRESS.md', pr.content, `lignes de cette instance, ${pl} dernières, bornées à ${pc} caractères${d ? ` (${d})` : ''}`));
-      blocs.push({ nom: 'PROGRESS', chars: pr.content.length, note: d });
+  if (!uniteMode) {
+    const journal = readIf(path.join(base, 'JOURNAL.md'));
+    if (journal && journal.split('\n').length > 12) {
+      const jl = num('reveil_journal_lignes', 40);
+      const jc = num('reveil_journal_chars', 8000);
+      const j = tailBounded(journal, jl, jc);
+      const d = detailDe(j);
+      p.push(fileBlock(`mission/${chemin}/JOURNAL.md`, j.content, `${jl} dernières lignes, bornées à ${jc} caractères${d ? ` (${d})` : ''} — ${rappel}`));
+      blocs.push({ nom: 'JOURNAL', chars: j.content.length, note: d });
+    }
+    const progress = readIf(path.join(root, 'mission', 'registry', 'PROGRESS.md'));
+    if (progress) {
+      const mine = progress.split('\n').filter((l) => l.includes(` · ${chemin} · `));
+      if (mine.length) {
+        const pl = num('reveil_progress_lignes', 10);
+        const pc = num('reveil_progress_chars', 4000);
+        const pr = tailBounded(mine.join('\n'), pl, pc);
+        const d = detailDe(pr);
+        p.push(fileBlock('mission/registry/PROGRESS.md', pr.content, `lignes de cette instance, ${pl} dernières, bornées à ${pc} caractères${d ? ` (${d})` : ''}`));
+        blocs.push({ nom: 'PROGRESS', chars: pr.content.length, note: d });
+      }
+    }
+  } else {
+    // unites-indexees : ni JOURNAL.md ni PROGRESS.md (spec §2.3) — memoire/INDEX.md à la place,
+    // au plus 60 lignes, les plus récentes.
+    const idx = readIf(path.join(base, 'memoire', 'INDEX.md'));
+    if (idx !== null) {
+      const capped = tailBounded(idx, 60, Number.MAX_SAFE_INTEGER);
+      p.push(fileBlock(`mission/${chemin}/memoire/INDEX.md`, capped.content, capped.droppedLines ? `60 dernières lignes (${capped.droppedLines} retirée(s))` : undefined));
+      blocs.push({ nom: 'INDEX', chars: capped.content.length, note: '' });
     }
   }
   p.push(...harnais);
@@ -354,8 +565,8 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap) {
   return { prompt: p.join('\n\n'), blocs };
 }
 
-function buildUserPrompt(root, chemin, meta, params, bootstrap) {
-  return buildUserPromptDetail(root, chemin, meta, params, bootstrap).prompt;
+function buildUserPrompt(root, chemin, meta, params, bootstrap, cfg) {
+  return buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg).prompt;
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +574,7 @@ function buildUserPrompt(root, chemin, meta, params, bootstrap) {
 // ---------------------------------------------------------------------------
 function prepareLaunch(root, chemin, opts) {
   const bootstrap = !!opts.bootstrap;
+  try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* rien à supprimer */ }
   const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
   const params = resolveParams(cfg);
   const fiche = bootstrap ? parseFiche(null) : parseFiche(readIf(fichePath(root, chemin)));
@@ -378,7 +590,7 @@ function prepareLaunch(root, chemin, opts) {
   const budget = opts.budget || params.budget_usd_par_session;
   const maxTours = opts.maxTours || params.max_tours_par_session;
   const systemPrompt = buildSystemPrompt(root, cfg, bootstrap);
-  const detail = buildUserPromptDetail(root, chemin, meta, Object.assign({}, params, { budget_usd_par_session: budget, max_tours_par_session: maxTours }), bootstrap);
+  const detail = buildUserPromptDetail(root, chemin, meta, Object.assign({}, params, { budget_usd_par_session: budget, max_tours_par_session: maxTours }), bootstrap, cfg);
   const prompt = detail.prompt;
   const settingsFile = path.join(root, 'framework', 'claude', 'instance-settings.json');
   // Motifs RELATIFS à la racine du projet (constat D2, session n°7 de concepteur — sondé en conditions
@@ -499,7 +711,11 @@ function runOnce(launch, attempt) {
   const stamp = nowIso().replace(/[:]/g, '').replace('T', '-').replace('Z', '');
   const logBase = path.join(logDir, `${launch.chemin.replace(/\//g, '-')}-${stamp}-${attempt}`);
   const t0 = Date.now();
-  const r = spawnSync('claude', args, {
+  fs.mkdirSync(liveDir(launch.root), { recursive: true });
+  fs.writeFileSync(liveLockPath(launch.root, launch.chemin), JSON.stringify({ pid: process.pid, startedAt: nowIso(), attempt }));
+  const bin = process.env.HOLARCH_FAKE_CLAUDE ? process.execPath : 'claude';
+  const realArgs = process.env.HOLARCH_FAKE_CLAUDE ? [process.env.HOLARCH_FAKE_CLAUDE, ...args] : args;
+  const r = spawnSync(bin, realArgs, {
     cwd: launch.root,
     env: launch.env,
     encoding: 'utf8',
@@ -509,6 +725,7 @@ function runOnce(launch, attempt) {
     timeout: launch.timeoutMs || undefined,
     killSignal: 'SIGTERM',
   });
+  try { fs.unlinkSync(liveLockPath(launch.root, launch.chemin)); } catch (_) { /* ignore */ }
   const elapsedMs = Date.now() - t0;
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* ignore */ }
   if (r.stderr) fs.writeFileSync(`${logBase}.stderr.log`, r.stderr);
@@ -527,6 +744,99 @@ function resolveMetaFromDisk(root, chemin, opts) {
   const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
   const fiche = opts.bootstrap ? parseFiche(null) : parseFiche(readIf(fichePath(root, chemin)));
   return resolveProfile(cfg, fiche, chemin, opts);
+}
+
+function liveDir(root) { return path.join(root, 'mission', '.holarch', 'live'); }
+function liveLockPath(root, chemin) { return path.join(liveDir(root), `${chemin.replace(/\//g, '-')}.json`); }
+function isLive(root, chemin) {
+  let data;
+  try { data = JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')); } catch (_) { return false; }
+  if (!data || !data.pid) return false;
+  try { process.kill(data.pid, 0); return true; }
+  catch (_) { try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* ignore */ } return false; }
+}
+
+function tasksDir(root) { return path.join(root, 'mission', '.holarch', 'tasks'); }
+function stopPath(root, chemin) { return path.join(root, 'mission', '.holarch', 'stop', chemin.replace(/\//g, '-')); }
+
+function lastStatusCommitIso(root, chemin) {
+  const rel = path.join('mission', chemin, 'STATUS.md').split(path.sep).join('/');
+  let r;
+  try { r = spawnSync('git', ['log', '-1', '--format=%cI', '--', rel], { cwd: root, encoding: 'utf8' }); }
+  catch (_) { return null; }
+  if (!r || r.error || r.status !== 0 || !r.stdout || !r.stdout.trim()) return null;
+  return r.stdout.trim().split('\n')[0];
+}
+
+function appendReveilsLine(root, chemin, declencheur, condition, tacheId) {
+  const p = path.join(root, 'mission', 'registry', 'REVEILS.md');
+  if (!fs.existsSync(p)) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, [
+      '# Réveils — mission', '',
+      '<!-- Append-only, écrit par le lanceur (wakeWaiters). Une ligne par réveil déclenché. -->', '',
+      '| Date (UTC) | Instance réveillée | Déclencheur | Condition | Tâche |',
+      '|---|---|---|---|---|', '',
+    ].join('\n'));
+  }
+  fs.appendFileSync(p, `| ${nowIso()} | ${chemin} | ${declencheur} | ${condition} | ${tacheId} |\n`);
+}
+
+function wakeWaiters(root, declencheur) {
+  const waiters = reveil.listWaiters(root);
+  const reveilles = [];
+  const now = new Date();
+  const readStatus = (chemin) => readStatusOf(root, chemin);
+  const readInbox = (chemin) => readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '';
+  for (const w of waiters) {
+    if (w.chemin === declencheur) continue;
+    if (!['WAITING_CHILDREN', 'BLOCKED', 'READY'].includes(w.etat)) continue;
+    if (isLive(root, w.chemin)) continue;
+    const sinceIso = lastStatusCommitIso(root, w.chemin);
+    const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox });
+    if (!evalRes.satisfied) continue;
+    const condition = reveil.formatReveil(w.ast);
+    const { id } = detachLaunch(root, w.chemin, {});
+    appendReveilsLine(root, w.chemin, declencheur || '--reveil', condition, id);
+    reveilles.push({ chemin: w.chemin, tache: id, condition });
+  }
+  return reveilles;
+}
+
+function detachLaunch(root, chemin, opts) {
+  const dir = tasksDir(root);
+  fs.mkdirSync(dir, { recursive: true });
+  const id = `${chemin.replace(/\//g, '-')}-${Date.now()}`;
+  const logPath = path.join(dir, `${id}.log`);
+  const jsonPath = path.join(dir, `${id}.json`);
+  const fd = fs.openSync(logPath, 'a');
+  const env = Object.assign({}, process.env, { HOLARCH_TASK_ID: id });
+  const child = spawn(process.execPath, [__filename, chemin], {
+    cwd: root, env, detached: true, stdio: ['ignore', fd, fd],
+  });
+  fs.writeFileSync(jsonPath, JSON.stringify({
+    id, chemin, pid: child.pid, startedAt: nowIso(), state: 'running',
+    parent: (opts && opts.parent) || 'utilisateur', opts: opts || {},
+  }, null, 2));
+  child.unref();
+  fs.closeSync(fd);
+  return { id, pid: child.pid };
+}
+
+function finishLaunch(root, chemin, code, sessions) {
+  const id = process.env.HOLARCH_TASK_ID;
+  if (id) {
+    const jsonPath = path.join(tasksDir(root), `${id}.json`);
+    try {
+      const data = JSON.parse(fs.readFileSync(jsonPath, 'utf8'));
+      data.state = code === 0 ? 'done' : 'failed';
+      data.exitCode = code;
+      data.finishedAt = nowIso();
+      data.sessions = (sessions || []).map((s) => s.res && s.res.session_id).filter(Boolean);
+      fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2));
+    } catch (_) { /* pas de tâche associée : rien à mettre à jour */ }
+  }
+  return wakeWaiters(root, chemin);
 }
 
 function launchWithRelaunches(root, chemin, opts, runner) {
@@ -549,7 +859,8 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     sessions.push(Object.assign({ status, line, launch }, out));
     const maxRelances = Number(launch.params.relances_max) || 0;
     const maxChangements = Number(launch.params.changements_regime_max) || 0;
-    const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '');
+    const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
+    const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !isArret;
     if (!voluntary) return sessions;
     // Changement de régime (direct-spawn, ON_PLAN) : l'instance a modifié la ligne Profil ou Effort de sa fiche
     // registre avant d'hiberner. La fiche est relue ici comme prepareLaunch la relira au tour suivant ; un régime
@@ -588,15 +899,19 @@ function summarize(launch, sessions) {
   lines.push(`HOLARCH ▸ ${launch.chemin} ▸ STATUS=${status.etat || '(absent)'} · ${sessions.length} session(s) · ${turns} tours · ${cost.toFixed(2)} USD · ${fmtDuration(ms)} · ${regimes.join(' → ')} · sessions ${ids}`);
   if (regimes.length > 1) lines.push(`ℹ changement de régime décidé par l'instance (fiche registre) : ${regimes.join(' → ')} — motif dans son JOURNAL.md, trace par session dans mission/registry/SESSIONS.md`);
   let code = 0;
-  const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '');
+  const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
+  const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !isArret;
   if (!last.res) {
     const causeExacte = last.error ? ` — cause : ${last.error.code || ''} ${last.error.message || ''}`.trim() : '';
     lines.push(`⚠ aucun résultat JSON du CLI (code ${last.exitCode}, signal ${last.signal || '—'})${causeExacte} — voir ${last.logBase}.stderr.log`);
     code = 2;
   }
   else if (last.res.is_error) { lines.push(`⚠ fin anormale : ${last.res.subtype} — voir ${last.logBase}.result.json`); code = 2; }
-  if (status.etat === 'WORKING' && !voluntary) { lines.push('⚠ STATUS.md est resté à WORKING : session plantée ou ON_SLEEP non exécuté (direct-spawn : relancer une fois, puis FAILED + recadrage).'); code = 2; }
+  if (isArret) { lines.push('ℹ arrêt propre demandé (--arret) : session terminée sans ré-incarnation.'); }
+  else if (status.etat === 'WORKING' && !voluntary) { lines.push('⚠ STATUS.md est resté à WORKING : session plantée ou ON_SLEEP non exécuté (direct-spawn : relancer une fois, puis FAILED + recadrage).'); code = 2; }
   else if (voluntary) { lines.push(`⚠ hibernations volontaires épuisées (${sessions.length}) : STATUS encore WORKING — relancer manuellement ou augmenter relances_max.`); code = 3; }
+  // §3.1 : une condition de réveil invalide vaut « aucune condition » — dit ici, sinon l'instance attend sans jamais être réveillée.
+  if (status.reveil && status.reveil !== '—' && !reveil.parseReveil(status.reveil)) lines.push(`⚠ ligne Réveil de STATUS.md invalide (« ${status.reveil} ») : traitée comme « aucune condition », le harnais ne réveillera pas cette instance — grammaire dans docs/IMPLEMENTATION.md §3.1.`);
   const denials = sessions.reduce((a, s) => a + ((s.res && s.res.permission_denials && s.res.permission_denials.length) || 0), 0);
   if (denials) lines.push(`ℹ ${denials} appel(s) d'outil refusé(s) par les règles d'autorisation (détail : ${last.logBase}.result.json).`);
   if (status.note) lines.push(`ℹ note STATUS : ${status.note.slice(0, 300)}`);
@@ -608,7 +923,7 @@ function summarize(launch, sessions) {
 // CLI
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [] };
+  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -624,6 +939,10 @@ function parseArgs(argv) {
     else if (a === '--root') o.root = next();
     else if (a === '--add-dir') o.addDir.push(next());
     else if (a === '--timeout-min') o.timeoutMin = Number(next());
+    else if (a === '--detach') o.detach = true;
+    else if (a === '--reveil') o.reveil = true;
+    else if (a === '--taches') o.taches = true;
+    else if (a === '--arret') o.arret = next();
     else if (a === '-h' || a === '--help') { o.help = true; }
     else if (a.startsWith('-')) throw new Error(`option inconnue : ${a}`);
     else if (!o.chemin) o.chemin = a.replace(/^mission\//, '').replace(/\/+$/, '');
@@ -640,17 +959,80 @@ function usage() {
     'Options : --profil <conception|execution|relecture|exploration> --modele <alias|id> --effort <low|medium|high|xhigh|max>',
     '          --budget-usd <n> --max-tours <n> --permission-mode <mode> --timeout-min <n> --root <dir>',
     '          --add-dir <dir> (répétable — dépôt externe accessible en plus de la racine) --dry-run --json',
+    '          --detach --reveil --taches --arret <chemin> (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
   ].join('\n');
+}
+
+function listTaches(root) {
+  const dir = tasksDir(root);
+  let files;
+  try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch (_) { files = []; }
+  return files.sort().map((f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch (_) { return null; } }).filter(Boolean);
+}
+function writeStopRequest(root, chemin) {
+  const dir = path.join(root, 'mission', '.holarch', 'stop');
+  fs.mkdirSync(dir, { recursive: true });
+  const p = path.join(dir, chemin.replace(/\//g, '-'));
+  fs.writeFileSync(p, `${nowIso()}\n`);
+  return p;
 }
 
 function main() {
   let o;
   try { o = parseArgs(process.argv.slice(2)); } catch (e) { process.stderr.write(`${e.message}\n${usage()}\n`); process.exit(1); }
-  if (o.help || !o.chemin) { process.stdout.write(`${usage()}\n`); process.exit(o.help ? 0 : 1); }
+  if (o.help) { process.stdout.write(`${usage()}\n`); process.exit(0); }
   const root = o.root ? path.resolve(o.root) : findRoot(process.cwd());
   if (!root) { process.stderr.write('Racine introuvable : lance depuis un dépôt contenant framework/KERNEL.md et mission/ (ou --root).\n'); process.exit(1); }
+
+  if (o.taches) {
+    const taches = listTaches(root);
+    if (!taches.length) process.stdout.write('aucune tâche détachée.\n');
+    for (const t of taches) process.stdout.write(`${t.id} · ${t.chemin} · ${t.state} · pid ${t.pid}${t.exitCode !== undefined ? ` · exit ${t.exitCode}` : ''}\n`);
+    return;
+  }
+  if (o.arret) {
+    const chemin = o.arret.replace(/^mission\//, '').replace(/\/+$/, '');
+    const p = writeStopRequest(root, chemin);
+    process.stdout.write(`HOLARCH ▸ ${chemin} ▸ arrêt demandé (${p})\n`);
+    return;
+  }
+  if (o.reveil) {
+    const now = new Date();
+    const readStatus = (chemin) => readStatusOf(root, chemin);
+    const readInbox = (chemin) => readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '';
+    const waiters = reveil.listWaiters(root);
+    if (o.dryRun) {
+      if (!waiters.length) process.stdout.write('aucune instance en attente (ligne Réveil non vide).\n');
+      for (const w of waiters) {
+        const sinceIso = lastStatusCommitIso(root, w.chemin);
+        const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox });
+        process.stdout.write(`${w.chemin} · ${reveil.formatReveil(w.ast)} · ${evalRes.satisfied ? 'satisfaite' : 'non satisfaite'}${isLive(root, w.chemin) ? ' · live' : ''}\n`);
+        for (const d of evalRes.details) process.stdout.write(`  - ${d.terme} : ${d.vrai ? 'vrai' : 'faux'} (${d.pourquoi})\n`);
+      }
+      return;
+    }
+    const reveilles = wakeWaiters(root, '--reveil');
+    if (!reveilles.length) process.stdout.write('aucun réveil déclenché.\n');
+    for (const r of reveilles) process.stdout.write(`HOLARCH ▸ ${r.chemin} ▸ réveillée · tâche ${r.tache} · condition ${r.condition}\n`);
+    return;
+  }
+
+  if (!o.chemin) { process.stdout.write(`${usage()}\n`); process.exit(1); }
+
+  if (o.detach && !o.dryRun) {
+    const { id, pid } = detachLaunch(root, o.chemin, {});
+    process.stdout.write(`HOLARCH ▸ ${o.chemin} ▸ détaché · tâche ${id} (pid ${pid})\n`);
+    return;
+  }
+
   let launch;
   try { launch = prepareLaunch(root, o.chemin, o); } catch (e) { process.stderr.write(`holarch-spawn : ${e.message}\n`); process.exit(1); }
+
+  if (o.detach && o.dryRun) {
+    process.stdout.write(`HOLARCH ▸ ${launch.chemin} ▸ détaché (dry-run) · lancerait : node ${__filename} ${launch.chemin} (HOLARCH_TASK_ID=<id>)\n`);
+    return;
+  }
+
   if (o.dryRun) {
     if (o.timeoutMin > 0) launch.timeoutMs = o.timeoutMin * 60 * 1000;
     process.stdout.write([
@@ -671,9 +1053,17 @@ function main() {
   const { text, code } = summarize(sessions[sessions.length - 1].launch, sessions);
   process.stdout.write(`${text}\n`);
   if (o.json) process.stdout.write(`${JSON.stringify(sessions.map((s) => ({ session_id: s.res && s.res.session_id, cost: s.res && s.res.total_cost_usd, turns: s.res && s.res.num_turns, subtype: s.res && s.res.subtype, status: s.status })), null, 2)}\n`);
+  finishLaunch(root, o.chemin, code, sessions);
   process.exit(code);
 }
 
-module.exports = { parseConfig, parseFiche, parseStatus, resolveParams, resolveProfile, resolveMetaFromDisk, buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize, findRoot, launchWithRelaunches, DEFAULTS, DEFAULT_POLICY, tailInboxMessages, INBOX_TAIL_MESSAGES, buildUserPromptDetail, tailBounded, tailInboxBounded };
+module.exports = {
+  parseConfig, parseFiche, parseStatus, resolveParams, resolveProfile, resolveMetaFromDisk,
+  buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize,
+  findRoot, launchWithRelaunches, DEFAULTS, DEFAULT_POLICY, tailInboxMessages, INBOX_TAIL_MESSAGES,
+  buildUserPromptDetail, tailBounded, tailInboxBounded, moduleActive, parseUniteHeader,
+  buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason,
+  isLive, wakeWaiters, detachLaunch, finishLaunch, lastStatusCommitIso, stopPath, liveLockPath,
+};
 
 if (require.main === module) main();

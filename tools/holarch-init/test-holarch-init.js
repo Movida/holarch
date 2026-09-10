@@ -11,7 +11,7 @@ const OUTIL = path.join(__dirname, 'holarch-init.js');
 const init = require(OUTIL);
 
 const CATEGORIES_OBLIGATOIRES = ['orchestration', 'synchronisation', 'memoire', 'registre'];
-const INCOMPATIBLES = [['fork-join', 'dependency-graph'], ['monolithic', 'journal-synthesis']];
+const INCOMPATIBLES = [['fork-join', 'dependency-graph'], ['monolithic', 'journal-synthesis'], ['monolithic', 'unites-indexees'], ['journal-synthesis', 'unites-indexees']];
 
 const REPONSES_SOLO = {
   mission: 'refonte-site', objectif: 'Refondre la page d\'accueil et ses trois sous-pages.',
@@ -32,7 +32,7 @@ test('le mode solo produit une configuration complète et cohérente', () => {
   assert.strictEqual(d.preset, 'solo-light');
   const noms = d.modules.map((m) => m.nom);
   assert.ok(noms.includes('fork-join'), 'tâches indépendantes -> fork-join');
-  assert.ok(noms.includes('monolithic'), 'pas d\'audit fin -> monolithic');
+  assert.ok(noms.includes('unites-indexees'), 'pas d\'audit fin -> unites-indexees (mémoire adressée)');
   assert.ok(noms.includes('heartbeat-log'), 'suivi demandé -> heartbeat-log');
   assert.ok(!noms.includes('instance-budget'), 'solo : pas de répartition de budget à orchestrer');
   assert.strictEqual(d.parametres.profondeur_max, 2);
@@ -141,7 +141,7 @@ test('les huit combinaisons de réponses produisent toutes une config valide', (
 test('une config sciemment cassée est bien rejetée (le test précédent n\'est pas vide)', () => {
   const dir = tmp();
   const { fConfig } = init.ecrire(REPONSES_SOLO, { out: dir });
-  const casse = fs.readFileSync(fConfig, 'utf8').replace('| 3 | memoire | monolithic |', '');
+  const casse = fs.readFileSync(fConfig, 'utf8').replace('| 3 | memoire | unites-indexees |', '');
   fs.writeFileSync(fConfig, casse);
   const v = init.validerConfigProduite(fConfig, {});
   assert.ok(v.erreurs.length > 0, 'retirer une catégorie obligatoire doit produire une erreur');

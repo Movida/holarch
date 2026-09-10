@@ -14,3 +14,6 @@ une session enfant plantée (spec §12).
 | Depuis | <ISO 8601> |
 | Posé par | <chemin parent, ou "soi"> |
 | Note | <libre, optionnel — ex. motif si BLOCKED ou FAILED> |
+| Réveil | — |
+<!-- Condition de réveil pour WAITING_CHILDREN/BLOCKED : grammaire « Réveil par condition »,
+     framework/modules/orchestration/direct-spawn.md. "—" = aucune condition (pas d'attente). -->

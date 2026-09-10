@@ -1,8 +1,8 @@
 # Module : monolithic
 > Catégorie : memoire
-> Version : 1.0.0
+> Version : 1.1.0
 > Requiert : —
-> Incompatible avec : journal-synthesis
+> Incompatible avec : journal-synthesis, unites-indexees
 > Complète bien : fork-join
 
 ## Paramètres
