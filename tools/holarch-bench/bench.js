@@ -204,7 +204,12 @@ function fmt(n) {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 
-function formatCalibrerReport(fichierPath, r) {
+// `subagents` (optionnel) : sortie de sessionsMdDepuisTranscriptions().subagents — un tableau
+// [{ session, nSousAgents, tokens, tours }, ...] ou undefined/[] si aucun dossier subagents/ trouvé
+// (mode --calibrer <SESSIONS.md> classique, ou aucun sous-agent dans les transcriptions). Cette
+// section reste TOUJOURS séparée des lignes ci-dessus (Coût USD/session, Contexte (tokens)…) : les
+// tokens des sous-agents n'entrent jamais dans le même total que ceux de l'instance.
+function formatCalibrerReport(fichierPath, r, subagents) {
   const l = [];
   l.push(`Calibrage à partir de ${fichierPath}`);
   l.push(`  ${r.fichier.nSessions} session(s), ${r.fichier.nInstances} instance(s) distincte(s), colonne Réveil ${r.fichier.reveilPresent ? 'présente' : 'absente (format à dix colonnes)'}, colonne Contexte (départ/max) ${r.fichier.contexteInstantPresent ? 'présente' : 'absente'}.`);
@@ -227,6 +232,20 @@ function formatCalibrerReport(fichierPath, r) {
   l.push('  reserve_usd            — non calculable depuis ce fichier : SESSIONS.md ne consigne que le coût total, déjà terminé, de');
   l.push('                           chaque session, jamais le budget RESTANT au moment précis où elle a hiberné. Voir');
   l.push('                           framework/modules/recursion/reserve-hibernation.md, « Ce que ce module ne fait pas ».');
+  if (subagents && subagents.length) {
+    const totalTokens = subagents.reduce((a, s) => a + s.tokens, 0);
+    const totalSousAgents = subagents.reduce((a, s) => a + s.nSousAgents, 0);
+    const totalTours = subagents.reduce((a, s) => a + s.tours, 0);
+    l.push('');
+    l.push("Tokens et coût des sous-agents — jamais mélangés au total de l'instance ci-dessus (Contexte (tokens)) :");
+    for (const s of subagents) {
+      l.push(`  session ${s.session} — ${s.nSousAgents} sous-agent(s), ${s.tokens} tokens (entrée+cache lu+cache écrit cumulés), ${s.tours} tour(s)`);
+    }
+    l.push(`  total — ${subagents.length} session(s), ${totalSousAgents} sous-agent(s), ${totalTours} tour(s), ${totalTokens} tokens`);
+    l.push('  coût USD des sous-agents — pas de coût calculé, motif : bench.js ne contient aucune table de tarification ($/token par');
+    l.push('                           modèle) ; le coût de l\'instance ci-dessus vient uniquement de la colonne Coût USD de SESSIONS.md,');
+    l.push('                           jamais recalculé depuis des tokens — appliquer la même règle aux sous-agents plutôt que d\'inventer un prix.');
+  }
   return l.join('\n');
 }
 
@@ -714,19 +733,87 @@ function reconstituerSessionTranscription(transcriptPath) {
   return { depart, max, tours };
 }
 
+// Somme CUMULÉE (pas le départ/max instantané de reconstituerSessionTranscription ci-dessus) des
+// tokens d'entrée+cache d'une transcription : c'est la grandeur dont dépendrait un coût USD si une
+// table de tarification ($/token par modèle) existait dans ce fichier — elle n'existe pas (voir
+// README, section « sous-agents ») : on rapporte donc des tokens, jamais un montant inventé.
+function sommerUsageTranscription(transcriptPath) {
+  let text;
+  try { text = fs.readFileSync(transcriptPath, 'utf8'); } catch (e) { return null; }
+  let tours = 0;
+  let total = 0;
+  for (const ligne of text.split('\n')) {
+    if (!ligne.includes('"assistant"') || !ligne.includes('"usage"')) continue;
+    let obj;
+    try { obj = JSON.parse(ligne); } catch (e) { continue; }
+    if (!obj || obj.type !== 'assistant' || !obj.message || !obj.message.usage) continue;
+    const u = obj.message.usage;
+    const input = Number(u.input_tokens) || 0;
+    const cacheLu = Number(u.cache_read_input_tokens) || 0;
+    const cacheCree = Number(u.cache_creation_input_tokens) || 0;
+    total += input + cacheLu + cacheCree;
+    tours++;
+  }
+  if (tours === 0) return null;
+  return { tours, total };
+}
+
 // Construit un texte façon SESSIONS.md (colonnes Instance / Tours / Contexte (départ / max)) à partir
-// d'un dossier de transcriptions *.jsonl, réinjectable tel quel dans calibrer() — même pipeline par
-// nom de colonne que --calibrer <fichier>, aucune nouvelle logique d'agrégation.
+// d'un dossier de transcriptions, réinjectable tel quel dans calibrer() — même pipeline par nom de
+// colonne que --calibrer <fichier>, aucune nouvelle logique d'agrégation pour l'instance.
+//
+// Deux formes d'entrée coexistent dans `dossier` (U7, docs/IMPLEMENTATION.md) :
+//   - un fichier <sid>.jsonl directement sous `dossier` : une session sans sous-agent (forme
+//     historique, inchangée) ;
+//   - un sous-dossier <sid>/ contenant un jsonl racine (transcription de l'instance, même format que
+//     ci-dessus) et, optionnellement, un sous-dossier subagents/*.jsonl (une transcription par
+//     sous-agent lancé pendant cette session).
+// Les tokens des sous-agents ne sont JAMAIS ajoutés aux lignes du tableau md (donc jamais vus par
+// calibrer(), jamais mélangés aux stats de l'instance) : ils sont retournés à part, dans `subagents`.
 function sessionsMdDepuisTranscriptions(dossier) {
-  const fichiers = fs.readdirSync(dossier).filter((f) => f.endsWith('.jsonl')).sort();
-  const lignes = ['| Instance | Tours | Contexte (départ / max) |', '|---|---|---|'];
-  for (const f of fichiers) {
+  const entrees = fs.readdirSync(dossier, { withFileTypes: true });
+  // Le nom d'instance vient du slug du dossier de transcriptions (`…-worktrees-<chemin-tirets>`), pas de la
+  // transcription : sans cela chaque session comptait comme une instance distincte et « hibernations/session »
+  // valait toujours 0 (constat du rapport de holarch-contexte, 2026-09-11).
+  const slug = path.basename(path.resolve(dossier));
+  const mSlug = slug.match(/-worktrees-(.+)$/);
+  const instance = mSlug ? mSlug[1] : slug;
+  const lignes = ['| Instance | Session | Tours | Contexte (départ / max) |', '|---|---|---|---|'];
+  const subagents = [];
+
+  const fichiersPlats = entrees.filter((e) => e.isFile() && e.name.endsWith('.jsonl')).map((e) => e.name).sort();
+  for (const f of fichiersPlats) {
     const r = reconstituerSessionTranscription(path.join(dossier, f));
     if (!r) continue;
     const nom = f.replace(/\.jsonl$/, '');
-    lignes.push(`| ${nom} | ${r.tours} | ${r.depart} / ${r.max} |`);
+    lignes.push(`| ${instance} | ${nom} | ${r.tours} | ${r.depart} / ${r.max} |`);
   }
-  return lignes.join('\n');
+
+  const sousDossiers = entrees.filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  for (const sid of sousDossiers) {
+    const sidDir = path.join(dossier, sid);
+    const racineFichiers = fs.readdirSync(sidDir).filter((f) => f.endsWith('.jsonl')).sort();
+    if (racineFichiers.length === 0) continue; // pas de jsonl racine directement sous <sid>/ : ignoré
+    const r = reconstituerSessionTranscription(path.join(sidDir, racineFichiers[0]));
+    if (r) lignes.push(`| ${instance} | ${sid} | ${r.tours} | ${r.depart} / ${r.max} |`);
+
+    const subagentsDir = path.join(sidDir, 'subagents');
+    if (!fs.existsSync(subagentsDir) || !fs.statSync(subagentsDir).isDirectory()) continue;
+    const fichiersSousAgents = fs.readdirSync(subagentsDir).filter((f) => f.endsWith('.jsonl')).sort();
+    let tokens = 0;
+    let tours = 0;
+    let n = 0;
+    for (const fa of fichiersSousAgents) {
+      const u = sommerUsageTranscription(path.join(subagentsDir, fa));
+      if (!u) continue;
+      tokens += u.total;
+      tours += u.tours;
+      n++;
+    }
+    if (n > 0) subagents.push({ session: sid, nSousAgents: n, tokens, tours });
+  }
+
+  return { md: lignes.join('\n'), subagents };
 }
 
 // ---------------------------------------------------------------------------
@@ -748,6 +835,7 @@ function main(argv) {
     const transIdx = args.indexOf('--transcriptions');
     let fichierPath;
     let text;
+    let subagents;
     if (transIdx !== -1) {
       const dossier = args[transIdx + 1];
       if (!dossier) {
@@ -756,7 +844,11 @@ function main(argv) {
         return;
       }
       fichierPath = `${dossier} (transcriptions *.jsonl)`;
-      try { text = sessionsMdDepuisTranscriptions(dossier); } catch (e) {
+      try {
+        const reconstitue = sessionsMdDepuisTranscriptions(dossier);
+        text = reconstitue.md;
+        subagents = reconstitue.subagents;
+      } catch (e) {
         process.stderr.write(`bench.js --calibrer --transcriptions : impossible de lire ${dossier} (${e.message})\n`);
         process.exitCode = 1;
         return;
@@ -775,7 +867,7 @@ function main(argv) {
       }
     }
     const r = calibrer(text);
-    process.stdout.write(`${formatCalibrerReport(fichierPath, r)}\n`);
+    process.stdout.write(`${formatCalibrerReport(fichierPath, r, subagents)}\n`);
     return;
   }
   if (args[0] === '--a-sec') {
@@ -818,6 +910,7 @@ module.exports = {
   makeJetableRootReel,
   runReel,
   reconstituerSessionTranscription,
+  sommerUsageTranscription,
   sessionsMdDepuisTranscriptions,
 };
 

@@ -37,7 +37,9 @@
     ],
     "deny": [
       "Write(framework/**)", "Edit(framework/**)",
-      "Write(mission/OBJECTIVE.md)", "Edit(mission/OBJECTIVE.md)"
+      "Write(mission/OBJECTIVE.md)", "Edit(mission/OBJECTIVE.md)",
+      "Write(docs/**)", "Edit(docs/**)",
+      "Write(tools/**)", "Edit(tools/**)"
     ]
   },
   "hooks": {
@@ -46,10 +48,14 @@
     ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" spawn-guard", "timeout": 30 } ] },
-      { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" wake-guard", "timeout": 30 } ] }
+      { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" wake-guard", "timeout": 30 } ] },
+      { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" framework-guard", "timeout": 30 } ] }
     ],
     "PostToolUse": [
       { "matcher": "*", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" context-watch", "timeout": 30 } ] }
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" session-start", "timeout": 30 } ] }
     ]
   }
 }

@@ -102,12 +102,81 @@ test('reconstituerSessionTranscription : fichier introuvable -> null', () => {
   assert.equal(bench.reconstituerSessionTranscription(path.join(__dirname, 'fixtures', 'absent.jsonl')), null);
 });
 
-test('sessionsMdDepuisTranscriptions : dossier -> tableau réinjectable dans calibrer', () => {
+test('sessionsMdDepuisTranscriptions : dossier -> { md, subagents }, md réinjectable dans calibrer', () => {
   const dossier = path.join(__dirname, 'fixtures');
-  const texte = bench.sessionsMdDepuisTranscriptions(dossier);
-  assert.match(texte, /exemple-cinq-tours \| 5 \| 1000 \/ 3000/);
-  const r = bench.calibrer(texte);
+  const { md, subagents } = bench.sessionsMdDepuisTranscriptions(dossier);
+  assert.match(md, /exemple-cinq-tours \| 5 \| 1000 \/ 3000/);
+  const r = bench.calibrer(md);
   assert.equal(r.stats.contexteInstantane.n, 1);
+  // fixtures/ ne contient que le fichier plat exemple-cinq-tours.jsonl à sa racine directe : le
+  // sous-dossier subagents-demo/ (utilisé par les tests U7 ci-dessous) n'a pas de jsonl racine
+  // directement sous lui-même (il est niché un niveau plus bas, sous session-abc/) donc il est
+  // silencieusement ignoré ici — aucune interférence entre les deux jeux de fixtures.
+  assert.deepEqual(subagents, []);
+});
+
+// --- U7 : sous-dossier <sid>/ avec jsonl racine (instance) + subagents/*.jsonl ---
+
+test('sommerUsageTranscription : somme cumulée (pas départ/max) sur toutes les lignes assistant/usage', () => {
+  const p = path.join(__dirname, 'fixtures', 'subagents-demo', 'session-abc', 'subagents', 'agent-x.jsonl');
+  const u = bench.sommerUsageTranscription(p);
+  // tour 1 : 500+0 = 500 ; tour 2 : 600+100 = 700 ; total 1200
+  assert.deepEqual(u, { tours: 2, total: 1200 });
+});
+
+test('sommerUsageTranscription : fichier introuvable -> null', () => {
+  assert.equal(bench.sommerUsageTranscription(path.join(__dirname, 'fixtures', 'absent.jsonl')), null);
+});
+
+test('sessionsMdDepuisTranscriptions : dossier <sid>/ + subagents/*.jsonl -> md sans les sous-agents, subagents à part', () => {
+  const dossier = path.join(__dirname, 'fixtures', 'subagents-demo');
+  const { md, subagents } = bench.sessionsMdDepuisTranscriptions(dossier);
+  // la session racine (instance) apparaît dans md, comme le format plat
+  assert.match(md, /\| session-abc \| 3 \| 2000 \/ 4500 \|/);
+  // les tokens des sous-agents ne figurent JAMAIS dans md (jamais vus par calibrer, jamais mélangés
+  // aux stats de l'instance)
+  assert.doesNotMatch(md, /agent-x/);
+  assert.doesNotMatch(md, /agent-y/);
+  assert.doesNotMatch(md, /1200/);
+  assert.doesNotMatch(md, /1550/);
+  // agrégat séparé, par session : agent-x (1200 tokens, 2 tours) + agent-y (350 tokens, 1 tour)
+  assert.deepEqual(subagents, [{ session: 'session-abc', nSousAgents: 2, tokens: 1550, tours: 3 }]);
+  // et les stats de l'instance (calibrer sur md seul) restent celles de la seule session racine
+  const r = bench.calibrer(md);
+  assert.equal(r.stats.contexteInstantane.n, 1);
+  assert.equal(r.stats.contexteInstantane.departMediane, 2000);
+  assert.equal(r.stats.contexteInstantane.maxMediane, 4500);
+});
+
+test('formatCalibrerReport : section sous-agents séparée, tokens jamais additionnés au total instance', () => {
+  const dossier = path.join(__dirname, 'fixtures', 'subagents-demo');
+  const { md, subagents } = bench.sessionsMdDepuisTranscriptions(dossier);
+  const r = bench.calibrer(md);
+  const rapportSansSubagents = bench.formatCalibrerReport(dossier, r);
+  const rapportAvecSubagents = bench.formatCalibrerReport(dossier, r, subagents);
+  // sans sous-agents passés : pas de section
+  assert.doesNotMatch(rapportSansSubagents, /sous-agents/);
+  // avec sous-agents : section présente, avec le détail par session et le total
+  assert.match(rapportAvecSubagents, /Tokens et coût des sous-agents/);
+  assert.match(rapportAvecSubagents, /session session-abc — 2 sous-agent\(s\), 1550 tokens/);
+  assert.match(rapportAvecSubagents, /total — 1 session\(s\), 2 sous-agent\(s\), 3 tour\(s\), 1550 tokens/);
+  // pas de coût USD inventé pour les sous-agents (pas de table de tarification dans bench.js)
+  assert.match(rapportAvecSubagents, /pas de coût calculé/);
+  // le reste du rapport (stats de l'instance) est strictement identique, avec ou sans la section
+  // sous-agents : la présence des sous-agents ne modifie JAMAIS les totaux de l'instance.
+  const prefixeCommun = rapportSansSubagents;
+  assert.equal(rapportAvecSubagents.startsWith(prefixeCommun), true);
+});
+
+test('CLI --calibrer --transcriptions <dossier <sid>/+subagents> : section sous-agents dans la sortie, distincte du contexte instance', () => {
+  const dossier = path.join(__dirname, 'fixtures', 'subagents-demo');
+  const res = spawnSync(process.execPath, [path.join(__dirname, 'bench.js'), '--calibrer', '--transcriptions', dossier], { encoding: 'utf8' });
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Contexte instantané/);
+  assert.match(res.stdout, /1 session/);
+  assert.match(res.stdout, /Tokens et coût des sous-agents/);
+  assert.match(res.stdout, /1550 tokens/);
+  assert.match(res.stdout, /pas de coût calculé/);
 });
 
 test('CLI --calibrer --transcriptions <dossier> : code 0, contexte instantané dans la sortie', () => {

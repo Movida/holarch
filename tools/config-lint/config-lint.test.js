@@ -256,13 +256,24 @@ test('aucune politique de modèle déclarée → ni erreur ni avertissement (dé
 });
 
 test('paramètres du harnais : entiers positifs exigés, absence tolérée', () => {
-  for (const nom of ['budget_usd_par_session', 'max_tours_par_session', 'seuil_contexte_tokens']) {
+  for (const nom of ['budget_usd_par_session', 'max_tours_par_session', 'seuil_contexte_tokens', 'autocompact_tokens']) {
     assert.deepStrictEqual(run(config({ parametres: { [nom]: '5' } })).erreurs, [], `${nom}=5`);
     assert.ok(contient(run(config({ parametres: { [nom]: '0' } })).erreurs, `"${nom}" : "0"`), `${nom}=0`);
     assert.ok(contient(run(config({ parametres: { [nom]: '-3' } })).erreurs, `"${nom}" : "-3"`), `${nom}=-3`);
     assert.ok(contient(run(config({ parametres: { [nom]: 'beaucoup' } })).erreurs, `"${nom}" : "beaucoup"`), `${nom} texte`);
   }
   assert.deepStrictEqual(run(config()).erreurs, [], 'absence tolérée (BOOTSTRAP.md 1.3)');
+});
+
+test('autocompact_tokens (§9.3) : doit rester strictement au-dessus de seuil_contexte_tokens', () => {
+  const valide = run(config({ parametres: { seuil_contexte_tokens: '120000', autocompact_tokens: '180000' } }));
+  assert.deepStrictEqual(valide.erreurs, []);
+  const absent = run(config({ parametres: { seuil_contexte_tokens: '120000' } }));
+  assert.deepStrictEqual(absent.erreurs.filter((m) => m.includes('autocompact_tokens')), []);
+  const egal = run(config({ parametres: { seuil_contexte_tokens: '120000', autocompact_tokens: '120000' } }));
+  assert.ok(contient(egal.erreurs, '"autocompact_tokens" (120000) doit être strictement supérieur à "seuil_contexte_tokens" (120000)'));
+  const inferieur = run(config({ parametres: { seuil_contexte_tokens: '120000', autocompact_tokens: '90000' } }));
+  assert.ok(contient(inferieur.erreurs, '"autocompact_tokens" (90000) doit être strictement supérieur à "seuil_contexte_tokens" (120000)'));
 });
 
 // --------------------------------------------- 1.1 / 1.2 — contrôles bootstrap
@@ -299,15 +310,16 @@ test('sans --bootstrap-check, aucun contrôle de système de fichiers n\'est fai
 
 // ------------------------------------------------------------ parsing unitaire
 
-test('parseManifest lit 20 modules, leurs catégories et leurs incompatibilités', () => {
+test('parseManifest lit 21 modules, leurs catégories et leurs incompatibilités', () => {
   // 20 = 14 côté framework public + `milestone-reviews`/`git-branches` (propres à cette mission)
   // - `activity-log` (non synchronisé, cf. registry/DECISIONS.md 2026-09-04T15:20:00Z)
   // + `reserve-hibernation`/`delegation-budget`/`role-personality` (mission holon-v2, itération 5-6,
   // catalogués le 2026-09-05, cf. registry/DECISIONS.md)
   // + `role-composition` (2026-09-07, ajouté hors holarchie, cf. registry/DECISIONS.md)
   // + `unites-indexees` (chantier 1, promu le 2026-09-10, framework 1.2.0).
+  // + `delegation-intra-session` (chantier 7, `docs/IMPLEMENTATION.md` §9.1, 2026-09-11) = 21.
   const m = lint.parseManifest(MANIFEST);
-  assert.strictEqual(m.size, 20);
+  assert.strictEqual(m.size, 21);
   assert.strictEqual(m.get('direct-spawn').categorie, 'orchestration');
   assert.deepStrictEqual(m.get('fork-join').incompatible, ['dependency-graph']);
   assert.deepStrictEqual(m.get('sharded-files').incompatible, []);

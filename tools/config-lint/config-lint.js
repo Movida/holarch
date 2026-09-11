@@ -24,7 +24,7 @@ const PERMISSION_MODES = ['acceptEdits', 'default', 'manual', 'plan', 'auto', 'd
 const FORMATS_RAPPORT = ['simple', 'executive-summary'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const PROFILS = ['conception', 'execution', 'relecture', 'exploration'];
-const ENTIERS_POSITIFS = ['budget_usd_par_session', 'max_tours_par_session', 'seuil_contexte_tokens'];
+const ENTIERS_POSITIFS = ['budget_usd_par_session', 'max_tours_par_session', 'seuil_contexte_tokens', 'autocompact_tokens'];
 
 // Paramètres transverses reconnus, non portés par un module en particulier
 // (`CONFIG.md` de référence + BOOTSTRAP.md étape 1.3 + étape 3).
@@ -284,6 +284,16 @@ function lintConfig(entree) {
     if (!config.parametres.has(nom)) continue; // « Leur absence n'est pas une erreur » (BOOTSTRAP 1.3)
     const v = config.parametres.get(nom);
     if (!/^\d+$/.test(v) || Number(v) <= 0) err(`paramètre "${nom}" : "${v}" n'est pas un entier positif.`);
+  }
+  // Chantier 7, §9.3 : autocompact_tokens (direct-spawn) doit rester strictement au-dessus du
+  // seuil de hibernation volontaire (seuil_contexte_tokens, context-budget), sans quoi le dernier
+  // recours (compaction automatique de Claude Code) déclencherait avant l'ordre d'hiberner du hook.
+  if (config.parametres.has('autocompact_tokens') && config.parametres.has('seuil_contexte_tokens')) {
+    const auto = Number(config.parametres.get('autocompact_tokens'));
+    const seuil = Number(config.parametres.get('seuil_contexte_tokens'));
+    if (Number.isFinite(auto) && Number.isFinite(seuil) && auto <= seuil) {
+      err(`paramètre "autocompact_tokens" (${auto}) doit être strictement supérieur à "seuil_contexte_tokens" (${seuil}).`);
+    }
   }
 
   // 1.1 / 1.2 — contrôles pré-bootstrap, uniquement sur demande explicite.

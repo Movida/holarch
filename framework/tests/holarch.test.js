@@ -147,7 +147,7 @@ test('prepareLaunch : arguments CLI, prompts injectés, environnement des hooks'
   assert.equal(val('--model'), 'sonnet');
   assert.equal(val('--effort'), 'low');
   assert.equal(val('--max-turns'), '42');
-  assert.equal(val('--max-budget-usd'), '5');
+  assert.equal(val('--max-budget-usd'), '8'); // défaut 1.11.0 (5 → 8, mesuré : holarch.md §15 décision 35)
   assert.equal(val('--permission-mode'), 'acceptEdits');
   assert.equal(val('--settings'), path.join(root, 'framework', 'claude', 'instance-settings.json'));
   assert.ok(a.includes('--exclude-dynamic-system-prompt-sections'));
@@ -173,7 +173,7 @@ test('prepareLaunch : arguments CLI, prompts injectés, environnement des hooks'
   const prevName = process.env.GIT_AUTHOR_NAME;
   process.env.GIT_AUTHOR_NAME = 'Quelqu\'un';
   try { assert.equal(launcher.prepareLaunch(root, 'concepteur/enfant', {}).env.GIT_AUTHOR_NAME, 'Quelqu\'un'); } finally { if (prevName === undefined) delete process.env.GIT_AUTHOR_NAME; else process.env.GIT_AUTHOR_NAME = prevName; }
-  assert.equal(l.env.HOLARCH_CONTEXT_LIMIT, '120000');
+  assert.equal(l.env.HOLARCH_CONTEXT_LIMIT, '180000'); // défaut 1.11.0 (120k → 180k, décision 35)
   const withDirs = launcher.prepareLaunch(root, 'concepteur/enfant', { addDir: ['/tmp/depot-externe', 'relatif'] });
   const dirArgs = withDirs.args.reduce((acc, cur, i) => (withDirs.args[i - 1] === '--add-dir' ? acc.concat(cur) : acc), []);
   assert.deepEqual(dirArgs, ['/tmp/depot-externe', path.resolve('relatif')]);
@@ -445,6 +445,45 @@ test('hook context-watch : avertit au-delà du seuil, une fois par palier de 20k
   const hard = runHook('context-watch', { session_id: sid, transcript_path: transcript }, env);
   assert.match(hard.hookSpecificOutput.additionalContext, /DÉPASSEMENT/);
   assert.deepEqual(runHook('context-watch', { session_id: sid, transcript_path: path.join(root, 'absent.jsonl') }, env), {});
+});
+
+test('hook context-watch : le message au franchissement du seuil porte la liste de contrôle ON_SLEEP', () => {
+  const root = makeRoot();
+  const transcript = path.join(root, 'transcript.jsonl');
+  const line = (ctx) => `${JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 10, cache_read_input_tokens: ctx - 10, cache_creation_input_tokens: 0, output_tokens: 5 } } })}\n`;
+  const env = { HOLARCH_ROOT: root, HOLARCH_INSTANCE: 'concepteur', HOLARCH_CONTEXT_LIMIT: '50000' };
+  fs.writeFileSync(transcript, line(55000));
+  const warn = runHook('context-watch', { session_id: `t-checklist-${Date.now()}`, transcript_path: transcript }, env);
+  const ctx2 = warn.hookSpecificOutput.additionalContext;
+  assert.match(ctx2, /Liste de contrôle ON_SLEEP/);
+  assert.match(ctx2, /MEMORY\.md réécrit en entier/);
+  assert.match(ctx2, /fiche registre à jour/);
+});
+
+test("hook session-start : rappelle le contexte de la session précédente s'il est journalisé", () => {
+  const root = makeRoot();
+  const env = { HOLARCH_ROOT: root, HOLARCH_INSTANCE: 'concepteur' };
+  const sansSessions = runHook('session-start', { session_id: `t-ss-vide-${Date.now()}` }, env);
+  assert.match(sansSessions.hookSpecificOutput.additionalContext, /Discipline mémoire/);
+  assert.doesNotMatch(sansSessions.hookSpecificOutput.additionalContext, /avait démarré avec un contexte/);
+  const entete = '| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens (entrée / cache lu / cache écrit / sortie) | Coût USD | Durée | Fin | STATUS | Réveil (car. système / utilisateur) | Contexte (départ / max) |';
+  const ligne = '| 2026-09-11T13:00:00Z | concepteur | s5 | sonnet/high | 40 | 1/2/3/4 | 0.5 | 10s | normale | WORKING | 100/200 | 67000/138000 |';
+  fs.mkdirSync(require('path').join(root, 'mission', 'registry'), { recursive: true });
+  fs.writeFileSync(require('path').join(root, 'mission', 'registry', 'SESSIONS.md'), `# Sessions\n${entete}\n${ligne}\n`);
+  const avecSessions = runHook('session-start', { session_id: `t-ss-${Date.now()}` }, env);
+  assert.match(avecSessions.hookSpecificOutput.additionalContext, /avait démarré avec un contexte de 67000\/138000 tokens/);
+});
+
+test('hook context-watch : ignore les transcriptions de sous-agent (chemin /subagents/)', () => {
+  const root = makeRoot();
+  const dir = path.join(root, '.holarch-transcripts', 'sid-1', 'subagents');
+  fs.mkdirSync(dir, { recursive: true });
+  const transcript = path.join(dir, 'agent-x.jsonl');
+  const line = JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 10, cache_read_input_tokens: 199990, cache_creation_input_tokens: 0, output_tokens: 5 } } });
+  fs.writeFileSync(transcript, `${line}\n`);
+  const env = { HOLARCH_ROOT: root, HOLARCH_INSTANCE: 'concepteur', HOLARCH_CONTEXT_LIMIT: '50000' };
+  const out = runHook('context-watch', { session_id: `t-subagent-${Date.now()}`, transcript_path: transcript }, env);
+  assert.deepEqual(out, {}); // 200k tokens simulés, largement au-dessus du seuil, mais chemin sous-agent : aucun avertissement
 });
 
 // ---------------------------------------------------------------------------

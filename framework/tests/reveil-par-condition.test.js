@@ -263,8 +263,10 @@ test('T-C4.2 (HOLARCH_FAKE_CLAUDE) : détachement de l\'enfant puis réveil du p
     const { id: enfantId } = launcher.detachLaunch(root, 'concepteur/enfant', {});
     const tasksDir = path.join(root, 'mission', '.holarch', 'tasks');
     await waitFor(() => {
-      liveObserved.push(launcher.isLive(root, 'concepteur'));
       const t = readJsonSafe(path.join(tasksDir, `${enfantId}.json`));
+      // Échantillonné seulement tant que l'enfant tourne : à l'instant où sa tâche se termine, le lanceur a déjà
+      // réveillé le parent et posé son verrou de vivacité (1.10.1) — ce n'est plus « entre le lancement et le réveil ».
+      if (!t || t.state === 'running') liveObserved.push(launcher.isLive(root, 'concepteur'));
       return t && t.state !== 'running' ? t : false;
     });
     await waitFor(() => {

@@ -22,6 +22,7 @@ Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (
 | 8 | conflits | typed-escalation |
 | 9 | registre | sharded-files |
 | 10 | observabilite | heartbeat-log |
+| 11 | extensions | delegation-intra-session |
 
 ## Paramètres
 | Paramètre | Valeur |
@@ -32,9 +33,10 @@ Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (
 | commit_par_session | oui |
 | permission_mode | acceptEdits |
 | format_rapport_final | simple |
-| budget_usd_par_session | 5 |
+| budget_usd_par_session | 8 |
 | max_tours_par_session | 200 |
-| seuil_contexte_tokens | 120000 |
+| seuil_contexte_tokens | 180000 |
+| autocompact_tokens | 400000 |
 
 ## Politique de modèle
 | Profil | Modèle | Effort |

@@ -36,6 +36,7 @@ git status --short          # aucun fichier de mission/ non committé d'une sess
 npm run lint                # framework/CONFIG.md cohérent avec MANIFEST.md et les modules
 ps -ef | grep -E "holarch-spawn|native-binary/claude" | grep -v grep   # aucune instance déjà en cours
 node framework/bin/holarch-spawn.js --taches                            # aucune tâche détachée `running` (chantier 2)
+node framework/bin/holarch-spawn.js --reprendre                         # après un redémarrage du conteneur : ferme les tâches au pid mort et relance les instances en hibernation propre (1.11.0)
 npm run upgrade -- --bref   # dans un projet issu du modèle : une version plus récente du framework est-elle publiée ?
 ```
 

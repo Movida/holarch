@@ -68,6 +68,8 @@ function collecter(root, deps) {
   const cfg = d.lire('framework/CONFIG.md') || '';
   const m = cfg.match(/^#\s*Configuration\s*[—-]+\s*mission\s*:\s*(.+)$/m);
   e.mission = m ? m[1].trim() : '(CONFIG.md sans nom)';
+  // Après un archivage, mission/ n'existe plus mais CONFIG.md porte encore le nom de la mission archivée (2026-09-11).
+  e.missionAbsente = d.lire('mission/OBJECTIVE.md') === null && d.lire('mission/concepteur/STATUS.md') === null;
   const parseStatus = (t) => { const s = { etat: '', note: '' }; if (!t) return s; const a = t.match(/^\|\s*[ÉE]tat\s*\|\s*([A-Z_]+)/m); if (a) s.etat = a[1]; const n = t.match(/^\|\s*Note\s*\|\s*(.*?)\s*\|\s*$/m); if (n) s.note = n[1]; return s; };
   e.racine = parseStatus(d.lire('mission/concepteur/STATUS.md'));
   e.enfants = [];
@@ -95,7 +97,7 @@ function formater(e, bref) {
   if (nc && !bref) for (const f of e.nonCommittes.slice(0, 10)) l.push(`  · ${f}`);
   const racine = e.racine.etat ? `concepteur ${e.racine.etat}${e.racine.note ? ` (${e.racine.note.slice(0, 60)})` : ''}` : 'aucune racine incarnée (mission non démarrée)';
   const enfants = e.enfants.length ? ` · enfants : ${e.enfants.map((x) => `${x.nom} ${x.etat}`).join(', ')}` : '';
-  l.push(`mission ${e.mission} : ${racine}${enfants}`);
+  l.push(e.missionAbsente ? `aucune mission ouverte (mission/ absent ; CONFIG.md porte encore le nom « ${e.mission} », à réécrire à l'ouverture de la prochaine)` : `mission ${e.mission} : ${racine}${enfants}`);
   l.push(e.processus.length ? `⚠ ${e.processus.length} processus de mission en cours : ${e.processus.map((p) => `${p.pid} ${p.commande.split(' ').slice(0, 4).join(' ')}`).join(' ; ')} — ne pas toucher mission/ ni changer de branche (skill holarch-pause)` : 'aucune session de mission en cours');
   l.push(`derniers commits : ${e.commits.map((c) => (bref ? c.slice(0, 60) : c)).join(' · ')}`);
   if (e.sessions.length) l.push(`dernières sessions : ${e.sessions.join(' · ')}`);

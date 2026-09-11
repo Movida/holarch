@@ -29,6 +29,7 @@ git log --oneline holarch/<chemin-tirets>                   # ses commits ; git 
 mission/.holarch/tasks/<chemin-tirets>-<ts>.json|.log       # tâche détachée : state running|done|failed, synthèse du lanceur
 mission/registry/SESSIONS.md  REVEILS.md                    # journal du lanceur, écrit à la racine (non suivi tant que le parent n'a pas committé : normal)
 node framework/bin/holarch-spawn.js --taches                # tâches détachées ; --reveil --dry-run : qui attend quoi, condition satisfaite ou non
+node framework/bin/holarch-spawn.js --reprendre             # lanceur mort (redémarrage du conteneur) : fiches closes, instances en hibernation propre relancées (1.11.0)
 ```
 
 `npm run etat` ne voit que l'arbre principal : sous worktree, les enfants y sont invisibles.

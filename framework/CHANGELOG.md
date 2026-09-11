@@ -10,6 +10,51 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.11.0 — 2026-09-11
+
+Mineure (preset enrichi, défauts du harnais réglés sur mesure, lanceur et hooks corrigés) — promotion du chantier 7
+(1.10.0 ci-dessous, jamais publiée seule) avec les correctifs de maintenance de la même journée :
+- **Défauts** : `budget_usd_par_session` 5 → 8, `seuil_contexte_tokens` 120 000 → 180 000, `autocompact_tokens` 180 000 →
+  400 000 (lanceur et preset `solo-light`) ; le preset active `extensions/delegation-intra-session`. Base : trois missions
+  mesurées (départ ~69k, clôture vers seuil + 25k) et la mission `holarch-delegation` sous 250k, où le fusible n'a
+  jamais sonné et où le budget de 5 USD arbitrait les fins de session (`holarch.md` §15, décision 35).
+- **Lanceur** : verrou de vivacité posé dès le réveil (deux sessions concurrentes du concepteur lancées à 10 ms
+  d'écart, course `wakeWaiters`/`finishLaunch`) ; `--reprendre` (tâche « running » au pid mort : fiche close, instance
+  en hibernation propre relancée — après un redémarrage du conteneur) ; horloge UTC, nombre de sessions jouées et
+  coût cumulé dans le prompt de réveil ; journal du lanceur (`SESSIONS.md`, `REVEILS.md`) committé par le lanceur pour
+  une racine (`[harnais] …`) ; fichier de contexte lu dans le worktree de l'instance (colonne `Contexte` vide pour
+  6 sessions sur 7 sous isolation) ; table `## Paramètres` conservée dans le prompt réduit.
+- **Hooks** : `context-watch` signale le courrier arrivé dans `INBOX.md` en cours de session et injecte un fait de
+  contexte par palier de 50k sous le seuil (« n'hiberne pas tant que ce hook ne te le demande pas ») ; `sleep-guard`
+  bloque un constat « impossible / bloqué / refusé » sans BLOCKER, CLARIFICATION ni PROPOSAL du jour, sauf mention
+  « constat non bloquant ».
+- **Outils** : `etat.js` dit « aucune mission ouverte » quand `mission/` est absent ; `holarch-publish` supprime son
+  clone temporaire même en cas de refus (893 dossiers accumulés par les tests) ; `bench.js --transcriptions` nomme
+  l'instance d'après le slug du dossier et ajoute une colonne Session. `.gitignore` : `mission/**/workspace/repo/`.
+- Tests : `framework/tests/maintenance-1-10-1.test.js` (7) ; 387 → 394 tests.
+
+## 1.10.0 — 2026-09-11
+
+Mineure (un module nouveau, lanceur et hooks étendus, outil de banc étendu) : chantier 7 « délégation
+intra-session, contrat réduit, fusible mesuré » (`docs/IMPLEMENTATION.md` §9), livré par la mission
+`holarch-delegation`, instance `concepteur/implementeur-delegation` (6 sessions d.implémentation, 21,41 USD au tarif liste ; mission holarch-delegation : 8 sessions, environ 29 USD avec la conception et la revue). Quatre volets : (§9.1) nouveau module
+`extensions/delegation-intra-session` 1.0.0 et gabarit `SOUS-AGENT.template.md` — option `--agents`
+du lanceur qui construit un sous-agent `holarch-unite` (outils sans `Agent`, pas de cascade) quand le
+module est actif ; `context-watch` ignore les transcriptions sous `<sid>/subagents/*.jsonl` ;
+`tools/holarch-bench/bench.js --transcriptions` accepte un dossier `<sid>/` avec sous-dossier
+`subagents/` et publie une section séparée « tokens et coût des sous-agents » (jamais mélangée au
+contexte de l'instance). (§9.2) prompt système réduit : `buildSystemPrompt` n'injecte plus que l'en-tête
+et les « Règles injectées » de chaque module actif (plus `## Constat`/`## Ce que ce module ne fait pas`),
+KERNEL/CONFIG.md inchangés en entier ; rappels d'orientation et de clôture injectés par
+`SessionStart`/`context-watch`. (§9.3) `autocompact_tokens` vérifié par `config-lint` (entier positif,
+strictement supérieur à `seuil_contexte_tokens`), aucun défaut du framework changé. (§9.4) nouveau
+garde-fou `framework-guard` (`PreToolUse` Write/Edit) refusant toute écriture sous `framework/`,
+`docs/`, `tools/` ou `mission/OBJECTIVE.md`, distinct de `wake-guard` (portée différente), doublé par
+`permissions.deny` d'`instance-settings.json`. Constat de conception, vérifié en cours de mission :
+l'écriture par un sous-agent sous `mission/` (bloquée dans une session antérieure de dogfooding,
+attribuée à tort à `HOLARCH_INSTANCE` non transmise) fonctionne en réalité dans cet environnement — la
+délégation réelle a repris à partir de la moitié de la mission, voir `RAPPORT.md` du paquet.
+
 ## 1.9.0 — 2026-09-11
 
 Mineure (trois modules enrichis, lanceur et hooks étendus, outil de banc étendu) : chantier 6 « contexte instantané,

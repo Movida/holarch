@@ -46,10 +46,12 @@ const DEFAULTS = {
   effort_cli: 'high',
   modele_repli: '',
   permission_mode: 'acceptEdits',
-  budget_usd_par_session: '5',
+  // 1.11.0 : 5 → 8 USD, 120k → 180k et 180k → 400k. Mesuré sur trois missions (2026-09-11) : un enfant démarre à ~69k,
+  // clôt vers seuil + 25k ; à 250k le fusible n'a jamais sonné et c'est le budget qui arbitrait (holarch-delegation).
+  budget_usd_par_session: '8',
   max_tours_par_session: '200',
-  seuil_contexte_tokens: '120000',
-  autocompact_tokens: '180000',
+  seuil_contexte_tokens: '180000',
+  autocompact_tokens: '400000',
   outils_cli: 'Read,Write,Edit,Bash,Glob,Grep,Agent,TodoWrite',
   relances_max: '2',
   sessions_max_par_instance: '24',
@@ -68,6 +70,10 @@ const DEFAULTS = {
   reveil_inbox_messages: '8',
   reveil_inbox_chars: '12000',
   reveil_memory_chars: '20000',
+  // Module extensions/delegation-intra-session (chantier 7, §9.1) : modèle par défaut du sous-agent
+  // `holarch-unite` construit par --agents (buildAgentsOption). Sans effet si le module n'est pas actif.
+  sous_agent_modele: 'sonnet',
+  sous_agent_effort: 'medium',
 };
 
 /** Politique de modèle par profil, par défaut (surchargeable : CONFIG.md « ## Politique de modèle »). */
@@ -583,6 +589,58 @@ function fileBlock(rel, content, note) {
   return `<fichier chemin="${rel}"${attrs}>\n${String(content).replace(/\s+$/, '')}\n</fichier>`;
 }
 
+/**
+ * Réduit le contenu d'un module à ce qui est effectivement injecté au réveil d'une session (chantier 7,
+ * §9.2) : l'en-tête (titre `# Module : …` + lignes de métadonnées `>`) suivi de la seule section
+ * `## Règles injectées` — jamais `## Constat` ni `## Ce que ce module ne fait pas` (ni `## Paramètres`,
+ * lisibles à la demande sur disque, KERNEL §5.8 ; leurs valeurs effectives sont résumées à part par
+ * parametresEffectifs, RAPPORT holarch-delegation §6.1). Repli fail-open : si `## Règles injectées` est
+ * introuvable (fixture de test minimale, module non conforme au gabarit), retourne le texte entier
+ * plutôt que de faire disparaître le contenu.
+ */
+function extraireEnTeteEtReglesInjectees(text) {
+  const t = String(text || '');
+  const lines = t.split('\n');
+  let finEntete = lines.findIndex((l) => l.startsWith('## '));
+  if (finEntete === -1) return t;
+  const entete = lines.slice(0, finEntete).join('\n').replace(/\s+$/, '');
+  const debutRegles = lines.findIndex((l) => l.trim() === '## Règles injectées');
+  if (debutRegles === -1) return t;
+  let finRegles = lines.findIndex((l, i) => i > debutRegles && l.startsWith('## '));
+  if (finRegles === -1) finRegles = lines.length;
+  const regles = lines.slice(debutRegles, finRegles).join('\n').replace(/\s+$/, '');
+  return `${entete}\n\n${regles}`;
+}
+
+/** Table compacte des paramètres effectifs des modules actifs (valeur de CONFIG.md sinon défaut du module) : les
+ *  règles injectées citent des seuils que l'instance ne pouvait plus connaître une fois « ## Paramètres » retiré du
+ *  prompt réduit (RAPPORT holarch-delegation §6.1) — ~1 000 caractères au lieu des ~8 500 des sections entières. */
+function parametresEffectifs(root, cfg) {
+  const lignes = [];
+  const seen = new Set();
+  for (const { categorie, module } of (cfg && cfg.modules) || []) {
+    const rel = `framework/modules/${categorie}/${module}.md`;
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    const c = readIf(path.join(root, rel));
+    if (c === null) continue;
+    const lines = c.split('\n');
+    const i = lines.findIndex((l) => l.trim() === '## Paramètres');
+    if (i === -1) continue;
+    const vals = [];
+    for (let k = i + 1; k < lines.length && !lines[k].startsWith('## '); k++) {
+      const m = lines[k].match(/^\|\s*`?([a-z_][a-z0-9_]*)`?\s*\|\s*([^|]*?)\s*\|/i);
+      if (!m || /^param/i.test(m[1])) continue;
+      const nom = m[1];
+      const surcharge = cfg.params && cfg.params[nom] !== undefined;
+      vals.push(`${nom} = ${surcharge ? `${cfg.params[nom]} (CONFIG.md)` : m[2].replace(/`/g, '')}`);
+    }
+    if (vals.length) lignes.push(`- ${module} : ${vals.join(' ; ')}`);
+  }
+  if (!lignes.length) return '';
+  return `<parametres-effectifs note="valeurs en vigueur pour cette session — CONFIG.md sinon défaut du module ; les sections ## Paramètres des modules ne sont pas injectées, ceci les résume">\n${lignes.join('\n')}\n</parametres-effectifs>`;
+}
+
 function buildSystemPrompt(root, cfg, bootstrap) {
   const parts = [];
   parts.push(
@@ -594,6 +652,10 @@ function buildSystemPrompt(root, cfg, bootstrap) {
     const c = readIf(path.join(root, rel));
     parts.push(c === null ? `<fichier chemin="${rel}" note="INTROUVABLE sur disque"></fichier>` : fileBlock(rel, c));
   };
+  const pushReduit = (rel) => {
+    const c = readIf(path.join(root, rel));
+    parts.push(c === null ? `<fichier chemin="${rel}" note="INTROUVABLE sur disque"></fichier>` : fileBlock(rel, extraireEnTeteEtReglesInjectees(c), 'en-tête + Règles injectées seulement — texte complet sur disque, chantier 7 §9.2'));
+  };
   if (bootstrap) push('framework/BOOTSTRAP.md');
   push('framework/KERNEL.md');
   push('framework/CONFIG.md');
@@ -603,8 +665,10 @@ function buildSystemPrompt(root, cfg, bootstrap) {
     const rel = `framework/modules/${categorie}/${module}.md`;
     if (seen.has(rel)) continue;
     seen.add(rel);
-    push(rel);
+    pushReduit(rel);
   }
+  const pe = parametresEffectifs(root, cfg);
+  if (pe) parts.push(pe);
   return parts.join('\n');
 }
 
@@ -617,6 +681,7 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg, extra
     `Harnais de cette session : profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}${meta.origine_effort === 'fiche' ? ' (posé dans ta fiche registre)' : ''}, au plus ${params.max_tours_par_session} tours et ${params.budget_usd_par_session} USD (tarif liste) ; un hook te préviendra si ton contexte dépasse ${Math.round(Number(params.seuil_contexte_tokens) / 1000)}k tokens — tu devras alors hiberner volontairement (KERNEL §5.8 : MEMORY.md complet, STATUS.md laissé à son état réel avec la note « hibernation volontaire (contexte) », commit, fin de session ; le lanceur te ré-incarne avec un contexte neuf tant que chaque session laisse une trace de progrès — une fiche d'unité ou un commit [${chemin}] — au plus ${params.relances_max} session(s) consécutive(s) sans progrès et ${params.sessions_max_par_instance} sessions en tout, après quoi il alerte ton parent).${departPrecedent ? ` Ta session précédente avait démarré avec un contexte de ${departPrecedent} tokens (colonne « Contexte (départ / max) » de registry/SESSIONS.md).` : ''}`,
     `Ton modèle et ton effort sont fixés pour toute cette session ; changer de régime n'est possible qu'entre deux sessions (module d'orchestration, ON_PLAN) : ligne \`Profil\` ou \`Effort\` de ta propre fiche registre, justification dans JOURNAL.md et PROGRESS.md, puis hibernation volontaire avec la note « hibernation volontaire (changement de régime : <ancien> → <nouveau>) » — le lanceur te ré-incarne sur le nouveau régime (au plus ${params.changements_regime_max} fois, décompté à part des ré-incarnations de contexte).`,
     "Commandes Bash exécutables sans approbation : git add/commit/mv/status/log/diff/show/branch/switch/merge (toujours depuis la racine, jamais `git -C`), mkdir, ls, wc, head, tail, grep, find, diff, date, echo, printf, pwd, python3, pytest, node, npm test, npm run, et `node framework/bin/holarch-spawn.js <chemin-enfant>` pour incarner un enfant. Une commande composée (`;`, `&&`, `|`) n'est acceptée que si chacun de ses segments l'est. Toute autre commande est refusée immédiatement (pas de blocage) : adapte-toi au lieu de réessayer. Toute écriture sous framework/ ou dans mission/OBJECTIVE.md est refusée mécaniquement (KERNEL §4).",
+    `Horloge du harnais : il est ${nowIso()} (UTC) — date tes messages et tes fiches avec \`date -u +%FT%TZ\`, jamais de mémoire.${bootstrap ? '' : ` Sessions déjà jouées par cette instance : ${countSessions(root, chemin)} ; coût cumulé ${coutCumule(root, chemin).toFixed(2)} USD au tarif liste (registry/SESSIONS.md, tenu par le lanceur).`}`,
     "Un garde-fou empêche la fin de session tant que STATUS.md indique WORKING sans note d'hibernation volontaire, ou tant que des modifications de mission/ ne sont pas committées : passe toujours par ON_SLEEP.",
   ];
   if (bootstrap) {
@@ -731,6 +796,30 @@ function buildUserPrompt(root, chemin, meta, params, bootstrap, cfg) {
 }
 
 // ---------------------------------------------------------------------------
+// Sous-agent `holarch-unite` (chantier 7, §9.1) : définition --agents, si delegation-intra-session actif
+// ---------------------------------------------------------------------------
+/**
+ * Construit la valeur JSON de l'option `--agents` définissant le sous-agent générique `holarch-unite`
+ * (module `extensions/delegation-intra-session`) : le prompt persona vient tel quel de
+ * `framework/templates/SOUS-AGENT.template.md` (≤ 2000 caractères, §9.1) — la tâche précise (critère,
+ * chemins, interdits) est fournie par l'instance à chaque invocation, dans le prompt de l'outil `Agent`.
+ * Retourne null si le gabarit est introuvable (fail-open : pas de --agents plutôt qu'une valeur creuse).
+ */
+function buildAgentsOption(root, params) {
+  const prompt = readIf(path.join(root, 'framework', 'templates', 'SOUS-AGENT.template.md'));
+  if (prompt === null) return null;
+  const def = {
+    'holarch-unite': {
+      description: "Sous-agent générique d'une unité de travail déléguée par une instance HOLARCH (module delegation-intra-session) ; reçoit le prompt de tâche précis (critère, chemins, interdits) à chaque invocation.",
+      prompt: prompt.trim(),
+      tools: 'Read,Write,Edit,Bash,Glob,Grep',
+      model: params.sous_agent_modele,
+    },
+  };
+  return JSON.stringify(def);
+}
+
+// ---------------------------------------------------------------------------
 // Préparation d'un lancement
 // ---------------------------------------------------------------------------
 function prepareLaunch(root, chemin, opts) {
@@ -790,6 +879,10 @@ function prepareLaunch(root, chemin, opts) {
     '-n', `holarch:${chemin}`,
   ];
   if (params.modele_repli) args.push('--fallback-model', params.modele_repli);
+  if (moduleActive(cfg, 'extensions', 'delegation-intra-session')) {
+    const agentsOption = buildAgentsOption(root, params);
+    if (agentsOption) args.push('--agents', agentsOption);
+  }
   for (const d of addDirs) args.push('--add-dir', d);
   // Identité Git des commits de mission : posée ici, dans l'environnement de la session, jamais dans la
   // configuration Git du dépôt (BOOTSTRAP §0, point 3 : les commits humains restent attribués à l'humain).
@@ -863,7 +956,9 @@ function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, stat
   // encore le session_id de CETTE session — sinon une session suivante déjà relancée l'aurait déjà réécrit.
   let contexte = '— / —';
   if (res && res.session_id) {
-    const cfile = contexteLivePath(root, chemin);
+    // Le hook écrit ce fichier sous HOLARCH_ROOT, c'est-à-dire le worktree de l'instance quand elle en a un : le lire à
+    // la racine laissait la colonne vide pour toute session isolée (6 sur 7 dans holarch-delegation, 2026-09-11).
+    const cfile = contexteLivePath(instanceRoot(root, chemin), chemin);
     try {
       const data = JSON.parse(fs.readFileSync(cfile, 'utf8'));
       if (data.session_id === res.session_id) {
@@ -996,7 +1091,12 @@ function wakeWaiters(root, declencheur) {
     const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox, gitBranches });
     if (!evalRes.satisfied) continue;
     const condition = reveil.formatReveil(w.ast);
-    const { id } = detachLaunch(root, w.chemin, {});
+    const { id, pid } = detachLaunch(root, w.chemin, {});
+    // Verrou de vivacité posé tout de suite au nom du réveillé (pid du lanceur détaché, qui le réécrira au démarrage
+    // de sa session) : sans lui, une seconde évaluation dans les millisecondes qui suivent — wakeWaiters après la
+    // dernière session d'un enfant, puis finishLaunch — relançait la même instance deux fois (deux sessions concurrentes
+    // du concepteur, constaté le 2026-09-11 sur holarch-delegation).
+    try { fs.mkdirSync(liveDir(root), { recursive: true }); fs.writeFileSync(liveLockPath(root, w.chemin), JSON.stringify({ pid, startedAt: nowIso(), attempt: 0, reveil: id })); } catch (_) { /* fail-open */ }
     appendReveilsLine(root, w.chemin, declencheur || '--reveil', condition, id);
     reveilles.push({ chemin: w.chemin, tache: id, condition });
   }
@@ -1036,7 +1136,21 @@ function finishLaunch(root, chemin, code, sessions) {
       fs.writeFileSync(jsonPath, JSON.stringify(data, null, 2));
     } catch (_) { /* pas de tâche associée : rien à mettre à jour */ }
   }
+  // Journal du lanceur committé par le lanceur lui-même (racine seulement) : la dernière ligne de SESSIONS.md et de
+  // REVEILS.md d'une racine est écrite après son commit de clôture et restait non committée jusqu'à un geste humain
+  // (archivages du 2026-09-11). Enfant : la racine, qui répond de mission/, les committe à sa session suivante.
+  if (!chemin.includes('/') && !isLive(root, chemin)) commitJournalLanceur(root, chemin);
   return wakeWaiters(root, chemin);
+}
+
+function commitJournalLanceur(root, chemin) {
+  const rels = ['mission/registry/SESSIONS.md', 'mission/registry/REVEILS.md'].filter((r) => fs.existsSync(path.join(root, r)));
+  if (!rels.length) return false;
+  const st = spawnSync('git', ['-C', root, 'status', '--porcelain', '--', ...rels], { encoding: 'utf8' });
+  if (st.status !== 0 || !st.stdout.trim()) return false;
+  const env = Object.assign({}, process.env, { GIT_AUTHOR_NAME: 'HOLARCH', GIT_AUTHOR_EMAIL: 'holarch@localhost', GIT_COMMITTER_NAME: 'HOLARCH', GIT_COMMITTER_EMAIL: 'holarch@localhost' });
+  if (spawnSync('git', ['-C', root, 'add', '--', ...rels], { encoding: 'utf8', env }).status !== 0) return false;
+  return spawnSync('git', ['-C', root, 'commit', '-q', '-m', `[harnais] journal des sessions et réveils (${chemin})`], { encoding: 'utf8', env }).status === 0;
 }
 
 /** Traces de progrès d'une instance — fiches d'unité (`memoire/U<n>-*.md`) et commits `[<chemin>]` — ce qui
@@ -1059,6 +1173,13 @@ function hasProgressed(avant, apres) {
 function countSessions(root, chemin) {
   const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
   return text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin).length;
+}
+/** Coût cumulé (colonne « Coût USD ») des sessions journalisées pour l'instance — un enfant n'a pas accès à
+ *  registry/SESSIONS.md (racine seule) et ne connaissait ni son coût ni son numéro de session (2026-09-11). */
+function coutCumule(root, chemin) {
+  const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
+  return text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin)
+    .reduce((s, l) => s + (Number((l.split('|')[7] || '').trim()) || 0), 0);
 }
 /** Contexte de départ (colonne 12, module context-budget volet 8.1) de la dernière session journalisée
  *  pour l'instance. null si aucune session, ou si la dernière ligne est antérieure à cette colonne. */
@@ -1255,7 +1376,7 @@ function summarize(launch, sessions) {
 // CLI
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '' };
+  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '', reprendre: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -1274,6 +1395,7 @@ function parseArgs(argv) {
     else if (a === '--detach') o.detach = true;
     else if (a === '--reveil') o.reveil = true;
     else if (a === '--taches') o.taches = true;
+    else if (a === '--reprendre') o.reprendre = true;
     else if (a === '--arret') o.arret = next();
     else if (a === '--nettoyer-worktree') o.nettoyerWorktree = next();
     else if (a === '-h' || a === '--help') { o.help = true; }
@@ -1292,7 +1414,7 @@ function usage() {
     'Options : --profil <conception|execution|relecture|exploration> --modele <alias|id> --effort <low|medium|high|xhigh|max>',
     '          --budget-usd <n> --max-tours <n> --permission-mode <mode> --timeout-min <n> --root <dir>',
     '          --add-dir <dir> (répétable — dépôt externe accessible en plus de la racine) --dry-run --json',
-    '          --detach --reveil --taches --arret <chemin> (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
+    '          --detach --reveil --taches --reprendre --arret <chemin> (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
     '          --nettoyer-worktree <chemin> (supprime le worktree d\'une instance déjà fusionnée ; refuse si des changements non committés subsistent)',
   ].join('\n');
 }
@@ -1302,6 +1424,35 @@ function listTaches(root) {
   let files;
   try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch (_) { files = []; }
   return files.sort().map((f) => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch (_) { return null; } }).filter(Boolean);
+}
+/** Reprise après un arrêt brutal (redémarrage du conteneur, lanceur tué — constaté le 2026-09-11 : un enfant en
+ *  hibernation propre est resté à l'arrêt toute une nuit, sa fiche de tâche disant « running » avec un pid mort).
+ *  Toute tâche détachée « running » dont le pid est mort est close (« failed », note), et son instance relancée en
+ *  détaché si elle est reprenable — READY, ou WORKING avec une note d'hibernation volontaire hors arrêt demandé — et
+ *  pas déjà vivante. Idempotent : une seconde invocation ne relance rien. */
+function reprendreTaches(root) {
+  const lignes = [];
+  const relancees = [];
+  for (const t of listTaches(root)) {
+    if (t.state !== 'running' || !t.pid) continue;
+    let vivant = true;
+    try { process.kill(t.pid, 0); } catch (_) { vivant = false; }
+    if (vivant) continue;
+    try {
+      t.state = 'failed'; t.finishedAt = nowIso(); t.note = 'lanceur mort, fiche close par --reprendre';
+      fs.writeFileSync(path.join(tasksDir(root), `${t.id}.json`), JSON.stringify(t, null, 2));
+    } catch (_) { /* fiche illisible : on continue */ }
+    const status = readStatusOf(root, t.chemin);
+    const arret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
+    const reprenable = status.etat === 'READY' || (status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !arret);
+    if (!reprenable) { lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — non relancée : STATUS ${status.etat || '(absent)'}${status.note ? ` (${status.note.slice(0, 60)})` : ''}`); continue; }
+    if (relancees.includes(t.chemin) || isLive(root, t.chemin)) { lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — déjà vivante, pas de relance`); continue; }
+    const { id, pid } = detachLaunch(root, t.chemin, { parent: 'reprise' });
+    try { fs.mkdirSync(liveDir(root), { recursive: true }); fs.writeFileSync(liveLockPath(root, t.chemin), JSON.stringify({ pid, startedAt: nowIso(), attempt: 0, reprise: id })); } catch (_) { /* fail-open */ }
+    relancees.push(t.chemin);
+    lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — relancée en détaché : tâche ${id} (pid ${pid})`);
+  }
+  return { lignes, relancees };
 }
 function writeStopRequest(root, chemin) {
   const dir = path.join(root, 'mission', '.holarch', 'stop');
@@ -1318,6 +1469,12 @@ function main() {
   const root = o.root ? path.resolve(o.root) : findRoot(process.cwd());
   if (!root) { process.stderr.write('Racine introuvable : lance depuis un dépôt contenant framework/KERNEL.md et mission/ (ou --root).\n'); process.exit(1); }
 
+  if (o.reprendre) {
+    const r = reprendreTaches(root);
+    for (const l of r.lignes) process.stdout.write(`${l}\n`);
+    if (!r.lignes.length) process.stdout.write('aucune tâche à reprendre.\n');
+    return;
+  }
   if (o.taches) {
     const taches = listTaches(root);
     if (!taches.length) process.stdout.write('aucune tâche détachée.\n');
@@ -1400,11 +1557,11 @@ function main() {
 
 module.exports = {
   parseConfig, parseFiche, parseStatus, resolveParams, resolveProfile, resolveMetaFromDisk,
-  buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize,
+  buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize, buildAgentsOption, extraireEnTeteEtReglesInjectees,
   findRoot, launchWithRelaunches, DEFAULTS, DEFAULT_POLICY, tailInboxMessages, INBOX_TAIL_MESSAGES,
   buildUserPromptDetail, tailBounded, tailInboxBounded, moduleActive, parseUniteHeader,
   buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason, readInboxOf, annoterOrigines,
-  isLive, wakeWaiters, detachLaunch, finishLaunch, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
+  isLive, wakeWaiters, detachLaunch, finishLaunch, reprendreTaches, coutCumule, countSessions, commitJournalLanceur, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
   progressSnapshot, hasProgressed, countSessions, appendAlertToParent,
   worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree,
   ensureSessionsFile, lastContexteDepart, contexteLivePath,

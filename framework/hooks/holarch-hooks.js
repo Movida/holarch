@@ -7,6 +7,8 @@
  *   Stop        → sleep-guard   : refuse la fin de session tant que STATUS.md est à WORKING sans note
  *                                 d'hibernation volontaire, ou que mission/ contient des changements non committés
  *                                 (hors fichiers en vol d'une autre instance vivante — enfant détaché, parent).
+ *   SessionStart → session-start : rappelle le contexte de départ de la session précédente
+ *                                 (registry/SESSIONS.md) et la discipline unites-indexees (chantier 7, §9.2).
  *   PreToolUse  → spawn-guard   : refuse `node framework/bin/holarch-spawn.js <enfant>` si la mécanique de spawn
  *                                 (KERNEL §9) est incomplète, si la cible n'est pas un enfant direct, si la
  *                                 profondeur dépasse profondeur_max, ou si le budget d'instances est nul/dépassé.
@@ -28,6 +30,7 @@ const reveil = require(path.join(__dirname, '..', 'bin', 'reveil.js'));
 
 const STOP_BLOCKS_MAX = 3;
 const WARN_STEP = 20000;
+const FACT_STEP = 50000; // un fait de contexte injecté à chaque palier de 50k tokens sous le seuil
 // Défauts du module memoire/unites-indexees.md (`ligne_max_chars`, `memoire_max_lignes`) — CONFIG.md
 // ne porte pas de mécanisme de surcharge par paramètre de module ; ces valeurs suivent donc le
 // module tel qu'il se lit, comme STOP_BLOCKS_MAX ci-dessus suit son propre module.
@@ -187,6 +190,11 @@ function sleepGuard(ctx) {
       if (corps.length > UNITES_MEMOIRE_MAX_LIGNES) problems.push(`\`MEMORY.md\` dépasse ${UNITES_MEMOIRE_MAX_LIGNES} lignes hors titres de section (module unites-indexees) — synthétise, renvoie aux fiches \`memoire/U<n>-….md\` pour le détail`);
     }
   }
+  // Constat bloquant sans message : « impossible / bloqué / refusé » dans la dernière entrée du journal ou la fiche
+  // d'unité la plus récente, sans BLOCKER, CLARIFICATION ni PROPOSAL envoyé ce jour et sans « constat non bloquant » —
+  // un implémenteur a tenu trois sessions sur un constat faux sans le remonter (holarch-delegation, 2026-09-11).
+  const constat = constatSansMessage(root, instance);
+  if (constat) problems.push(constat);
   if (!problems.length) return ok();
   const state = loadState(input.session_id);
   state.stopBlocks = (state.stopBlocks || 0) + 1;
@@ -196,6 +204,28 @@ function sleepGuard(ctx) {
     decision: 'block',
     reason: `[HOLARCH · garde-fou ON_SLEEP ${state.stopBlocks}/${STOP_BLOCKS_MAX}] Avant de terminer : ${problems.join(' ; ')}. Vérifie aussi que MEMORY.md, JOURNAL.md (si requis par le module mémoire actif) et ta fiche registre sont à jour, puis termine.`,
   });
+}
+
+function constatSansMessage(root, instance) {
+  const base = path.join(root, 'mission', instance);
+  const journal = readIf(path.join(base, 'JOURNAL.md')) || '';
+  const entrees = journal.split(/^## /m);
+  let texte = entrees[entrees.length - 1] || '';
+  try {
+    const dir = path.join(base, 'memoire');
+    const fiches = fs.readdirSync(dir).filter((f) => /^U\d+/.test(f)).sort((a, b) => parseInt(b.match(/\d+/)[0], 10) - parseInt(a.match(/\d+/)[0], 10));
+    if (fiches.length) texte += '\n' + (readIf(path.join(dir, fiches[0])) || '');
+  } catch (_) { /* pas de mémoire adressée */ }
+  const motif = texte.match(/\b(impossible|bloqu[ée]e?s?|refus[ée]e?s?|ne (?:peut|peux) pas)\b/i);
+  if (!motif || /constat non bloquant/i.test(texte)) return '';
+  const parent = instance.includes('/') ? instance.split('/').slice(0, -1).join('/') : null;
+  const cibles = [path.join(base, 'OUTBOX.md')];
+  if (parent) cibles.push(path.join(root, 'mission', parent, 'INBOX.md'));
+  const jour = new Date().toISOString().slice(0, 10);
+  const inst = instance.replace(/[/.]/g, '\\$&');
+  const re = new RegExp(`^from:\\s*${inst}\\s*$[\\s\\S]*?^type:\\s*(BLOCKER|CLARIFICATION|PROPOSAL)\\s*$[\\s\\S]*?^date:\\s*${jour}`, 'm');
+  for (const c of cibles) if (re.test(readIf(c) || '')) return '';
+  return `ton journal ou ta dernière fiche dit « ${motif[0]} » sans BLOCKER, CLARIFICATION ni PROPOSAL envoyé aujourd'hui — envoie le message à ton parent, ou écris « constat non bloquant : <pourquoi> » dans JOURNAL.md`;
 }
 
 // Enfants directs réellement incarnés de `instance` : sous-répertoires de mission/<instance>/ (hors workspace/) qui
@@ -338,6 +368,27 @@ function wakeGuard(ctx) {
   });
 }
 
+// Refuse tout Write/Edit sous framework/, docs/, tools/ ou sur mission/OBJECTIVE.md — hors du cas normal
+// d'une instance qui écrit dans son propre arbre mission/ (KERNEL, module framework-guard, chantier 7 U2 §9.4).
+// Ces répertoires sont le produit et la documentation du harnais, pas la production d'une mission : une instance
+// n'y écrit jamais, quel que soit son état (à la différence de wake-guard, indépendante de STATUS.md/ON_ORIENT).
+function frameworkGuard(ctx) {
+  const { root, input } = ctx;
+  if (input.tool_name !== 'Write' && input.tool_name !== 'Edit') return ok();
+  const target = String((input.tool_input && input.tool_input.file_path) || '');
+  if (!target) return ok();
+  const rel = path.relative(root, path.resolve(root, target)).split(path.sep).join('/');
+  const interdit = rel.startsWith('framework/') || rel.startsWith('docs/') || rel.startsWith('tools/') || rel === 'mission/OBJECTIVE.md';
+  if (!interdit) return ok();
+  emit({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: `[HOLARCH · garde-fou framework-guard] \`${rel}\` est hors de ton arbre de mission (framework/, docs/, tools/ et mission/OBJECTIVE.md sont le harnais, pas ta production) : travaille sous mission/<ton-chemin>/ ou mission/shared/<ton-chemin>/.`,
+    },
+  });
+}
+
 function lastAssistantUsage(transcriptPath) {
   let fd = null;
   try {
@@ -359,8 +410,65 @@ function lastAssistantUsage(transcriptPath) {
   return null;
 }
 
+// Chantier 7, §9.2 : liste de contrôle ON_SLEEP complète, injectée en plus de l'ordre d'hiberner
+// (KERNEL §2 phase 9 et §5.8) au franchissement du seuil de contexte — l'ordre existait déjà, cette
+// liste ne fait que l'expliciter point par point pour réduire le risque d'oubli en fin de session.
+const CHECKLIST_ON_SLEEP = 'Liste de contrôle ON_SLEEP : ☐ MEMORY.md réécrit en entier (État courant / Décisions prises / Prochaines actions / Points de vigilance) ☐ fiche memoire/U<n>-….md de l\'unité en cours si elle s\'achève ici ☐ STATUS.md à l\'état réel, Note d\'hibernation posée ☐ entrée JOURNAL.md ☐ fiche registre à jour (Statut, budget consommé, Profil/Effort, livrables) ☐ commit Git [<ton chemin>] ….';
+
+/**
+ * SessionStart (chantier 7, §9.2) : rappelle, au réveil, le contexte de départ mesuré à la session
+ * précédente de cette instance (dernière ligne de registry/SESSIONS.md la concernant, colonne
+ * « Contexte (départ / max) ») et la discipline du module mémoire `unites-indexees` — sans lire ni
+ * dupliquer le prompt utilisateur du lanceur, qui porte déjà cette information en détail : ce hook
+ * n'est qu'un rappel court, redondant par construction (deux canaux plutôt qu'un, §9.2). Fail-open :
+ * silence (`ok()`) si registry/SESSIONS.md est absent ou ne mentionne pas encore cette instance.
+ */
+function sessionStart(ctx) {
+  const { root, instance } = ctx;
+  const txt = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md'));
+  let contexte = null;
+  if (txt) {
+    const lignes = txt.split('\n').filter((l) => l.startsWith('|') && l.includes(`| ${instance} |`));
+    if (lignes.length) {
+      const cellules = lignes[lignes.length - 1].split('|').map((c) => c.trim()).filter((c) => c.length);
+      const derniere = cellules[cellules.length - 1];
+      if (derniere && derniere !== '— / —') contexte = derniere;
+    }
+  }
+  const rappelContexte = contexte ? `Ta session précédente avait démarré avec un contexte de ${contexte} tokens (registry/SESSIONS.md). ` : '';
+  emit({
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: `[HOLARCH · rappel d'orientation] ${rappelContexte}Discipline mémoire (module unites-indexees) : plan de session = 1 à 3 unités numérotées U<n>, un commit par unité achevée, une fiche memoire/U<n>-….md à chaque unité (réussie, échouée ou partielle) ; ne relis que ce que ton plan cite explicitement — jamais un fichier entier par anticipation.`,
+    },
+  });
+}
+
+/** Messages apparus dans INBOX.md depuis le premier appel du hook (l'état de session retient les identifiants déjà
+ *  vus ; ceux présents au lancement étaient dans le prompt). Renvoie une note à injecter, ou ''. */
+function courrierNouveau(root, instance, state) {
+  const txt = readIf(path.join(root, 'mission', instance, 'INBOX.md'));
+  if (txt === null) return '';
+  const ids = []; const meta = {};
+  for (const bloc of txt.split(/^---\s*$/m)) {
+    const id = (bloc.match(/^id:\s*(.+)$/m) || [])[1];
+    if (!id) continue;
+    const t = id.trim(); ids.push(t);
+    meta[t] = { type: ((bloc.match(/^type:\s*(\S+)/m) || [])[1] || '?'), from: ((bloc.match(/^from:\s*(\S+)/m) || [])[1] || '?') };
+  }
+  if (!Array.isArray(state.seenIds)) { state.seenIds = ids; return ''; }
+  const nouveaux = ids.filter((i) => !state.seenIds.includes(i));
+  if (!nouveaux.length) return '';
+  state.seenIds = ids;
+  return `[HOLARCH · courrier] ${nouveaux.length} message(s) arrivé(s) dans ton INBOX.md depuis le début de la session : ${nouveaux.map((i) => `${i} (${meta[i].type} de ${meta[i].from})`).join(', ')}. Lis-le(s) maintenant (\`grep -n '^id: ' mission/${instance}/INBOX.md\` puis \`sed -n\`) : un TASK ou une RESPONSE de ton parent ou du mainteneur s'applique immédiatement, avant l'unité suivante.`;
+}
+
 function contextWatch(ctx) {
   const { root, instance, input } = ctx;
+  // Chantier 7, §9.1/9.3 : une transcription de sous-agent (`Agent`, module delegation-intra-session)
+  // vit sous `<sid>/subagents/` — elle ne doit jamais déclencher l'ordre d'hiberner l'instance : le
+  // sous-agent n'est pas l'instance, son contexte lui est propre et se referme à sa propre fin.
+  if (input.transcript_path && input.transcript_path.includes('/subagents/')) return ok();
   const stopFile = path.join(root, 'mission', '.holarch', 'stop', instance.replace(/\//g, '-'));
   const state0 = loadState(input.session_id);
   if (exists(stopFile) && !state0.stopRequested) {
@@ -380,17 +488,39 @@ function contextWatch(ctx) {
   if (!usage) return ok();
   const tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
   updateContexteLive(root, instance, input.session_id, tokens);
-  if (tokens < limit) return ok();
   const state = loadState(input.session_id);
-  if (tokens < (state.lastWarnAt || 0) + WARN_STEP) return ok();
+  const notes = [];
+  // Courrier arrivé en cours de session : un message écrit après le lancement n'était lu qu'à la session suivante —
+  // une session entière tournant sur d'anciennes consignes à chaque réglage du mainteneur (trois fois le 2026-09-11).
+  const courrier = courrierNouveau(root, instance, state);
+  if (courrier) notes.push(courrier);
+  const k = (n) => `${Math.round(n / 1000)}k`;
+  if (tokens < limit) {
+    // Fait de contexte à chaque palier de FACT_STEP sous le seuil : l'instance sait où elle en est et n'hiberne pas par
+    // habitude (hibernation à 139k sous un fusible à 250k, constatée le 2026-09-11).
+    const palier = Math.floor(tokens / FACT_STEP);
+    if (palier > (state.lastFactPalier || 0)) {
+      state.lastFactPalier = palier;
+      notes.push(`[HOLARCH · contexte] ~${k(tokens)} tokens sur un seuil de ${k(limit)} : ${k(limit - tokens)} de marge. N'hiberne pas pour le contexte tant que ce hook ne te le demande pas ; enchaîne l'unité suivante de ton plan de session.`);
+    }
+    saveState(input.session_id, state);
+    if (!notes.length) return ok();
+    emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: notes.join('\n') } });
+    return;
+  }
+  if (tokens < (state.lastWarnAt || 0) + WARN_STEP) {
+    saveState(input.session_id, state);
+    if (!notes.length) return ok();
+    emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: notes.join('\n') } });
+    return;
+  }
   state.lastWarnAt = tokens;
   saveState(input.session_id, state);
   const hard = tokens >= limit * 1.25;
-  const k = (n) => `${Math.round(n / 1000)}k`;
   emit({
     hookSpecificOutput: {
       hookEventName: 'PostToolUse',
-      additionalContext: `[HOLARCH · budget de contexte${hard ? ' — DÉPASSEMENT' : ''}] Contexte de cette session : ~${k(tokens)} tokens (seuil ${k(limit)}). ${hard ? 'Ne commence aucune nouvelle unité de travail.' : "Termine l'unité de travail en cours sans en commencer une autre."} Puis hiberne volontairement (module context-budget, KERNEL §5.8) : MEMORY.md complet pour ton futur toi, entrée JOURNAL.md, STATUS.md laissé à ton état réel avec la Note « hibernation volontaire (contexte) », fiche registre à jour, commit, puis termine la session. Le lanceur holarch-spawn te ré-incarnera automatiquement avec un contexte neuf.`,
+      additionalContext: `${notes.length ? `${notes.join('\n')}\n` : ''}[HOLARCH · budget de contexte${hard ? ' — DÉPASSEMENT' : ''}] Contexte de cette session : ~${k(tokens)} tokens (seuil ${k(limit)}). ${hard ? 'Ne commence aucune nouvelle unité de travail.' : "Termine l'unité de travail en cours sans en commencer une autre."} Puis hiberne volontairement (module context-budget, KERNEL §5.8) : MEMORY.md complet pour ton futur toi, entrée JOURNAL.md, STATUS.md laissé à ton état réel avec la Note « hibernation volontaire (contexte) », fiche registre à jour, commit, puis termine la session. Le lanceur holarch-spawn te ré-incarnera automatiquement avec un contexte neuf. ${CHECKLIST_ON_SLEEP}`,
     },
   });
 }
@@ -405,9 +535,11 @@ function main() {
   const root = process.env.HOLARCH_ROOT || input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const ctx = { root, instance, input };
   try {
+    if (event === 'session-start') return sessionStart(ctx);
     if (event === 'sleep-guard') return sleepGuard(ctx);
     if (event === 'spawn-guard') return spawnGuard(ctx);
     if (event === 'wake-guard') return wakeGuard(ctx);
+    if (event === 'framework-guard') return frameworkGuard(ctx);
     if (event === 'context-watch') return contextWatch(ctx);
     return ok();
   } catch (e) {
@@ -416,5 +548,5 @@ function main() {
   }
 }
 
-module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive };
+module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard };
 if (require.main === module) main();
