@@ -107,3 +107,10 @@ function makeRoot() {
   w('mission/registry/PROGRESS.md', '# Avancement\n');
   return root;
 }
+
+test('instance-settings.json : allowlist git — clone et -C checkout/config autorisés (1.13.0), checkout/switch sans -C jamais', () => {
+  const settings = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'claude', 'instance-settings.json'), 'utf8'));
+  const allow = (settings.permissions && settings.permissions.allow) || [];
+  for (const r of ['Bash(git clone *)', 'Bash(git -C * checkout *)', 'Bash(git -C * config *)']) assert.ok(allow.includes(r), r);
+  assert.equal(allow.some((r) => /^Bash\(git (checkout|config)\b/.test(r)), false);
+});

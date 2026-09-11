@@ -13,11 +13,24 @@ d'écriture dans les fichiers d'une instance, jamais de `claude -p` à la main) 
 sur les événements qui reviennent au mainteneur**. Le lancement et l'arrêt sont d'autres skills
 (`holarch-iterate`, `holarch-pause`).
 
-## 1. Où lire l'état (worktree par instance, framework ≥ 1.6.0)
+## 1. Lire l'état : une commande, pas dix fichiers
 
-Sous `git-branches` en `isolation = worktree` (le cas depuis la mission `holarch-provenance`), les
-fichiers d'un enfant **ne sont pas dans l'arbre principal** : ils vivent dans son worktree, sur sa
-branche. Règle « worktree → disque → branche » :
+```bash
+npm run observe                                        # instantané : état effectif par instance, sessions vivantes, coût, messages, anomalies
+node tools/holarch-observe/observe.js --json           # le même en JSON (pour compter, filtrer, citer)
+node tools/holarch-observe/observe.js --watch          # écran rafraîchi à chaque changement (à ne pas lancer depuis Bash : voir §2)
+```
+
+`tools/holarch-observe/` (chantier 10) réconcilie ce que le lanceur, les hooks, l'instance et son parent écrivent
+chacun de leur côté : l'**état effectif** d'une instance est STATUS du worktree ⊕ verrou `live/` ⊕ processus ⊕ tâche
+(« WORKING · session vivante (pid, min, contexte réel) », « WORKING · aucune session vivante (tuée ?) »,
+« WAITING_CHILDREN · attend enfants:DELIVERED — condition satisfaite, réveil attendu »…), les enfants synchrones
+sont vus par leur processus, les sessions tuées par leur transcription, les messages `to: utilisateur` sans
+`RESPONSE` sont listés, et chaque anomalie porte un code (`tools/holarch-observe/README.md`). `npm run etat` ne voit
+que l'arbre principal.
+
+Où sont les fichiers quand il faut lire un détail (worktree par instance, framework ≥ 1.6.0 — règle « worktree →
+disque → branche ») :
 
 ```
 R=mission                                                   # racine (ex. concepteur) : sur main
@@ -30,37 +43,23 @@ mission/.holarch/tasks/<chemin-tirets>-<ts>.json|.log       # tâche détachée 
 mission/registry/SESSIONS.md  REVEILS.md                    # journal du lanceur, écrit à la racine (non suivi tant que le parent n'a pas committé : normal)
 node framework/bin/holarch-spawn.js --taches                # tâches détachées ; --reveil --dry-run : qui attend quoi, condition satisfaite ou non
 node framework/bin/holarch-spawn.js --reprendre             # lanceur mort (redémarrage du conteneur) : fiches closes, instances en hibernation propre relancées (1.11.0)
-```
-
-`npm run etat` ne voit que l'arbre principal : sous worktree, les enfants y sont invisibles.
-
-Bilan chiffré (sessions, tours, coût tarif liste) :
-
-```
-awk -F'|' '$2 ~ /2026/ {n++; t+=$6; c+=$8; i[$3]+=$8} END {print n" sessions, "t" tours, "c" USD"; for (k in i) print "  "k, i[k]}' mission/registry/SESSIONS.md
+node tools/holarch-transcript/analyse.js <session-id>       # une session tour par tour (identifiant : colonne Session de SESSIONS.md, ou `--json` de observe)
 ```
 
 ## 2. Armer la surveillance (pas de polling à la main)
 
-Un `Monitor` **persistant** qui n'émet qu'aux changements — états (avec la note), tâches, messages
-qui demandent une décision, réveils, arrêts du lanceur, nombre de sessions :
+Un `Monitor` **persistant** sur le mode événements de l'outil : il imprime l'état initial puis, à chaque changement,
+les lignes apparues (`+`) et disparues (`-`) d'un résumé stable — états effectifs, unités closes, commits, tâches,
+messages pour le mainteneur, réveils, anomalies. Rien entre deux événements.
 
 ```bash
-D=/workspaces/holon; prev=""; while true; do
-  st=""; for f in $D/mission/*/STATUS.md $D/mission/.holarch/worktrees/*/mission/*/*/STATUS.md; do [ -f "$f" ] || continue
-    n=$(echo "$f" | sed -E 's#.*/mission/##; s#/STATUS.md##'); e=$(grep -m1 '^| État' "$f" | awk -F'|' '{print $3}' | xargs)
-    note=$(grep -m1 '^| Note' "$f" | awk -F'|' '{print $3}' | xargs | cut -c1-70); st="$st $n=$e($note)"; done
-  tk=$(for t in $D/mission/.holarch/tasks/*.json; do [ -f "$t" ] && echo -n "$(basename $t .json | sed 's/-[0-9]*$//'):$(grep -o '"state": *"[a-z]*"' $t | head -1 | sed 's/.*"\([a-z]*\)"$/\1/'),"; done)
-  msg=$(cat $D/mission/*/INBOX.md $D/mission/.holarch/worktrees/*/mission/*/INBOX.md 2>/dev/null | grep -c '^type: \(DELIVERABLE\|ALERT\|BLOCKER\|CLARIFICATION\|PROPOSAL\)')
-  rv=$(grep -c '^| 2026' $D/mission/registry/REVEILS.md 2>/dev/null); ns=$(grep -c '^| 2026' $D/mission/registry/SESSIONS.md 2>/dev/null)
-  arret=$(grep -h -c "ré-incarnations arrêtées\|STATUS=FAILED" $D/mission/.holarch/tasks/*.log 2>/dev/null | paste -sd+ | bc)
-  cur="st=$st tk=[$tk] msgs=$msg reveils=$rv arrets=$arret sessions=$ns"
-  if [ "$cur" != "$prev" ]; then echo "$(date -u +%T) $cur"; prev="$cur"; fi; sleep 30; done
+node tools/holarch-observe/observe.js --evenements --intervalle 5
 ```
 
-Ne pas doubler d'une boucle `sleep` en premier plan ni d'une relecture des fichiers à chaque
-message de l'utilisateur : le moniteur suffit ; entre deux événements, dire en une ligne où on en
-est (unités closes, session en cours, coût) et rendre la main.
+Ne pas doubler d'une boucle `sleep` en premier plan, ni d'un `--watch` dans un Bash (il efface l'écran en continu),
+ni d'une relecture des fichiers à chaque message de l'utilisateur : le moniteur suffit ; entre deux événements, dire
+en une ligne où on en est (unités closes, session en cours, coût) et rendre la main. Pour le détail d'un événement,
+`--json` une fois.
 
 ## 3. Réagir — seulement à ce qui revient au mainteneur
 
@@ -82,7 +81,7 @@ mainteneur » et la fin de mission — pas pour une hibernation ou une ré-incar
 Format court, sans tableau de plus de cinq lignes :
 
 - unités closes / en cours (lire `memoire/INDEX.md` de l'enfant dans son worktree, ou ses commits) ;
-- sessions et coût cumulés (commande du §1), avec la part de la racine et de chaque enfant ;
+- sessions et coût cumulés (ligne « Coût » de `npm run observe`, `sessions.parInstance` en `--json`), avec la part de la racine et de chaque enfant ; les sessions « sans journal » (tuées avant leur résultat) comptées à part ;
 - ce que le harnais doit faire ensuite tout seul (réveil, ré-incarnation), et ce qui attendra le
   mainteneur.
 
@@ -91,8 +90,9 @@ Format court, sans tableau de plus de cinq lignes :
 - Ne jamais écrire dans `mission/<instance>/` ni committer les fichiers d'une instance vivante : ce
   qui traîne non committé appartient à sa prochaine session (`ON_SLEEP`). Exception : `SESSIONS.md`
   et `REVEILS.md`, journal du lanceur à la racine — le parent les committe à sa session suivante.
-- `pgrep -fc 'claude -p'` compte aussi des processus étrangers à la mission : se fier aux tâches
-  (`--taches`) et aux `STATUS.md`, pas au nombre de processus.
+- `pgrep -fc 'claude -p'` compte aussi des processus étrangers à la mission : se fier à `npm run observe` (qui ne
+  retient que les `claude -p … -n holarch:<chemin>` et leurs lanceurs) ; un enfant lancé en `mode_attente = synchrone`
+  n'a **aucune fiche de tâche** (`--taches` ne le liste pas) et son `.contexte.json` vit sous son worktree.
 - Les horodatages des lignes `PROGRESS.md` écrites par une instance peuvent être faux (l'instance
   estime l'heure) : la vérité est dans `SESSIONS.md` et les `.json` des tâches.
 - Un `git switch`, `reset`, `stash` ou `worktree remove` pendant que la mission tourne est refusé

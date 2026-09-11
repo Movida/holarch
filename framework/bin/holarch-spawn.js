@@ -50,7 +50,7 @@ const DEFAULTS = {
   // clôt vers seuil + 25k ; à 250k le fusible n'a jamais sonné et c'est le budget qui arbitrait (holarch-delegation).
   budget_usd_par_session: '8',
   max_tours_par_session: '200',
-  seuil_contexte_tokens: '180000',
+  seuil_contexte_tokens: '240000', // 1.13.0 : p90 198 602 mesuré sur holarch-outillage (docs/diagnostics/2026-09-11-seuil-contexte-240k.md)
   autocompact_tokens: '400000',
   outils_cli: 'Read,Write,Edit,Bash,Glob,Grep,Agent,TodoWrite',
   relances_max: '2',
@@ -460,6 +460,59 @@ function readInboxOf(root, chemin) {
   return trouve ? text : null;
 }
 
+/**
+ * 1.14.0 — relais parent → enfant sous `git-branches` / `isolation = worktree`. L'INBOX d'un enfant vit dans son
+ * worktree, où son parent n'écrit jamais (cloisonnement, allowlist sans `git -C`). Le parent écrit donc à son enfant
+ * dans `mission/<chemin-enfant>/INBOX.md` de SON PROPRE arbre (instanceRoot du parent) et committe ; à l'incarnation
+ * suivante de l'enfant, ce relais copie dans le worktree tout message committé qui n'y est pas encore (bloc identique,
+ * pour que la fusion `merge=union` ultérieure reste propre), un commit par message dont le sujet reproduit la classe
+ * de provenance déduite par message-lint --blame sur la source : `[<from>]` (vérifié), sans préfixe (utilisateur),
+ * `[harnais]` sinon (non vérifié, et le reste). Un message non encore committé n'est pas relayé (typed-escalation :
+ * un ordre non committé n'est jamais exécuté — autant ne pas le transporter). Fail-open : jamais bloquant.
+ */
+function relayInboxFromParent(root, chemin) {
+  if (!chemin.includes('/') || !hasWorktree(root, chemin)) return null;
+  const parent = chemin.split('/').slice(0, -1).join('/');
+  const parentTree = instanceRoot(root, parent);
+  const rel = path.join('mission', chemin, 'INBOX.md').split(path.sep).join('/');
+  const src = path.join(parentTree, rel);
+  const dstDir = worktreeDir(root, chemin);
+  const dst = path.join(dstDir, rel);
+  const res = { parent, relayes: [], ignores: [], commit: null };
+  const srcText = readIf(src);
+  if (srcText === null) return res;
+  const dstText0 = readIf(dst);
+  let texte = dstText0 === null ? `# INBOX — ${chemin}\n\n<!-- Append-only (KERNEL §7). Messages reçus, au format framework/templates/MESSAGE.template.md. -->\n` : dstText0;
+  const ids = new Set(parseMessageBlocks(texte).msgs.map((m) => m.id).filter(Boolean));
+  const manquants = parseMessageBlocks(srcText).msgs.filter((m) => m.id && !ids.has(m.id));
+  if (!manquants.length) return res;
+  const analyses = new Map();
+  try {
+    const { analyserMessages } = require('../../tools/message-lint/message-lint');
+    for (const a of analyserMessages(srcText, { root: parentTree, fichier: rel, blame: true })) if (a.id) analyses.set(a.id, a);
+  } catch (_) { /* fail-open : relais sous [harnais], provenance non vérifiée */ }
+  const env = Object.assign({}, process.env, { GIT_AUTHOR_NAME: 'HOLARCH', GIT_AUTHOR_EMAIL: 'holarch@localhost', GIT_COMMITTER_NAME: 'HOLARCH', GIT_COMMITTER_EMAIL: 'holarch@localhost' });
+  for (const m of manquants) {
+    const a = analyses.get(m.id);
+    if (a && /non encore committ/i.test(a.motif || '')) { res.ignores.push({ id: m.id, motif: a.motif }); continue; }
+    const bloc = m.block.replace(/\s*$/, '');
+    texte += `${texte && !texte.endsWith('\n') ? '\n' : ''}${bloc}\n`;
+    fs.mkdirSync(path.dirname(dst), { recursive: true });
+    fs.writeFileSync(dst, texte);
+    const prefixe = a && a.verifiee === true ? (a.origine === 'utilisateur' ? '' : `[${a.origine}] `) : '[harnais] ';
+    const motif = a && a.verifiee === true ? `depuis l'arbre de ${parent}` : `provenance non vérifiée${a && a.motif ? ` : ${a.motif}` : ''}`;
+    const sujet = `${prefixe}relais INBOX ${m.id} (lanceur, ${motif})`;
+    let sha = null;
+    if (spawnSync('git', ['-C', dstDir, 'add', '--', rel], { encoding: 'utf8', env }).status === 0
+      && spawnSync('git', ['-C', dstDir, 'commit', '-q', '-m', sujet], { encoding: 'utf8', env }).status === 0) {
+      sha = (spawnSync('git', ['-C', dstDir, 'rev-parse', 'HEAD'], { encoding: 'utf8', env }).stdout || '').trim() || null;
+      res.commit = sha;
+    }
+    res.relayes.push({ id: m.id, sujet, sha, verifie: !!(a && a.verifiee === true) });
+  }
+  return res;
+}
+
 function selectInboxMessages(root, chemin, params) {
   const inboxText = readInboxOf(root, chemin) || '';
   const nMsg = Number(params.reveil_inbox_messages) || Number(DEFAULTS.reveil_inbox_messages);
@@ -824,10 +877,21 @@ function buildAgentsOption(root, params) {
 // ---------------------------------------------------------------------------
 function prepareLaunch(root, chemin, opts) {
   const bootstrap = !!opts.bootstrap;
-  try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* rien à supprimer */ }
+  // 1.13.2 : un lancement neuf efface une demande d'arrêt périmée ; une ré-incarnation (opts.relance) ne touche pas au
+  // fichier stop — c'est launchWithRelaunches qui l'a déjà lu et consommé avant de décider de ré-incarner.
+  // Un --dry-run n'incarne rien : il ne doit pas non plus consommer une demande d'arrêt en attente (constaté le 2026-09-11).
+  if (!opts.relance && !opts.dryRun) { try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* rien à supprimer */ } }
   const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
   const params = resolveParams(cfg);
   const workspace = bootstrap ? { cwd: root, branche: null } : resolveWorkspace(root, chemin, cfg);
+  // 1.14.0 : messages committés par le parent pour cet enfant, relayés dans son worktree avant de lire son INBOX.
+  if (!bootstrap && workspace.cwd !== root && !opts.dryRun) {
+    try {
+      const relais = relayInboxFromParent(root, chemin);
+      if (relais && relais.relayes.length) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ INBOX : ${relais.relayes.length} message(s) relayé(s) depuis l'arbre de ${relais.parent} (${relais.relayes.map((r) => r.id).join(', ')})\n`);
+      if (relais && relais.ignores.length) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ INBOX : ${relais.ignores.length} message(s) non relayé(s), non committé(s) par ${relais.parent} (${relais.ignores.map((r) => r.id).join(', ')})\n`);
+    } catch (e) { process.stderr.write(`HOLARCH ▸ ${chemin} ▸ relais INBOX ignoré (${e.message})\n`); }
+  }
   const fiche = bootstrap ? parseFiche(null) : parseFiche(readIf(fichePath(root, chemin)));
   const meta = resolveProfile(cfg, fiche, chemin, opts);
   if (!bootstrap) {
@@ -1251,7 +1315,7 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     // Après un --bootstrap, la racine existe (fichiers d'instance, fiche registre) : toute ré-incarnation repart
     // comme instance ordinaire, sans BOOTSTRAP.md — sinon la session ré-incarnée refuse « mission déjà en cours »
     // sans rien faire (dogfooding du chantier 3, 2026-09-10 : trois sessions perdues avant l'arrêt sans progrès).
-    const tentativeOpts = attempt > 1 && opts.bootstrap ? Object.assign({}, opts, { bootstrap: false }) : opts;
+    const tentativeOpts = attempt > 1 ? Object.assign({}, opts, { bootstrap: false, relance: true }) : opts;
     const launch = prepareLaunch(root, chemin, tentativeOpts);
     if (opts.timeoutMin > 0) launch.timeoutMs = opts.timeoutMin * 60 * 1000;
     const avant = progressSnapshot(root, chemin);
@@ -1286,6 +1350,15 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
     const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !isArret;
     if (!voluntary) return sessions;
+    // 1.13.2 : --arret posé pendant que la session finissait déjà (ON_SLEEP sur budget ou contexte) — la note ne dit
+    // pas « arrêt demandé », mais le fichier stop est là : pas de ré-incarnation (trois arrêts perdus le 2026-09-11,
+    // chaque prepareLaunch effaçant le fichier). Consommé ici, jamais à la tentative suivante.
+    if (fs.existsSync(stopPath(root, chemin))) {
+      try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* déjà retiré */ }
+      sessions[sessions.length - 1].arretDemande = true;
+      process.stderr.write(`HOLARCH ▸ ${chemin} ▸ arrêt demandé (--arret) reçu pendant la fin de la session n° ${attempt} — pas de ré-incarnation\n`);
+      return sessions;
+    }
     // Changement de régime (direct-spawn, ON_PLAN) : l'instance a modifié la ligne Profil ou Effort de sa fiche
     // registre avant d'hiberner. La fiche est relue ici comme prepareLaunch la relira au tour suivant ; un régime
     // différent est ré-incarné sur le nouveau modèle/effort, décompté à part des ré-incarnations de contexte.
@@ -1341,7 +1414,7 @@ function summarize(launch, sessions) {
   lines.push(`HOLARCH ▸ ${launch.chemin} ▸ STATUS=${status.etat || '(absent)'} · ${sessions.length} session(s) · ${turns} tours · ${cost.toFixed(2)} USD · ${fmtDuration(ms)} · ${regimes.join(' → ')} · sessions ${ids}`);
   if (regimes.length > 1) lines.push(`ℹ changement de régime décidé par l'instance (fiche registre) : ${regimes.join(' → ')} — motif dans son JOURNAL.md, trace par session dans mission/registry/SESSIONS.md`);
   let code = 0;
-  const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
+  const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '') || !!last.arretDemande;
   const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !isArret;
   if (!last.res) {
     const causeExacte = last.error ? ` — cause : ${last.error.code || ''} ${last.error.message || ''}`.trim() : '';
@@ -1397,6 +1470,7 @@ function parseArgs(argv) {
     else if (a === '--taches') o.taches = true;
     else if (a === '--reprendre') o.reprendre = true;
     else if (a === '--arret') o.arret = next();
+    else if (a === '--immediat') o.immediat = true;
     else if (a === '--nettoyer-worktree') o.nettoyerWorktree = next();
     else if (a === '-h' || a === '--help') { o.help = true; }
     else if (a.startsWith('-')) throw new Error(`option inconnue : ${a}`);
@@ -1414,7 +1488,7 @@ function usage() {
     'Options : --profil <conception|execution|relecture|exploration> --modele <alias|id> --effort <low|medium|high|xhigh|max>',
     '          --budget-usd <n> --max-tours <n> --permission-mode <mode> --timeout-min <n> --root <dir>',
     '          --add-dir <dir> (répétable — dépôt externe accessible en plus de la racine) --dry-run --json',
-    '          --detach --reveil --taches --reprendre --arret <chemin> (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
+    '          --detach --reveil --taches --reprendre --arret <chemin> [--immediat] (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
     '          --nettoyer-worktree <chemin> (supprime le worktree d\'une instance déjà fusionnée ; refuse si des changements non committés subsistent)',
   ].join('\n');
 }
@@ -1454,6 +1528,45 @@ function reprendreTaches(root) {
   }
   return { lignes, relancees };
 }
+/** Descendants d'un pid d'après `ps -eo pid=,ppid=` (profondeur d'abord : les feuilles en premier). */
+function descendants(pid) {
+  const r = spawnSync('ps', ['-eo', 'pid=,ppid='], { encoding: 'utf8', timeout: 5000 });
+  const enfants = new Map();
+  for (const l of String(r.stdout || '').split('\n')) {
+    const m = l.trim().match(/^(\d+)\s+(\d+)$/);
+    if (!m) continue;
+    if (!enfants.has(m[2])) enfants.set(m[2], []);
+    enfants.get(m[2]).push(m[1]);
+  }
+  const out = [];
+  const visiter = (p) => { for (const c of enfants.get(String(p)) || []) { visiter(c); out.push(Number(c)); } };
+  visiter(pid);
+  return out;
+}
+
+/** Arrêt d'une instance (1.13.1). Sans session vivante (verrou absent ou au pid mort, nettoyé par isLive) : rien à
+ *  arrêter, aucun fichier stop écrit. Vivante : `immediat` tue l'arbre de processus du lanceur (SIGTERM feuilles
+ *  d'abord, SIGKILL après `attenteMs`) — l'état committé reste, ce qui traîne appartient à la session suivante ; sinon
+ *  écrit la demande d'arrêt lue par le hook au prochain appel d'outil (ON_SLEEP complet, plusieurs minutes). */
+function demanderArret(root, chemin, opts = {}) {
+  if (!isLive(root, chemin)) return { vivant: false, message: `aucune session vivante pour ${chemin} (verrou périmé nettoyé s'il y en avait un) — rien à arrêter` };
+  if (!opts.immediat) {
+    const p = writeStopRequest(root, chemin);
+    return { vivant: true, mode: 'propre', chemin: p, message: `arrêt demandé (${p}) — la session hiberne à son prochain appel d'outil, ON_SLEEP compris ; --immediat pour tuer la session tout de suite` };
+  }
+  let pid = null;
+  try { pid = JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')).pid; } catch (_) { pid = null; }
+  writeStopRequest(root, chemin); // au cas où le lanceur survivrait à son enfant : pas de ré-incarnation
+  const cibles = descendants(pid).concat([pid]);
+  const signaler = (sig) => cibles.filter((p) => { try { process.kill(p, sig); return true; } catch (_) { return false; } });
+  const termes = signaler('SIGTERM');
+  const fin = Date.now() + (opts.attenteMs || 5000);
+  while (Date.now() < fin && cibles.some((p) => { try { process.kill(p, 0); return true; } catch (_) { return false; } })) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
+  const tues = signaler('SIGKILL');
+  try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* déjà retiré */ }
+  return { vivant: true, mode: 'immediat', pids: termes, sigkill: tues, message: `session tuée (SIGTERM ${termes.join(', ') || '—'}${tues.length ? ` ; SIGKILL ${tues.join(', ')}` : ''}) — état committé conservé, fichiers non committés laissés à la session suivante` };
+}
+
 function writeStopRequest(root, chemin) {
   const dir = path.join(root, 'mission', '.holarch', 'stop');
   fs.mkdirSync(dir, { recursive: true });
@@ -1483,8 +1596,8 @@ function main() {
   }
   if (o.arret) {
     const chemin = o.arret.replace(/^mission\//, '').replace(/\/+$/, '');
-    const p = writeStopRequest(root, chemin);
-    process.stdout.write(`HOLARCH ▸ ${chemin} ▸ arrêt demandé (${p})\n`);
+    const r = demanderArret(root, chemin, { immediat: !!o.immediat });
+    process.stdout.write(`HOLARCH ▸ ${chemin} ▸ ${r.message}\n`);
     return;
   }
   if (o.nettoyerWorktree) {
@@ -1561,9 +1674,9 @@ module.exports = {
   findRoot, launchWithRelaunches, DEFAULTS, DEFAULT_POLICY, tailInboxMessages, INBOX_TAIL_MESSAGES,
   buildUserPromptDetail, tailBounded, tailInboxBounded, moduleActive, parseUniteHeader,
   buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason, readInboxOf, annoterOrigines,
-  isLive, wakeWaiters, detachLaunch, finishLaunch, reprendreTaches, coutCumule, countSessions, commitJournalLanceur, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
+  isLive, demanderArret, descendants, wakeWaiters, detachLaunch, finishLaunch, reprendreTaches, coutCumule, countSessions, commitJournalLanceur, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
   progressSnapshot, hasProgressed, countSessions, appendAlertToParent,
-  worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree,
+  worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree, relayInboxFromParent,
   ensureSessionsFile, lastContexteDepart, contexteLivePath,
 };
 

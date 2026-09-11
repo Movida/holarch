@@ -36,6 +36,17 @@ processus racine de la session interactive.
 
 ## 2. Arrêter proprement
 
+D'abord le lanceur, qui sait ce qui vit (1.13.1) :
+
+```
+node framework/bin/holarch-spawn.js --arret <chemin>              # propre : hiberne au prochain appel d'outil, ON_SLEEP complet (minutes)
+node framework/bin/holarch-spawn.js --arret <chemin> --immediat   # tue l'arbre de processus tout de suite ; état committé conservé
+```
+
+Sans session vivante il répond « rien à arrêter » et nettoie un verrou périmé : ne pas attendre un fantôme (une session
+lancée depuis un autre terminal meurt avec lui, verrou et compteur de contexte figés). Pour repartir « avec les dernières
+nouveautés », `--immediat` puis relance : le lanceur relit `CONFIG.md` et `OBJECTIVE.md` à chaque incarnation.
+
 Si la tâche de fond a été lancée par cette session (elle a un `task_id` connu, retourné au
 lancement ou listable), utiliser le mécanisme du harnais plutôt qu'un `kill` brut :
 

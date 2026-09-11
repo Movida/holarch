@@ -55,6 +55,8 @@ function collecter(root, deps) {
     versionClaude: () => run('claude', ['--version']),
     versionNode: () => process.version,
     lire: (rel) => readIf(path.join(root, rel)),
+    // État effectif de la mission (tools/holarch-observe, chantier 10) : fail-open, jamais bloquant pour le hook.
+    observer: (r) => { const { collecter: obs } = require('../holarch-observe/collecte.js'); return obs(r); },
   }, deps || {});
   const e = { root };
   e.branche = d.git(['branch', '--show-current']) || '(détachée)';
@@ -86,6 +88,18 @@ function collecter(root, deps) {
   const u = hosts && hosts.match(/user:\s*(\S+)/);
   e.gh = hosts ? (u ? `authentifié (${u[1]})` : 'authentifié') : 'non authentifié — gh auth login --web';
   e.versions = { claude: d.versionClaude() || '?', node: d.versionNode(), framework: (d.lire('framework/VERSION') || '?').trim() };
+  e.observe = null;
+  if (!e.missionAbsente && e.racine.etat) {
+    try {
+      const o = d.observer(root);
+      e.observe = {
+        instances: o.instances.map((i) => ({ chemin: i.chemin, effectif: i.effectif })),
+        alertes: o.anomalies.filter((a) => a.niveau === 'alerte').map((a) => `${a.chemin ? `${a.chemin} · ` : ''}${a.texte}`),
+        mainteneur: o.messagesPourMainteneur.filter((m) => !m.repondu).length,
+        sessions: o.sessions.total.n, usd: o.sessions.total.usd,
+      };
+    } catch (_) { e.observe = null; }
+  }
   return e;
 }
 
@@ -98,11 +112,16 @@ function formater(e, bref) {
   const racine = e.racine.etat ? `concepteur ${e.racine.etat}${e.racine.note ? ` (${e.racine.note.slice(0, 60)})` : ''}` : 'aucune racine incarnée (mission non démarrée)';
   const enfants = e.enfants.length ? ` · enfants : ${e.enfants.map((x) => `${x.nom} ${x.etat}`).join(', ')}` : '';
   l.push(e.missionAbsente ? `aucune mission ouverte (mission/ absent ; CONFIG.md porte encore le nom « ${e.mission} », à réécrire à l'ouverture de la prochaine)` : `mission ${e.mission} : ${racine}${enfants}`);
+  if (e.observe) {
+    l.push(`état effectif (npm run observe) : ${e.observe.instances.map((i) => `${i.chemin} ${i.effectif}`).join(' ; ')} · ${e.observe.sessions} session(s) ${e.observe.usd.toFixed(2)} USD · ${e.observe.mainteneur} message(s) pour le mainteneur`);
+    for (const a of e.observe.alertes.slice(0, bref ? 3 : 10)) l.push(`  ⚠ ${bref ? a.slice(0, 140) : a}`);
+    if (e.observe.alertes.length > (bref ? 3 : 10)) l.push(`  … ${e.observe.alertes.length - (bref ? 3 : 10)} alerte(s) de plus (npm run observe)`);
+  }
   l.push(e.processus.length ? `⚠ ${e.processus.length} processus de mission en cours : ${e.processus.map((p) => `${p.pid} ${p.commande.split(' ').slice(0, 4).join(' ')}`).join(' ; ')} — ne pas toucher mission/ ni changer de branche (skill holarch-pause)` : 'aucune session de mission en cours');
   l.push(`derniers commits : ${e.commits.map((c) => (bref ? c.slice(0, 60) : c)).join(' · ')}`);
   if (e.sessions.length) l.push(`dernières sessions : ${e.sessions.join(' · ')}`);
   l.push(`framework v${e.versions.framework} · gh ${e.gh} · Claude Code ${e.versions.claude.replace(/\s*\(Claude Code\)/, '')} · Node ${e.versions.node} · remotes : ${e.remotes.join(', ') || 'aucun'}`);
-  l.push(`règles : docs/ENVIRONNEMENT.md (§7 réservé au mainteneur, §12 fichiers transverses) · scripts : npm run etat | lint | test | dry-run | mission -- <chemin> | upgrade | publish-template -- --out <dir>`);
+  l.push(`règles : docs/ENVIRONNEMENT.md (§7 réservé au mainteneur, §12 fichiers transverses) · scripts : npm run etat | observe (mission en cours, --watch) | lint | test | dry-run | mission -- <chemin> | upgrade | publish-template -- --out <dir>`);
   return l.join('\n');
 }
 

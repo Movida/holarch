@@ -25,6 +25,7 @@
       "Bash(git switch *)",
       "Bash(git branch *)",
       "Bash(git merge *)",
+      "Bash(git clone *)", "Bash(git -C * checkout *)", "Bash(git -C * config *)",
       "Bash(mkdir *)",
       "Bash(ls)", "Bash(ls *)",
       "Bash(wc *)", "Bash(head *)", "Bash(tail *)", "Bash(grep *)", "Bash(find *)", "Bash(diff *)",

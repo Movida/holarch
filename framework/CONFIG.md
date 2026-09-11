@@ -27,7 +27,7 @@
 | format_rapport_final | simple |
 | budget_usd_par_session | 8 |
 | max_tours_par_session | 200 |
-| seuil_contexte_tokens | 180000 |
+| seuil_contexte_tokens | 240000 |
 | autocompact_tokens | 400000 |
 
 ## Politique de modèle

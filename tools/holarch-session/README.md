@@ -15,8 +15,11 @@ node tools/holarch-session/etat.js --bref
 Branche et fichiers non committés (en distinguant les fichiers d'instance, à laisser à l'instance),
 mission et état de la racine et de ses enfants, processus de mission en cours, derniers commits,
 dernières sessions de `SESSIONS.md`, authentification `gh` (lue dans `hosts.yml`, sans réseau),
-versions, remotes. Le hook `SessionStart` injecte la version brève dans le contexte de chaque
-session interactive : elle démarre en sachant où elle est (`docs/ENVIRONNEMENT.md` §11).
+versions, remotes — et, mission ouverte, l'**état effectif** de chaque instance (STATUS du worktree ⊕ verrou ⊕
+processus), le coût cumulé, les messages pour le mainteneur et les alertes, obtenus de `tools/holarch-observe/collecte.js`
+(chantier 10, 2026-09-11 ; fail-open : si la collecte échoue, la ligne manque, rien d'autre). Le hook `SessionStart`
+injecte la version brève dans le contexte de chaque session interactive : elle démarre en sachant où elle est et ce qui
+l'attend (`docs/ENVIRONNEMENT.md` §11).
 
 ## `garde.js` — trois règles rendues mécaniques
 

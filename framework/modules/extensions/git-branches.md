@@ -1,6 +1,6 @@
 # Module : git-branches
 > Catégorie : extensions
-> Version : 1.1.1
+> Version : 1.2.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : direct-spawn, dependency-graph, fork-join, sharded-files, graveyard-handover
@@ -40,6 +40,8 @@ Sous `aucune`, cette règle est sans objet.
 Sous `branche` (comportement 1.0.0) : avant d'incarner un enfant donné (lancement du module d'orchestration actif), vérifie que tu es bien positionné sur sa branche (créée à `ON_SPAWN`) — bascule si besoin. Reste sur cette branche pour toute la durée de sa supervision, y compris à travers plusieurs relances (`TASK` correctif, nouvelle session de l'enfant) : ne reviens sur ta propre branche qu'une fois sa revue conclue par une fusion (voir `ON_CHILD_DONE`). Si le module de synchronisation actif te fait superviser plusieurs enfants en parallèle logique (ex. lots de `dependency-graph`), traite-les un par un du point de vue des branches : jamais deux enfants incarnés avec la même branche courante en même temps.
 
 Sous `worktree` : ne bascule plus de branche avant d'incarner un enfant — le lanceur incarne l'enfant directement dans son propre worktree (`resolveWorkspace`), sur sa propre branche, sans toucher à la tienne. Tu restes sur ta branche pendant toute la supervision, y compris en parallèle logique (plusieurs enfants détachés à la fois, mode `detache` de `direct-spawn`) : les worktrees s'isolent d'eux-mêmes, la contrainte « jamais deux enfants avec la même branche courante en même temps » de la variante `branche` ne s'applique plus.
+
+**Écrire à un enfant sous `worktree`** (`TASK` correctif, `RESPONSE` à sa `CLARIFICATION`) : n'écris jamais dans `mission/.holarch/worktrees/`. Ajoute le message (format `MESSAGE.template.md`) à `mission/<chemin-enfant>/INBOX.md` **dans ton propre arbre** (crée le fichier depuis `INBOX.template.md` s'il n'y est pas encore), committe-le sur ta branche (`[<ton-chemin>] …`, règle de `typed-escalation`). À l'incarnation suivante de l'enfant, le lanceur relaie dans son worktree tout message committé qui n'y est pas encore (bloc identique, provenance conservée dans le sujet du commit de relais) ; un message non committé n'est pas relayé. Dans l'autre sens rien à faire : le lanceur lit déjà les messages que tes enfants t'adressent depuis leurs worktrees.
 
 ### ⚓ ON_CHILD_DONE
 Conclus d'abord la vérification du livrable comme le prescrit le KERNEL (§5.3.2) et le reste de ta configuration active. Sous `worktree`, lis l'état de l'enfant par `git show <prefixe_branche><chemin-enfant-avec-tirets>:mission/<chemin-enfant>/STATUS.md` (ou par le bloc `<reveil>` transmis par le lanceur) plutôt que de lire son arbre de travail directement — tu n'y as pas basculé. Sous `branche`, l'enfant est sur sa branche que tu as toi-même basculée en `ON_SUPERVISE` : lis-le directement.

@@ -10,6 +10,55 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.14.0 — 2026-09-11
+
+Mineure (contrat : gabarits, module `git-branches` 1.2.0 ; lanceur, tests) — plomberie des messages sous worktree :
+- **Relais parent → enfant** (`relayInboxFromParent`, appelé par `prepareLaunch` à chaque incarnation d'un enfant qui a un
+  worktree) : le parent écrit à son enfant dans `mission/<enfant>/INBOX.md` de son propre arbre et committe ; le lanceur
+  copie dans le worktree de l'enfant chaque message committé absent (bloc identique pour une fusion `merge=union` propre),
+  un commit par message dont le sujet reproduit la classe de provenance déduite par `message-lint --blame` sur la source
+  (`[<from>]` vérifié, sans préfixe pour un commit humain, `[harnais]` sinon). Non committé = non relayé (typed-escalation).
+  Constaté sur `holarch-fournisseurs` : l'INBOX d'un enfant vit dans son worktree, où le parent ne peut pas écrire.
+  Limite connue : après la fusion de la branche de l'enfant, `merge=union` peut dupliquer un bloc relayé dans
+  `mission/<enfant>/INBOX.md` (les lecteurs du lanceur dédoublonnent par `id`).
+- Gabarits `INBOX.template.md` et `OUTBOX.template.md` ajoutés à `framework/templates/` (KERNEL §9.3 les supposait ;
+  les spawns reconstruisaient les en-têtes par analogie).
+- Trois tests (`relais-inbox-worktree.test.js`) ; `IMPLEMENTATION.md` §4.2 ; `MANIFEST.md`.
+
+## 1.13.2 — 2026-09-11
+
+Patch (lanceur, tests) — arrêt propre perdu pendant l'ON_SLEEP :
+- Un `--arret <chemin>` posé pendant que la session finissait déjà (hibernation sur budget ou contexte, note sans
+  « arrêt demandé ») était perdu : `prepareLaunch` effaçait le fichier stop au début de la ré-incarnation suivante.
+  Trois arrêts de suite perdus le 2026-09-11 sur `concepteur/implementeur-executeurs` (sessions de douze minutes,
+  ON_SLEEP en fin de chacune). Désormais `launchWithRelaunches` lit et consomme le fichier stop avant de décider
+  d'une ré-incarnation (pas de relance, résumé « arrêt propre demandé », code 0), et seul un lancement neuf efface un
+  fichier stop périmé (`opts.relance` posé par la boucle ; un `--dry-run` ne le touche pas non plus). Trois tests (`arret-pendant-sleep.test.js`) ;
+  `IMPLEMENTATION.md` §3.5 et tableau des fichiers `.holarch/` mis à jour.
+
+## 1.13.1 — 2026-09-11
+
+Patch (lanceur, tests) — arrêt d'une instance :
+- `--arret <chemin>` constate d'abord si une session vit (verrou `live/` au pid vivant, verrou périmé nettoyé) et répond
+  « rien à arrêter » sinon, sans écrire de fichier stop : un arrêt a attendu un quart d'heure une session morte avec le
+  terminal qui l'avait lancée (compteur de contexte figé à 18 tours, verrou au pid mort).
+- `--arret <chemin> --immediat` tue l'arbre de processus du lanceur (SIGTERM feuilles d'abord, SIGKILL après 5 s), retire
+  le verrou, laisse l'état committé et ce qui traîne à la session suivante : l'arrêt pour repartir tout de suite avec un
+  `CONFIG.md` ou un `OBJECTIVE.md` changés. Trois tests (`arret-immediat.test.js`) ; skill `holarch-pause` et
+  `IMPLEMENTATION.md` §3.5 mis à jour.
+
+## 1.13.0 — 2026-09-11
+
+Mineure (preset et allowlist des instances) — deux décisions du mainteneur après la mission `holarch-outillage` :
+- **`seuil_contexte_tokens` 180 000 → 240 000** (lanceur, preset `solo-light`, `CONFIG.md` de `holarch-fournisseurs`) : mesure
+  `docs/diagnostics/2026-09-11-seuil-contexte-240k.md` (p90 du contexte max instantané 198 602, autocompact jamais approché,
+  budget jamais atteint). `autocompact_tokens` 400 000 et `budget_usd_par_session` 8 inchangés.
+- **Allowlist des instances** (`framework/claude/instance-settings.json`) : `git clone *`, `git -C <dir> checkout *`,
+  `git -C <dir> config *` — une instance peut rejouer des outils de maintenance dans un clone sous son espace de travail
+  (mission `holarch-outillage` : critère de rejeu hors de portée de toute instance). `git checkout` / `switch` sans `-C`
+  restent hors allowlist : une instance ne change jamais de branche dans son worktree (`git-branches`). Forme vérifiée par une
+  session minimale (`claude -p --model haiku`, joker au milieu du motif accepté, `checkout` sans `-C` refusé).
+
 ## 1.12.0 — 2026-09-11
 
 Mineure (gabarit ajouté, outils de maintenance, scripts npm) — promotion du chantier 8 (mission `holarch-outillage`,

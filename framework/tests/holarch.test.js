@@ -173,7 +173,7 @@ test('prepareLaunch : arguments CLI, prompts injectés, environnement des hooks'
   const prevName = process.env.GIT_AUTHOR_NAME;
   process.env.GIT_AUTHOR_NAME = 'Quelqu\'un';
   try { assert.equal(launcher.prepareLaunch(root, 'concepteur/enfant', {}).env.GIT_AUTHOR_NAME, 'Quelqu\'un'); } finally { if (prevName === undefined) delete process.env.GIT_AUTHOR_NAME; else process.env.GIT_AUTHOR_NAME = prevName; }
-  assert.equal(l.env.HOLARCH_CONTEXT_LIMIT, '180000'); // défaut 1.11.0 (120k → 180k, décision 35)
+  assert.equal(l.env.HOLARCH_CONTEXT_LIMIT, '240000'); // défaut 1.13.0 (180k → 240k, décision 39, diagnostic du 2026-09-11)
   const withDirs = launcher.prepareLaunch(root, 'concepteur/enfant', { addDir: ['/tmp/depot-externe', 'relatif'] });
   const dirArgs = withDirs.args.reduce((acc, cur, i) => (withDirs.args[i - 1] === '--add-dir' ? acc.concat(cur) : acc), []);
   assert.deepEqual(dirArgs, ['/tmp/depot-externe', path.resolve('relatif')]);
