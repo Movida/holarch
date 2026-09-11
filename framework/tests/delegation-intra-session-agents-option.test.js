@@ -108,7 +108,7 @@ test('prepareLaunch : --agents présent avec la définition holarch-unite si le 
   const def = JSON.parse(json);
   assert.ok(def['holarch-unite']);
   const a = def['holarch-unite'];
-  assert.equal(a.tools, 'Read,Write,Edit,Bash,Glob,Grep');
+  assert.deepEqual(a.tools, ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep']); // tableau, pas une chaîne (le CLI rejette « holarch-unite.tools: Invalid input »)
   assert.equal(a.tools.includes('Agent'), false);
   assert.equal(a.model, 'sonnet');
   assert.ok(a.description.length > 0);

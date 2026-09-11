@@ -812,7 +812,7 @@ function buildAgentsOption(root, params) {
     'holarch-unite': {
       description: "Sous-agent générique d'une unité de travail déléguée par une instance HOLARCH (module delegation-intra-session) ; reçoit le prompt de tâche précis (critère, chemins, interdits) à chaque invocation.",
       prompt: prompt.trim(),
-      tools: 'Read,Write,Edit,Bash,Glob,Grep',
+      tools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'], // tableau : le CLI refuse une chaîne (1.11.1)
       model: params.sous_agent_modele,
     },
   };

@@ -10,6 +10,19 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.11.1 — 2026-09-11
+
+Patch (harnais seul) — premier lancement réel sous `--agents` (bootstrap de la mission `holarch-outillage`) :
+- **Lanceur** : `buildAgentsOption` passait `tools` comme une chaîne (`'Read,Write,Edit,Bash,Glob,Grep'`) ; le CLI attend un
+  tableau et refusait la session en 1 s (« Invalid --agents configuration: holarch-unite.tools: Invalid input »), avant tout
+  résultat JSON. La mission `holarch-delegation` n'a jamais exercé ce chemin : son instance tournait sur une racine dont le
+  CONFIG n'activait pas le module en `--agents` au moment des lancements. Le test U4 fige désormais la forme tableau.
+- Leçon : `--dry-run` affiche la commande mais ne la valide pas contre le schéma du CLI ; une option nouvelle se vérifie par
+  une session minimale (`claude -p --model haiku --max-turns 1`) avant d'être promue.
+- **Test de taille du contrat** : le plafond de 55 000 caractères (IMPLEMENTATION §9, mesuré avec les 12 modules de la mission
+  `holarch-delegation`) passe à 60 000 avec le 13e module `delegation-intra-session` activé par le CONFIG de `holarch-outillage`
+  (56 731 mesurés). Le test nomme la base de mesure ; la cible de §9 reste celle d'un CONFIG à 12 modules.
+
 ## 1.11.0 — 2026-09-11
 
 Mineure (preset enrichi, défauts du harnais réglés sur mesure, lanceur et hooks corrigés) — promotion du chantier 7
