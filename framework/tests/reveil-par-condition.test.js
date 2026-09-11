@@ -264,9 +264,13 @@ test('T-C4.2 (HOLARCH_FAKE_CLAUDE) : détachement de l\'enfant puis réveil du p
     const tasksDir = path.join(root, 'mission', '.holarch', 'tasks');
     await waitFor(() => {
       const t = readJsonSafe(path.join(tasksDir, `${enfantId}.json`));
-      // Échantillonné seulement tant que l'enfant tourne : à l'instant où sa tâche se termine, le lanceur a déjà
-      // réveillé le parent et posé son verrou de vivacité (1.10.1) — ce n'est plus « entre le lancement et le réveil ».
-      if (!t || t.state === 'running') liveObserved.push(launcher.isLive(root, 'concepteur'));
+      // Échantillonné seulement tant que la session de l'enfant est vivante (son verrou), le parent lu AVANT l'enfant :
+      // le lanceur retire le verrou de l'enfant à la fin de sa session, puis pose celui du parent (wakeWaiters après
+      // chaque session depuis 1.9.0), puis clôt la tâche — « tâche running » couvrait donc une fenêtre où le parent est
+      // légitimement vivant (test instable sur un runner lent, CI du modèle 1.11.1). Si le verrou de l'enfant existe
+      // encore après la lecture du parent, celle-ci précède le réveil.
+      const parentVivant = launcher.isLive(root, 'concepteur');
+      if (launcher.isLive(root, 'concepteur/enfant')) liveObserved.push(parentVivant);
       return t && t.state !== 'running' ? t : false;
     });
     await waitFor(() => {

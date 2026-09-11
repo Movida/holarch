@@ -115,3 +115,49 @@ test('garde (processus) : hook inerte pour une instance, deny JSON pour un push 
   const w = call({ tool_name: 'Write', tool_input: { file_path: '/depot/mission/concepteur/STATUS.md' }, cwd: '/depot' }, { CLAUDE_PROJECT_DIR: '/depot' });
   assert.equal(w.hookSpecificOutput.permissionDecision, 'ask');
 });
+
+test('garde : messageAvance nomme les commits étrangers et les fichiers touchés ; historique réécrit sans commit', () => {
+  const m = garde.messageAvance('aaaaaaa1', 'bbbbbbb2', ['bbbbbbb2 [concepteur] U1 : cadrage', 'ccccccc3 Test découplé'], ['framework/tests/x.test.js', 'docs/ROADMAP.md']);
+  assert.match(m, /aaaaaaa → bbbbbbb/);
+  assert.match(m, /2 commit\(s\)/);
+  assert.match(m, /\[concepteur\] U1/);
+  assert.match(m, /fichiers touchés \(2\) : framework\/tests\/x\.test\.js, docs\/ROADMAP\.md/);
+  assert.match(m, /Relis/);
+  assert.match(garde.messageAvance('a', 'b', [], []), /historique réécrit ou branche changée/);
+});
+
+test('garde (intégration) : HEAD noté au premier appel, commit d\'une autre session signalé en additionalContext au suivant, puis silence', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-garde-git-'));
+  const g = (...a) => spawnSync('git', ['-C', root, ...a], { encoding: 'utf8' });
+  g('init', '-q'); g('config', 'user.email', 't@t'); g('config', 'user.name', 't');
+  fs.writeFileSync(path.join(root, 'a.md'), 'a\n'); g('add', '-A'); g('commit', '-q', '-m', 'init');
+  const sid = `test-${process.pid}-${Date.now()}`;
+  try { fs.unlinkSync(garde.etatPath(sid)); } catch (_) { /* absent */ }
+  const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root, HOLARCH_GARDE_PS: PS_CALME });
+  delete env.HOLARCH_INSTANCE;
+  const appel = (evt, tool, extra) => JSON.parse(spawnSync('node', [GARDE], { encoding: 'utf8', env, input: JSON.stringify(Object.assign({ session_id: sid, hook_event_name: evt, tool_name: tool, cwd: root }, extra || {})) }).stdout || '{}');
+  // 1. premier PreToolUse : note HEAD, rien à signaler
+  assert.deepEqual(appel('PreToolUse', 'Bash', { tool_input: { command: 'ls' } }), {});
+  // 2. une autre session committe
+  fs.writeFileSync(path.join(root, 'b.md'), 'b\n'); g('add', '-A'); g('commit', '-q', '-m', 'Commit étranger');
+  const o = appel('PreToolUse', 'Edit', { tool_input: { file_path: path.join(root, 'b.md') } });
+  assert.equal(o.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.equal(o.hookSpecificOutput.permissionDecision, undefined); // jamais bloquant
+  assert.match(o.hookSpecificOutput.additionalContext, /Commit étranger/);
+  assert.match(o.hookSpecificOutput.additionalContext, /b\.md/);
+  // 3. signalé une seule fois
+  assert.deepEqual(appel('PreToolUse', 'Bash', { tool_input: { command: 'ls' } }), {});
+  // 4. un commit de cette session (noté par PostToolUse) ne déclenche rien
+  fs.writeFileSync(path.join(root, 'c.md'), 'c\n'); g('add', '-A'); g('commit', '-q', '-m', 'Mon commit');
+  assert.deepEqual(appel('PostToolUse', 'Bash', { tool_input: { command: 'git commit' } }), {});
+  assert.deepEqual(appel('PreToolUse', 'Bash', { tool_input: { command: 'ls' } }), {});
+  // 5. la décision existante (ask sous mission/) coexiste avec le contexte
+  fs.writeFileSync(path.join(root, 'd.md'), 'd\n'); g('add', '-A'); g('commit', '-q', '-m', 'Encore étranger');
+  const o2 = appel('PreToolUse', 'Write', { tool_input: { file_path: path.join(root, 'mission/concepteur/INBOX.md') } });
+  assert.equal(o2.hookSpecificOutput.permissionDecision, 'ask');
+  assert.match(o2.hookSpecificOutput.additionalContext, /Encore étranger/);
+  // 6. inerte dans une session d'instance
+  const inst = spawnSync('node', [GARDE], { encoding: 'utf8', env: Object.assign({}, env, { HOLARCH_INSTANCE: 'concepteur' }), input: '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' });
+  assert.equal(inst.stdout, '{}');
+  fs.unlinkSync(garde.etatPath(sid));
+});

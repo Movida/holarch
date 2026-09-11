@@ -10,6 +10,16 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.11.2 — 2026-09-11
+
+Patch (tests seuls) :
+- **T-C4.2 (`reveil-par-condition.test.js`) instable** : la CI du modèle `Movida/holarch` 1.11.1 a rougi sur `main` et passé sur
+  le tag avec le même contenu. Le test échantillonnait « tâche de l'enfant `running` → parent vivant ? », or le lanceur retire
+  le verrou de l'enfant, pose celui du parent (`wakeWaiters` après chaque session, 1.9.0) puis seulement clôt la tâche : la
+  fenêtre était légitime. L'échantillon ne compte plus que tant que le verrou de l'enfant existe, parent lu avant l'enfant.
+- Le test de taille du contrat, relâché par erreur à 60 000 dans d8898ce (édition à l'aveugle sur la version découplée de
+  c620554), est revenu à 55 000 sur les 12 modules figés (79d1257) ; l'entrée 1.11.1 ci-dessous le décrit tel qu'il est.
+
 ## 1.11.1 — 2026-09-11
 
 Patch (harnais seul) — premier lancement réel sous `--agents` (bootstrap de la mission `holarch-outillage`) :
@@ -19,9 +29,9 @@ Patch (harnais seul) — premier lancement réel sous `--agents` (bootstrap de l
   CONFIG n'activait pas le module en `--agents` au moment des lancements. Le test U4 fige désormais la forme tableau.
 - Leçon : `--dry-run` affiche la commande mais ne la valide pas contre le schéma du CLI ; une option nouvelle se vérifie par
   une session minimale (`claude -p --model haiku --max-turns 1`) avant d'être promue.
-- **Test de taille du contrat** : le plafond de 55 000 caractères (IMPLEMENTATION §9, mesuré avec les 12 modules de la mission
-  `holarch-delegation`) passe à 60 000 avec le 13e module `delegation-intra-session` activé par le CONFIG de `holarch-outillage`
-  (56 731 mesurés). Le test nomme la base de mesure ; la cible de §9 reste celle d'un CONFIG à 12 modules.
+- **Test de taille du contrat** : découplé du `CONFIG.md` vivant (le 13e module de `holarch-outillage` le faisait rougir,
+  56 731 caractères) ; la cible de 55 000 (IMPLEMENTATION §9) reste vérifiée sur la liste figée des 12 modules mesurés à la
+  livraison du chantier 7, les modules eux-mêmes étant lus sur disque.
 
 ## 1.11.0 — 2026-09-11
 

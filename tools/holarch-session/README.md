@@ -27,6 +27,13 @@ Hook `PreToolUse` sur `Bash`, `Write` et `Edit` :
 | `git push origin …`, `git push --force`, `git push` sans remote | refus | `origin` est en lecture seule, le push forcé est réservé au mainteneur, l'amont implicite peut pointer `origin` (`docs/ENVIRONNEMENT.md` §3, §7) |
 | `git switch`, `checkout <réf>`, `reset --hard`, `clean`, `stash`, `worktree remove` **pendant qu'une mission tourne** | refus | une instance écrit dans l'arbre de travail ; arrêter d'abord avec le skill `holarch-pause` (§8) |
 | `Write` ou `Edit` sous `mission/` (sauf `mission/OBJECTIVE.md`) | demande de confirmation | le mainteneur n'écrit ni ne committe les fichiers d'une instance (KERNEL §4, §7) ; confirmer seulement si c'est délibéré |
+| HEAD a bougé depuis le dernier appel d'outil de cette session (commit d'une autre session ou d'une instance) | contexte injecté, jamais bloquant | avant tout `Bash`, `Write` ou `Edit` : la liste des commits étrangers et des fichiers qu'ils touchent, avec la consigne de relire avant d'éditer (§8, ajouté le 2026-09-11 après une édition à l'aveugle par `sed` sur une version périmée) |
+
+La quatrième règle repose sur un hook `PostToolUse` sur `Bash` (même commande `garde.js`, qui reconnaît
+`hook_event_name`) : après chaque commande, HEAD est noté dans `os.tmpdir()/holarch-garde-<session_id>.json` ;
+un commit fait par la session elle-même est donc déjà noté quand l'outil suivant démarre, seul un commit
+extérieur est signalé, une seule fois. Les modifications non committées d'une autre session restent
+invisibles : là, seule la relecture protège.
 
 Fail-open : toute erreur interne laisse l'action se faire. Pour tester une règle sans processus
 réel, `HOLARCH_GARDE_PS` remplace la sortie de `ps -eo pid,args`.

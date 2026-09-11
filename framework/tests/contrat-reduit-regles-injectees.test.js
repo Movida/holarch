@@ -64,7 +64,7 @@ test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livrai
   ].join('\n');
   const cfg = LANCEUR.parseConfig(config12);
   const prompt = LANCEUR.buildSystemPrompt(ROOT_REEL, cfg, false);
-  assert.ok(prompt.length <= 60000, `prompt système ${prompt.length} caractères, attendu ≤ 60000`);
+  assert.ok(prompt.length <= 55000, `prompt système ${prompt.length} caractères, attendu ≤ 55000`);
   assert.equal(prompt.includes('## Constat'), false);
   assert.equal(prompt.includes('## Ce que ce module ne fait pas'), false);
   assert.match(prompt, /# KERNEL — contrat social invariant de HOLARCH/);
