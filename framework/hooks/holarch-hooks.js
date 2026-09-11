@@ -9,6 +9,7 @@
  *                                 (hors fichiers en vol d'une autre instance vivante — enfant détaché, parent).
  *   SessionStart → session-start : rappelle le contexte de départ de la session précédente
  *                                 (registry/SESSIONS.md) et la discipline unites-indexees (chantier 7, §9.2).
+ *   PreToolUse  → git-guard     : refuse `git add` hors de mission/ (-A, ., -u sans pathspec, chemins framework/…) et `git commit -a`
  *   PreToolUse  → spawn-guard   : refuse `node framework/bin/holarch-spawn.js <enfant>` si la mécanique de spawn
  *                                 (KERNEL §9) est incomplète, si la cible n'est pas un enfant direct, si la
  *                                 profondeur dépasse profondeur_max, ou si le budget d'instances est nul/dépassé.
@@ -389,6 +390,36 @@ function frameworkGuard(ctx) {
   });
 }
 
+/**
+ * git-guard (1.15.1) : une instance n'écrit jamais hors de `mission/` (KERNEL §4) — elle n'a donc jamais à y indexer
+ * quoi que ce soit. Refuse `git add` sans pathspec restreint à mission/ (`-A`, `--all`, `.`, `-u`, `:/`) et tout
+ * `git commit -a`/`--all`/`-am` : le 2026-09-11 la racine, qui travaille dans l'arbre principal partagé, a embarqué
+ * dans son commit deux fichiers d'outillage qu'une session de maintenance venait de modifier. Un `git add` dont chaque
+ * chemin est sous mission/ passe (`git add -A mission/`, `git add mission/concepteur/JOURNAL.md`).
+ */
+function gitGuard(ctx) {
+  const { input } = ctx;
+  if (input.tool_name !== 'Bash') return ok();
+  const cmd = String((input.tool_input && input.tool_input.command) || '');
+  const deny = (why) => emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[HOLARCH · garde-fou git-guard] ${why}` } });
+  for (const seg of cmd.split(/[;&|]+/).map((s) => s.trim())) {
+    const m = seg.match(/^(?:\S+=\S*\s+)*git\s+(?:-C\s+\S+\s+)?(add|commit)\b(.*)$/);
+    if (!m) continue;
+    const tokens = m[2].trim().split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    if (m[1] === 'commit') {
+      if (tokens.some((t) => t === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(t))) return deny("`git commit -a` indexe tout l'arbre, y compris ce qu'une autre session a en cours : nomme tes fichiers avec `git add mission/...` puis `git commit` sans -a.");
+      continue;
+    }
+    const paths = tokens.filter((t) => !t.startsWith('-') || t === '.' || t === ':/');
+    const wide = tokens.some((t) => t === '-A' || t === '--all' || t === '-u' || t === '--update' || t === '.' || t === ':/' || t.startsWith(':/'));
+    if (!paths.length && wide) return deny("`git add -A`/`-u`/`.` sans pathspec indexe tout l'arbre, y compris ce qu'une autre session a en cours : restreins à ton arbre (`git add -A mission/` ou des chemins sous mission/).");
+    const hors = paths.filter((p) => p !== '.' && p !== ':/' && !/^(\.\/)?mission\//.test(p));
+    if (hors.length) return deny(`\`git add ${hors.join(' ')}\` indexe hors de mission/ (framework/, docs/, tools/ sont le harnais, pas ta production) : une instance ne stage que sous mission/.`);
+    if (paths.some((p) => p === '.' || p === ':/')) return deny("`git add .` indexe tout l'arbre : restreins à mission/.");
+  }
+  return ok();
+}
+
 function lastAssistantUsage(transcriptPath) {
   let fd = null;
   try {
@@ -540,6 +571,7 @@ function main() {
     if (event === 'spawn-guard') return spawnGuard(ctx);
     if (event === 'wake-guard') return wakeGuard(ctx);
     if (event === 'framework-guard') return frameworkGuard(ctx);
+    if (event === 'git-guard') return gitGuard(ctx);
     if (event === 'context-watch') return contextWatch(ctx);
     return ok();
   } catch (e) {

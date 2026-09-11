@@ -468,7 +468,12 @@ function collecter(root, depsSur) {
       if (!l.includes('"assistant"') || !l.includes('"usage"')) continue;
       try { const o = JSON.parse(l); if (o.type === 'assistant' && o.message && o.message.usage) { tours++; pic = Math.max(pic, contexteDe(o.message.usage)); } } catch (_) { /* ignore */ }
     }
-    e.transcriptions.sansJournal.push({ chemin, session: sid, fichier: abs, tours, pic, modifie: st.modifie });
+    // Transcription close depuis moins de trois minutes : le lanceur n'a peut-être pas encore écrit sa ligne (fin de
+    // session, ON_SLEEP → journal). Ce n'est une anomalie qu'une fois ce délai passé — sinon chaque transition de
+    // session émettait un couple d'alertes +/- en mode --evenements --mainteneur (constaté le 2026-09-11 soir).
+    const recente = nowMs - Date.parse(st.modifie) < 3 * 60 * 1000;
+    e.transcriptions.sansJournal.push({ chemin, session: sid, fichier: abs, tours, pic, modifie: st.modifie, recente });
+    if (recente) continue;
     anomalie('alerte', 'session-sans-journal', chemin, `transcription ${sid.slice(0, 8)} (${chemin}, ${tours} tours, pic ${Math.round(pic / 1000)}k) sans ligne dans SESSIONS.md : session tuée avant son résultat, coût invisible`);
   }
 

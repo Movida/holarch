@@ -10,6 +10,16 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.15.1 — 2026-09-11
+
+Patch (hooks, tests) — `git-guard` :
+- Nouveau garde-fou `PreToolUse`/Bash des instances : refuse `git add` sans pathspec restreint à `mission/` (`-A`, `--all`,
+  `-u`, `.`, `:/`), tout chemin hors de `mission/`, et `git commit -a`/`--all`/`-am`. Une instance n'écrit jamais hors
+  de `mission/` (KERNEL §4), elle n'a donc rien à y indexer. Constaté le 2026-09-11 : la racine, qui travaille dans
+  l'arbre principal partagé, a embarqué dans son commit `[concepteur]` (eedba25) deux fichiers d'outillage qu'une session
+  de maintenance venait de modifier sans les avoir committés. `git add -A mission/` et les chemins sous `mission/`
+  passent. Tests `git-guard.test.js`.
+
 ## 1.15.0 — 2026-09-11
 
 Mineure (contrat : module `direct-spawn` 1.6.0 ; lanceur) — réveil par livraison et causes de refus :

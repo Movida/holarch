@@ -164,7 +164,15 @@ test('transcription d\'instance sans ligne SESSIONS.md = session tuée, tours et
     fs.writeFileSync(path.join(f.tdir, 's-boot.jsonl'), `${ligneUser('Tu es la première session de cette mission. Exécute la procédure de framework/BOOTSTRAP.md (fournie dans ton prompt système)')}\n${ligneAssistant(30000)}\n`);
     fs.writeFileSync(path.join(f.tdir, 's-maint.jsonl'), `${ligneUser('Si ton prompt commence par « Tu incarnes l\'instance », tu es une instance')}\n${ligneAssistant(99000)}\n`);
     fs.writeFileSync(path.join(f.tdir, 's-1111.jsonl'), `${ligneUser('Tu incarnes l\'instance `concepteur`')}\n${ligneAssistant(1000)}\n`); // journalisée : pas une anomalie
-    const e = collecte.collecter(f.root, deps(f));
+    // close depuis plus de trois minutes : anomalie ; une transcription fraîche (fin de session, ligne pas encore écrite) n'en est pas une
+    // (l'horloge injectée avance de dix minutes : les transcriptions écrites à l'instant sont « vieilles », s-fraiche est datée du futur)
+    const plusTard = new Date(Date.now() + 10 * 60 * 1000);
+    fs.writeFileSync(path.join(f.tdir, 's-fraiche.jsonl'), `${ligneUser('Tu incarnes l\'instance `concepteur`')}\n${ligneAssistant(2000)}\n`);
+    fs.utimesSync(path.join(f.tdir, 's-fraiche.jsonl'), plusTard, plusTard);
+    const e = collecte.collecter(f.root, deps(f, { now: () => plusTard }));
+    assert.ok(e.transcriptions.sansJournal.some((t) => t.session === 's-fraiche' && t.recente === true), 'transcription fraîche listée, marquée récente');
+    assert.ok(!e.anomalies.some((a) => a.code === 'session-sans-journal' && /s-fraich/.test(a.texte)), 'pas d\'alerte pour une transcription fraîche');
+    e.transcriptions.sansJournal = e.transcriptions.sansJournal.filter((t) => t.session !== 's-fraiche');
     const sj = e.transcriptions.sansJournal.sort((a, b) => a.session.localeCompare(b.session));
     assert.deepEqual(sj.map((t) => [t.session, t.chemin, t.tours, t.pic]), [['s-boot', 'bootstrap', 1, 30000], ['s-tuee', 'concepteur', 3, 80000]]);
     assert.equal(e.anomalies.filter((a) => a.code === 'session-sans-journal').length, 2);

@@ -49,6 +49,7 @@
     ],
     "PreToolUse": [
       { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" spawn-guard", "timeout": 30 } ] },
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" git-guard", "timeout": 30 } ] },
       { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" wake-guard", "timeout": 30 } ] },
       { "matcher": "Write|Edit", "hooks": [ { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/framework/hooks/holarch-hooks.js\" framework-guard", "timeout": 30 } ] }
     ],
