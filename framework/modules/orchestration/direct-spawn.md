@@ -1,6 +1,6 @@
 # Module : direct-spawn
 > Catégorie : orchestration
-> Version : 1.5.0
+> Version : 1.6.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : fork-join, dependency-graph, instance-budget, max-depth, context-budget
@@ -114,9 +114,11 @@ Pour chaque enfant à l'état `READY`, dans l'ordre où tu les as créés :
    processus rend la main immédiatement, lis la ligne `HOLARCH ▸ <chemin> ▸ détaché · tâche <id>`
    (aucune attente : ne bloque jamais sur ce lancement).
 2. Une fois **tous** les enfants du lot lancés, passe ton propre `STATUS.md` à `WAITING_CHILDREN` avec
-   `Réveil` = `enfants:DELIVERED` (sous `fork-join`) ou `lun(enfant:a:DELIVERED, enfant:b:DELIVERED, …)`
-   pour les enfants du lot courant (sous `dependency-graph`). Un enfant qui passe `BLOCKED` ou `FAILED`
-   doit aussi réveiller le parent : préfère `lun(enfants:DELIVERED, message:BLOCKER, message:ALERT)`.
+   une condition **par enfant** : `lun(enfant:a:DELIVERED, enfant:b:DELIVERED, …, message:BLOCKER, message:ALERT)`
+   — tu es réveillé à **chaque** livraison et tu vérifies chaque livrable dès qu'il tombe, pendant que les
+   autres enfants continuent (réveil par livraison, 1.6.0). Réserve `enfants:DELIVERED` (réveil à la dernière
+   livraison) au cas où les livrables ne peuvent être vérifiés qu'ensemble. Les termes `message:BLOCKER` et
+   `message:ALERT` font qu'un enfant bloqué, échoué ou arrêté par le lanceur te réveille aussi.
 3. Hiberne (`ON_SLEEP`) : aucune session parent ne reste vivante à attendre — `wakeWaiters` te
    relancera (`detachLaunch`) dès que la condition sera satisfaite.
 
@@ -128,7 +130,9 @@ visible dans la ligne de synthèse ou dans `mission/registry/REVEILS.md`) alors 
 porte une condition désormais satisfaite : traite `ON_CHILD_DONE` pour chaque enfant listé par la
 condition (`enfant:NOM:ETAT`, ou tous les enfants de la condition `enfants:ETAT`/`lun(...)`), puis
 reprends le cycle normalement (§2 KERNEL) — ne considère pas ce réveil comme un événement à part,
-seulement comme la suite de `ON_SUPERVISE` en mode détaché. En mode `synchrone`, cette règle est sans
+seulement comme la suite de `ON_SUPERVISE` en mode détaché. S'il reste des enfants au travail après ce
+traitement, **réécris** ta ligne `Réveil` avec les seuls termes des enfants restants (un terme `enfant:x:DELIVERED`
+déjà vrai te réveillerait à nouveau sur-le-champ), puis hiberne. En mode `synchrone`, cette règle est sans
 objet (le parent reste vivant, `isLive` empêche tout réveil parasite).
 
 ### ⚓ ON_CHILD_DONE

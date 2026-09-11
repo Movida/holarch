@@ -53,8 +53,13 @@ les lignes apparues (`+`) et disparues (`-`) d'un résumé stable — états eff
 messages pour le mainteneur, réveils, anomalies. Rien entre deux événements.
 
 ```bash
-node tools/holarch-observe/observe.js --evenements --intervalle 5
+node tools/holarch-observe/observe.js --evenements --mainteneur --intervalle 5   # seulement ce qui appelle un geste du mainteneur
+node tools/holarch-observe/observe.js --evenements --intervalle 5                # tout changement d'état (mise au point, mission courte)
 ```
+
+`--mainteneur` ne laisse passer que les lignes de la table du §3 : messages pour le mainteneur, anomalies de niveau
+alerte, tâches échouées ou arrêtées par le lanceur, racine `DELIVERED`, instance `FAILED`/`BLOCKED`. Une soirée de
+supervision sans ce filtre a réveillé la session une trentaine de fois pour des hibernations de routine.
 
 Ne pas doubler d'une boucle `sleep` en premier plan, ni d'un `--watch` dans un Bash (il efface l'écran en continu),
 ni d'une relecture des fichiers à chaque message de l'utilisateur : le moniteur suffit ; entre deux événements, dire

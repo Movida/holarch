@@ -12,14 +12,42 @@ npm run etat                          # texte complet
 node tools/holarch-session/etat.js --bref
 ```
 
-Branche et fichiers non committés (en distinguant les fichiers d'instance, à laisser à l'instance),
-mission et état de la racine et de ses enfants, processus de mission en cours, derniers commits,
+Branche et fichiers non committés (en distinguant les fichiers d'instance, à laisser à l'instance), ligne « suivi »
+(commits non poussés vers `holon-v2`, âge de la dernière passation en mémoire, idées ouvertes de `docs/IDEES.md`),
+mission et état de la racine et de ses enfants, **paramètres clés de `CONFIG.md`** (`mode_attente`, `isolation`, budget et
+tours par session, seuil de contexte, relances — un défaut non écrit est marqué « (défaut) » : le 2026-09-11, `mode_attente =
+synchrone` implicite a laissé un parent vivant 3 h 54), processus de mission en cours, derniers commits,
 dernières sessions de `SESSIONS.md`, authentification `gh` (lue dans `hosts.yml`, sans réseau),
 versions, remotes — et, mission ouverte, l'**état effectif** de chaque instance (STATUS du worktree ⊕ verrou ⊕
 processus), le coût cumulé, les messages pour le mainteneur et les alertes, obtenus de `tools/holarch-observe/collecte.js`
 (chantier 10, 2026-09-11 ; fail-open : si la collecte échoue, la ligne manque, rien d'autre). Le hook `SessionStart`
 injecte la version brève dans le contexte de chaque session interactive : elle démarre en sachant où elle est et ce qui
 l'attend (`docs/ENVIRONNEMENT.md` §11).
+
+## `passation.js` — hook `PreCompact`
+
+Avant qu'une compaction ne résume le contexte d'une session de maintenance, injecte au résumeur ce qu'il doit
+conserver (état de la mission, gestes du mainteneur en attente avec leurs commandes, commits non poussés, fichiers
+modifiés, moniteurs armés, dernières décisions de l'utilisateur) et la consigne de reprise (`npm run etat`, mémoire
+« current state », skill `holarch-session`). Inerte dans une session d'instance. Entrée `settings.json` (geste du
+mainteneur) :
+
+```json
+"PreCompact": [{ "hooks": [{ "type": "command", "command": "node tools/holarch-session/passation.js --hook-precompact" }] }]
+```
+
+## `refus.js` — mesurer les refus d'allowlist avant de régler
+
+```bash
+npm run refus                         # top des formes refusées, sessions et tours concernés
+node tools/holarch-session/refus.js --json --top 30
+```
+
+Agrège `permission_denials` des `mission/.holarch/sessions/*.result.json` par outil et forme de commande (écriture par
+redirection, `git -C`, chemin absolu hors arbre…), avec un exemple. Première mesure (holarch-fournisseurs, 2026-09-11) :
+75 refus sur 701 tours (10,7 %), dominés par l'écriture par redirection Bash et les lectures par chemin absolu dans
+l'arbre principal depuis un worktree — deux causes nommées à l'instance dans le bloc harnais depuis framework 1.15.0,
+aucune règle d'allowlist changée.
 
 ## `garde.js` — trois règles rendues mécaniques
 

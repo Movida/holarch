@@ -7,6 +7,7 @@
  *   node tools/holarch-observe/observe.js --json          # le même instantané en JSON (pour un script ou un skill)
  *   node tools/holarch-observe/observe.js --watch         # écran rafraîchi à chaque changement (inotify) et toutes les 5 s
  *   node tools/holarch-observe/observe.js --evenements    # une ligne horodatée par changement d'état (pour un Monitor)
+ *   … --evenements --mainteneur                          # seulement ce qui appelle un geste du mainteneur (messages, alertes, arrêts, livraison de la racine)
  *   options : --root <dir>  --intervalle <s> (scrutation, défaut 5)  --sans-effacer (--watch sans effacer l'écran)
  *
  * L'affichage ne fait jamais partie du harnais : s'il tombe, rien ne change pour la mission.
@@ -71,6 +72,14 @@ function resumer(e) {
   return l;
 }
 
+/** Sous-ensemble d'un résumé qui appelle un geste du mainteneur (table du skill holarch-supervise §3) : messages pour
+ * lui, anomalies de niveau alerte, tâches échouées ou arrêtées par le lanceur, racine DELIVERED, instance FAILED/BLOCKED.
+ * Tout le reste (hibernations, ré-incarnations, unités, coût) est le harnais qui travaille seul. */
+function pourMainteneur(lignes) {
+  return lignes.filter((l) => /^mainteneur /.test(l) || /^⚠ /.test(l) || /^tâche \S+ (failed|done \(exit [1-9]\d*\))/.test(l) || / ARRÊT$/.test(l)
+    || (/^[^/ ]+ DELIVERED/.test(l)) || /^\S+ (FAILED|BLOCKED)\b/.test(l));
+}
+
 /** Lignes apparues / disparues entre deux résumés. */
 function difference(avant, apres) {
   const a = new Set(avant); const b = new Set(apres);
@@ -100,6 +109,7 @@ function parseArgs(argv) {
     else if (a === '--json') o.json = true;
     else if (a === '--watch') o.watch = true;
     else if (a === '--evenements') o.evenements = true;
+    else if (a === '--mainteneur') o.mainteneur = true;
     else if (a === '--intervalle') o.intervalle = Math.max(1, Number(argv[++i]) || 5);
     else if (a === '--sans-effacer') o.effacer = false;
     else if (a === '--une-fois') { o.watch = false; o.evenements = false; }
@@ -119,7 +129,7 @@ function boucle(root, o, sortie) {
     let e;
     try { e = collecter(root); } catch (err) { sortie(`[observe] collecte impossible : ${err.message}`); enCours = false; return; }
     if (o.evenements) {
-      const r = resumer(e);
+      const r = o.mainteneur ? pourMainteneur(resumer(e)) : resumer(e);
       if (dernierResume === null) { sortie(`${e.horodatage.slice(11, 19)} état initial\n  ${r.join('\n  ')}`); }
       else { const dlt = difference(dernierResume, r); if (dlt.ajoutees.length || dlt.retirees.length) sortie(`${e.horodatage.slice(11, 19)}${dlt.ajoutees.map((x) => `\n  + ${x}`).join('')}${dlt.retirees.map((x) => `\n  - ${x}`).join('')}`); }
       dernierResume = r;
@@ -153,6 +163,6 @@ function main(argv) {
   return 0;
 }
 
-module.exports = { formater, resumer, difference, dossiersAObserver, parseArgs, main };
+module.exports = { formater, resumer, pourMainteneur, difference, dossiersAObserver, parseArgs, main };
 
 if (require.main === module) { const code = main(process.argv.slice(2)); if (code !== null) process.exit(code); }

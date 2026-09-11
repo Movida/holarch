@@ -10,6 +10,20 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.15.0 — 2026-09-11
+
+Mineure (contrat : module `direct-spawn` 1.6.0 ; lanceur) — réveil par livraison et causes de refus :
+- `direct-spawn` 1.6.0 : en mode `detache`, la condition de réveil recommandée devient **une par enfant**
+  (`lun(enfant:a:DELIVERED, enfant:b:DELIVERED, …, message:BLOCKER, message:ALERT)`) : le parent vérifie chaque
+  livrable dès qu'il tombe pendant que les autres enfants continuent ; `enfants:DELIVERED` reste possible quand les
+  livrables se vérifient ensemble. À `ON_WAKE`, le parent réécrit sa ligne `Réveil` avec les seuls enfants restants
+  avant de ré-hiberner (un terme déjà vrai le réveillerait aussitôt). Constaté sur `holarch-fournisseurs` : le volet
+  4 livré à 21:02 attendait la fin du volet 1-3 pour être vérifié.
+- Texte injecté par le lanceur (bloc harnais) : les deux causes de refus d'allowlist mesurées par
+  `tools/holarch-session/refus.js` (75 refus sur 701 tours, 10,7 %) sont nommées à l'instance — écriture par
+  redirection Bash (utiliser Write/Edit) et chemins absolus hors de son arbre de travail. Aucune règle d'allowlist
+  n'est changée : mesure avant réglage.
+
 ## 1.14.0 — 2026-09-11
 
 Mineure (contrat : gabarits, module `git-branches` 1.2.0 ; lanceur, tests) — plomberie des messages sous worktree :

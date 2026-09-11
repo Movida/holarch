@@ -10,6 +10,7 @@
     "lint": "node tools/config-lint/config-lint.js framework/CONFIG.md && node tools/module-forge/validate-module.js config framework/CONFIG.md",
     "dry-run": "node framework/bin/holarch-spawn.js --bootstrap --dry-run",
     "etat": "node tools/holarch-session/etat.js",
+    "refus": "node tools/holarch-session/refus.js",
     "observe": "node tools/holarch-observe/observe.js",
     "bootstrap": "node framework/bin/holarch-spawn.js --bootstrap",
     "mission": "node framework/bin/holarch-spawn.js",
@@ -20,6 +21,6 @@
   },
   "holarch": {
     "modele": "https://github.com/Movida/holarch.git",
-    "version": "1.14.0"
+    "version": "1.15.0"
   }
 }

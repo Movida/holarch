@@ -55,6 +55,9 @@ function collecter(root, deps) {
     versionClaude: () => run('claude', ['--version']),
     versionNode: () => process.version,
     lire: (rel) => readIf(path.join(root, rel)),
+    // Âge de la dernière passation (mémoire persistante de Claude Code, propre à l'utilisateur et à la machine) : null si absente.
+    mtimePassation: () => { try { return fs.statSync(path.join(os.homedir(), '.claude', 'projects', path.resolve(root).replace(/\//g, '-'), 'memory', 'holarch-current-state.md')).mtime; } catch (_) { return null; } },
+    maintenant: () => new Date(),
     // État effectif de la mission (tools/holarch-observe, chantier 10) : fail-open, jamais bloquant pour le hook.
     observer: (r) => { const { collecter: obs } = require('../holarch-observe/collecte.js'); return obs(r); },
   }, deps || {});
@@ -65,11 +68,25 @@ function collecter(root, deps) {
   e.nonCommittes = status.split('\n').filter(Boolean).map((l) => l.replace(/^[ MADRCU?!]{1,2}\s+/, '').trim());
   e.fichiersInstance = e.nonCommittes.filter((f) => /^mission\/(?!OBJECTIVE\.md$)/.test(f));
   e.commits = (d.git(['log', '--oneline', '-5']) || '').split('\n').filter(Boolean).map((l) => l.slice(0, 100));
+  // Commits locaux non poussés vers le remote de travail (holon-v2), et âge de la dernière passation en mémoire.
+  const nonPousses = d.git(['rev-list', '--count', 'holon-v2/main..HEAD']);
+  e.nonPousses = nonPousses === null ? null : Number(nonPousses) || 0;
+  const mt = d.mtimePassation();
+  e.passationHeures = mt ? Math.round(((d.maintenant().getTime() - mt.getTime()) / 3600000) * 10) / 10 : null;
+  // Carnet d'idées (docs/IDEES.md) : lignes du tableau à l'état « ouverte » — ce que la session peut améliorer quand elle a la main.
+  const idees = d.lire('docs/IDEES.md') || '';
+  e.ideesOuvertes = idees.split('\n').filter((l) => /^\|\s*\d{4}-\d{2}-\d{2}\s*\|/.test(l) && /\|\s*ouverte\s*\|\s*$/.test(l)).length;
   e.remotes = (d.git(['remote', '-v']) || '').split('\n').filter((l) => /\(push\)/.test(l)).map((l) => l.split(/\s+/).slice(0, 2).join(' '));
   e.processus = processusMission(d.ps());
   const cfg = d.lire('framework/CONFIG.md') || '';
   const m = cfg.match(/^#\s*Configuration\s*[—-]+\s*mission\s*:\s*(.+)$/m);
   e.mission = m ? m[1].trim() : '(CONFIG.md sans nom)';
+  // Paramètres clés de CONFIG.md (2026-09-11) : un défaut invisible (mode_attente = synchrone) a laissé un parent vivant
+  // 3 h 54 à attendre son enfant ; la session de maintenance doit le voir dès sa première ligne.
+  const tableParams = {};
+  for (const mm of cfg.matchAll(/^\|\s*([a-z_]+)\s*\|\s*([^|]*?)\s*\|\s*$/gm)) tableParams[mm[1]] = mm[2];
+  const DEFAUTS = { mode_attente: 'synchrone', isolation: 'worktree', budget_usd_par_session: '?', max_tours_par_session: '?', seuil_contexte_tokens: '?', relances_max: '2' };
+  e.parametres = Object.keys(DEFAUTS).map((k) => ({ cle: k, valeur: tableParams[k] !== undefined ? tableParams[k] : DEFAUTS[k], defaut: tableParams[k] === undefined }));
   // Après un archivage, mission/ n'existe plus mais CONFIG.md porte encore le nom de la mission archivée (2026-09-11).
   e.missionAbsente = d.lire('mission/OBJECTIVE.md') === null && d.lire('mission/concepteur/STATUS.md') === null;
   const parseStatus = (t) => { const s = { etat: '', note: '' }; if (!t) return s; const a = t.match(/^\|\s*[ÉE]tat\s*\|\s*([A-Z_]+)/m); if (a) s.etat = a[1]; const n = t.match(/^\|\s*Note\s*\|\s*(.*?)\s*\|\s*$/m); if (n) s.note = n[1]; return s; };
@@ -112,6 +129,10 @@ function formater(e, bref) {
   const racine = e.racine.etat ? `concepteur ${e.racine.etat}${e.racine.note ? ` (${e.racine.note.slice(0, 60)})` : ''}` : 'aucune racine incarnée (mission non démarrée)';
   const enfants = e.enfants.length ? ` · enfants : ${e.enfants.map((x) => `${x.nom} ${x.etat}`).join(', ')}` : '';
   l.push(e.missionAbsente ? `aucune mission ouverte (mission/ absent ; CONFIG.md porte encore le nom « ${e.mission} », à réécrire à l'ouverture de la prochaine)` : `mission ${e.mission} : ${racine}${enfants}`);
+  if (!e.missionAbsente) {
+    const v = (k) => { const x = e.parametres.find((q) => q.cle === k); return x ? `${x.valeur}${x.defaut ? ' (défaut)' : ''}` : '?'; };
+    l.push(`paramètres : mode_attente=${v('mode_attente')} · isolation=${v('isolation')} · ${v('budget_usd_par_session')} USD/session · ${v('max_tours_par_session')} tours · seuil contexte ${v('seuil_contexte_tokens')} · relances sans progrès ${v('relances_max')}`);
+  }
   if (e.observe) {
     l.push(`état effectif (npm run observe) : ${e.observe.instances.map((i) => `${i.chemin} ${i.effectif}`).join(' ; ')} · ${e.observe.sessions} session(s) ${e.observe.usd.toFixed(2)} USD · ${e.observe.mainteneur} message(s) pour le mainteneur`);
     for (const a of e.observe.alertes.slice(0, bref ? 3 : 10)) l.push(`  ⚠ ${bref ? a.slice(0, 140) : a}`);
@@ -119,6 +140,12 @@ function formater(e, bref) {
   }
   l.push(e.processus.length ? `⚠ ${e.processus.length} processus de mission en cours : ${e.processus.map((p) => `${p.pid} ${p.commande.split(' ').slice(0, 4).join(' ')}`).join(' ; ')} — ne pas toucher mission/ ni changer de branche (skill holarch-pause)` : 'aucune session de mission en cours');
   l.push(`derniers commits : ${e.commits.map((c) => (bref ? c.slice(0, 60) : c)).join(' · ')}`);
+  const suivi = [];
+  if (e.nonPousses) suivi.push(`${e.nonPousses} commit(s) non poussé(s) vers holon-v2`);
+  if (e.passationHeures !== null) suivi.push(`dernière passation en mémoire il y a ${e.passationHeures} h${e.passationHeures >= 12 ? ' (à relire avec prudence, skill holarch-session)' : ''}`);
+  else suivi.push('aucune passation en mémoire (skill holarch-session §3 avant de rendre la main)');
+  suivi.push(`${e.ideesOuvertes} idée(s) ouverte(s) dans docs/IDEES.md${e.ideesOuvertes ? ' (à prendre quand la main est libre, à compléter à chaque passation)' : ''}`);
+  l.push(`suivi : ${suivi.join(' · ')}`);
   if (e.sessions.length) l.push(`dernières sessions : ${e.sessions.join(' · ')}`);
   l.push(`framework v${e.versions.framework} · gh ${e.gh} · Claude Code ${e.versions.claude.replace(/\s*\(Claude Code\)/, '')} · Node ${e.versions.node} · remotes : ${e.remotes.join(', ') || 'aucun'}`);
   l.push(`règles : docs/ENVIRONNEMENT.md (§7 réservé au mainteneur, §12 fichiers transverses) · scripts : npm run etat | observe (mission en cours, --watch) | lint | test | dry-run | mission -- <chemin> | upgrade | publish-template -- --out <dir>`);

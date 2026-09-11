@@ -16,8 +16,9 @@ function makeRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-session-'));
   const w = (rel, c) => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, c); };
   w('framework/KERNEL.md', '# K\n');
-  w('framework/CONFIG.md', '# Configuration — mission : test-etat\n');
+  w('framework/CONFIG.md', '# Configuration — mission : test-etat\n\n## Modules actifs\n| # | Catégorie | Module |\n|---|---|---|\n| 1 | orchestration | direct-spawn |\n\n## Paramètres\n| Paramètre | Valeur |\n|---|---|\n| mode_attente | detache |\n| budget_usd_par_session | 8 |\n| max_tours_par_session | 200 |\n');
   w('mission/OBJECTIVE.md', 'x\n');
+  w('docs/IDEES.md', '# Idées\n\n| Date | Idée | Gain | Effort | État |\n|---|---|---|---|---|\n| 2026-09-11 | une idée | x | y | ouverte |\n| 2026-09-10 | une autre | x | y | faite |\n');
   w('mission/concepteur/STATUS.md', '| Champ | Valeur |\n|---|---|\n| État | WORKING |\n| Note | hibernation volontaire (contexte) |\n');
   w('mission/concepteur/enfant/STATUS.md', '| Champ | Valeur |\n|---|---|\n| État | READY |\n| Note |  |\n');
   w('mission/registry/SESSIONS.md', '| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens | Coût USD | Durée | Fin | STATUS | Réveil |\n|---|---|---|---|---|---|---|---|---|---|---|\n| 2026-09-09T06:11:48Z | concepteur | a983001d | claude-opus-5/high | 11 | 18 / 1 / 2 / 3 | 1.9889 | 4m12s | success | WORKING | 49000 / 44000 |\n');
@@ -35,6 +36,8 @@ test('etat : collecte et formate branche, fichiers d\'instance, mission, process
     hostsYml: () => 'github.com:\n    user: Movida\n',
     versionClaude: () => '2.1.263 (Claude Code)',
     versionNode: () => 'v24.20.0',
+    mtimePassation: () => new Date('2026-09-11T18:00:00Z'),
+    maintenant: () => new Date('2026-09-11T21:00:00Z'),
   };
   const e = etat.collecter(root, deps);
   assert.equal(e.branche, 'main');
@@ -49,6 +52,10 @@ test('etat : collecte et formate branche, fichiers d\'instance, mission, process
   assert.match(t, /branche main · 3 fichier\(s\) non committé\(s\) dont 1 d'instance/);
   assert.match(t, /mission test-etat : concepteur WORKING \(hibernation volontaire \(contexte\)\) · enfants : enfant READY/);
   assert.match(t, /⚠ 2 processus de mission en cours/);
+  assert.equal(e.passationHeures, 3);
+  assert.equal(e.ideesOuvertes, 1);
+  assert.match(t, /suivi : dernière passation en mémoire il y a 3 h · 1 idée\(s\) ouverte\(s\) dans docs\/IDEES\.md/);
+  assert.match(t, /paramètres : mode_attente=detache · isolation=worktree \(défaut\) · 8 USD\/session · 200 tours · seuil contexte \? \(défaut\) · relances sans progrès 2 \(défaut\)/);
   assert.match(t, /framework v\S+ · gh authentifié \(Movida\) · Claude Code 2\.1\.263 · Node v24\.20\.0 · remotes : holon-v2 https:\/\/x\/holon-v2\.git/);
   const calme = etat.formater(etat.collecter(root, Object.assign({}, deps, { ps: () => PS_CALME, hostsYml: () => null })), false);
   assert.match(calme, /aucune session de mission en cours/);
@@ -160,4 +167,24 @@ test('garde (intégration) : HEAD noté au premier appel, commit d\'une autre se
   const inst = spawnSync('node', [GARDE], { encoding: 'utf8', env: Object.assign({}, env, { HOLARCH_INSTANCE: 'concepteur' }), input: '{"hook_event_name":"PreToolUse","tool_name":"Bash"}' });
   assert.equal(inst.stdout, '{}');
   fs.unlinkSync(garde.etatPath(sid));
+});
+
+test('passation --hook-precompact : consigne JSON hors instance, {} dans une session d\'instance ; refus : formes', () => {
+  const PASSATION = path.join(__dirname, 'passation.js');
+  const out = spawnSync('node', [PASSATION, '--hook-precompact'], { encoding: 'utf8', env: Object.assign({}, process.env, { HOLARCH_INSTANCE: '' }) });
+  const j = JSON.parse(out.stdout);
+  assert.equal(j.hookSpecificOutput.hookEventName, 'PreCompact');
+  assert.match(j.hookSpecificOutput.additionalContext, /gestes réservés au mainteneur en attente/);
+  const inst = spawnSync('node', [PASSATION, '--hook-precompact'], { encoding: 'utf8', env: Object.assign({}, process.env, { HOLARCH_INSTANCE: 'concepteur' }) });
+  assert.equal(inst.stdout, '{}');
+  const refus = require('./refus.js');
+  assert.equal(refus.forme({ tool_name: 'Bash', tool_input: { command: "cat >> mission/x/JOURNAL.md <<'EOF'\nx\nEOF" } }), 'Bash · écriture par redirection (>, >>, heredoc)');
+  assert.equal(refus.forme({ tool_name: 'Bash', tool_input: { command: "wc -l a.md && awk '{ if (length($0) > 200) print NR }' a.md" } }), 'Bash · wc');
+  assert.equal(refus.forme({ tool_name: 'Bash', tool_input: { command: 'git -C /tmp/x log --oneline' } }), 'Bash · git -C <dir> log');
+  assert.equal(refus.forme({ tool_name: 'Read', tool_input: { file_path: '/workspaces/holon/mission/concepteur/enfant/STATUS.md' } }), 'Read · mission/concepteur');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-refus-'));
+  fs.writeFileSync(path.join(dir, 'a-1.result.json'), JSON.stringify({ num_turns: 10, permission_denials: [{ tool_name: 'Bash', tool_input: { command: 'echo x > f' } }, { tool_name: 'Read', tool_input: { file_path: '/w/framework/tests/t.js' } }] }));
+  const r = refus.relever(dir);
+  assert.equal(r.totalRefus, 2); assert.equal(r.totalTours, 10); assert.equal(r.formes[0].n, 1);
+  assert.match(refus.formater(r, 5), /1 session\(s\) · 10 tours · 2 refus \(20\.0 % des tours\)/);
 });

@@ -70,6 +70,13 @@ git status --short mission/
 - Confirmer qu'aucun processus `holarch-spawn.js` ne survit (orphelin).
 - Lire les `STATUS.md` des instances concernées pour rapporter leur état réel (probablement
   encore `WORKING`, la session n'ayant pas pu passer par son `ON_SLEEP`).
+- Un arrêt propre (`--arret`) demandé pendant que la session finissait déjà (fusible budget ou contexte) est
+  honoré par le lanceur depuis 1.13.2 ; avec un lanceur plus ancien encore en mémoire, tuer ce lanceur
+  (`--arret --immediat`) juste après l'apparition de sa ligne dans `SESSIONS.md`, sinon il ré-incarne.
+- Session d'enfant coupée après la réécriture de `MEMORY.md` mais avant STATUS/JOURNAL/commit : vérifier
+  `MEMORY.md` contre le dépôt, puis terminer la comptabilité a posteriori (STATUS `WORKING` + note
+  « hibernation volontaire (contexte) » pour que le lanceur ré-incarne, entrée de JOURNAL, commit
+  `[<chemin>]`) en disant explicitement dans STATUS, JOURNAL et commit que c'est fait après la coupure.
 - S'il y a des fichiers modifiés/non committés sous `mission/<instance>/`, **ne pas les committer
   soi-même** : ce n'est pas au mainteneur d'écrire dans les fichiers d'une instance (KERNEL,
   cloisonnement) — l'instance le fera à sa prochaine incarnation, via son propre `ON_SLEEP`. Se

@@ -230,3 +230,13 @@ test('parseurs : ORG indenté, SESSIONS, STATUS, fiche, worktrees porcelain', ()
   assert.equal(collecte.instanceDeTranscription('{"type":"user","message":{"content":"Tu incarnes l\'instance `a/b` (profondeur 2)"}}'), 'a/b');
   assert.equal(collecte.instanceDeTranscription('Si ton prompt commence par « Tu incarnes l\'instance »'), '');
 });
+
+test('observe --mainteneur : ne garde d\'un résumé que ce qui appelle un geste du mainteneur', () => {
+  const { pourMainteneur } = require('./observe.js');
+  const r = ['arbre main', 'concepteur WAITING_CHILDREN · attend U7/7 c12', 'concepteur/a WORKING · session vivante U3/5 c4',
+    'concepteur/b DELIVERED U6/6 c9', 'concepteur/c FAILED U1/4 c1', 'sessions 9 42.69 USD', 'tâche x-1 running', 'tâche x-2 failed',
+    'tâche x-3 done (exit 2)', 'tâche x-4 done ARRÊT', 'mainteneur CLARIFICATION MSG-concepteur-2', 'sans réponse TASK MSG-1 → concepteur/a',
+    'réveil 2026-09-11T20:00:00Z concepteur', '⚠ tache-pid-mort concepteur/a', 'ℹ inbox-non-fusionnee concepteur/a', 'concepteur DELIVERED U8/8 c14'];
+  assert.deepEqual(pourMainteneur(r), ['concepteur/c FAILED U1/4 c1', 'tâche x-2 failed', 'tâche x-3 done (exit 2)', 'tâche x-4 done ARRÊT',
+    'mainteneur CLARIFICATION MSG-concepteur-2', '⚠ tache-pid-mort concepteur/a', 'concepteur DELIVERED U8/8 c14']);
+});
