@@ -71,7 +71,7 @@ est (unités closes, session en cours, coût) et rendre la main.
 | Ligne `ré-incarnations arrêtées` (sans progrès, plafond) dans le `.log` de la tâche | `ALERT` du lanceur dans l'INBOX du parent ; le parent, s'il est réveillé, décide (relance détachée, `TASK`, `FAILED`) | si le parent ne se réveille pas : lire `MEMORY.md` de l'enfant (worktree), puis `node framework/bin/holarch-spawn.js <chemin> --detach` ou `TASK` de recadrage |
 | `BLOCKER`, `CLARIFICATION`, `PROPOSAL` adressés à `utilisateur` | rien | décider (si le mainteneur n'a pas de préférence : trancher soi-même), écrire une `RESPONSE` dans l'`INBOX.md` du destinataire (racine : `mission/<racine>/INBOX.md` sur `main` ; enfant : dans son worktree, jamais dans l'arbre principal), committer si racine, relancer par `holarch-iterate` |
 | Enfant `FAILED` ou `BLOCKED` sans réveil du parent | — | comme « arrêt du lanceur » |
-| Racine `DELIVERED` | fin de mission | lire `shared/<racine>/RAPPORT.md`, vérifier de première main (tests sur copie, `appliquer.js`), proposer la promotion (`CHANGELOG`, `VERSION`) et l'archivage |
+| Racine `DELIVERED` | fin de mission | lire `shared/<racine>/RAPPORT.md`, vérifier de première main (tests sur copie, `appliquer.js`), proposer la promotion (`npm run promote -- <paquet> --appliquer`, `CHANGELOG`, `VERSION`) et l'archivage (`npm run archive`) |
 | `exit=2` d'une tâche (STATUS resté `WORKING` sans note d'hibernation) | rien : session plantée | relancer une fois (`--detach`) ; un second échec ⇒ `FAILED` et recadrage |
 
 Un message de réveil pour l'utilisateur (`PushNotification`) seulement pour les lignes « geste du

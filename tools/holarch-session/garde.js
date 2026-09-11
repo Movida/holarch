@@ -105,7 +105,7 @@ function main() {
   try { input = JSON.parse(fs.readFileSync(0, 'utf8') || '{}'); } catch (_) { input = {}; }
   try {
     const root = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
-    if (input.hook_event_name === 'PostToolUse') { const head = git(root, ['rev-parse', 'HEAD']); if (head) noterHead(input.session_id, head); return ok(); }
+    if (input.hook_event_name === 'PostToolUse' || input.hook_event_name === 'PostToolUseFailure') { const head = git(root, ['rev-parse', 'HEAD']); if (head) noterHead(input.session_id, head); return ok(); }
     const contexte = contexteAvance(root, input.session_id);
     if (input.tool_name === 'Bash') {
       const cmd = String((input.tool_input && input.tool_input.command) || '');

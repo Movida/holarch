@@ -32,7 +32,10 @@ Hook `PreToolUse` sur `Bash`, `Write` et `Edit` :
 La quatrième règle repose sur un hook `PostToolUse` sur `Bash` (même commande `garde.js`, qui reconnaît
 `hook_event_name`) : après chaque commande, HEAD est noté dans `os.tmpdir()/holarch-garde-<session_id>.json` ;
 un commit fait par la session elle-même est donc déjà noté quand l'outil suivant démarre, seul un commit
-extérieur est signalé, une seule fois. Les modifications non committées d'une autre session restent
+extérieur est signalé, une seule fois. Limite constatée le 2026-09-11 : quand la commande Bash échoue (code non nul),
+Claude Code émet `PostToolUseFailure` et non `PostToolUse` — un commit fait dans une commande qui échoue ensuite est
+signalé au tour suivant comme « étranger » ; câbler aussi `PostToolUseFailure` sur `Bash` dans `.claude/settings.json`
+(geste du mainteneur) supprime ce faux positif, `garde.js` traite les deux événements de la même façon. Les modifications non committées d'une autre session restent
 invisibles : là, seule la relecture protège.
 
 Fail-open : toute erreur interne laisse l'action se faire. Pour tester une règle sans processus

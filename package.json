@@ -6,16 +6,19 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test framework/tests/*.test.js tools/module-forge/test-*.js tools/holarch-init/test-*.js tools/holarch-d/test-*.js tools/config-lint/*.test.js tools/holarch-transcript/test-*.js tools/holarch-session/test-*.js tools/holarch-upgrade/test-*.js tools/message-lint/test-*.js tools/holarch-bench/test-*.js",
+    "test": "node --test framework/tests/*.test.js tools/module-forge/test-*.js tools/holarch-init/test-*.js tools/holarch-d/test-*.js tools/config-lint/*.test.js tools/holarch-transcript/test-*.js tools/holarch-session/test-*.js tools/holarch-upgrade/test-*.js tools/message-lint/test-*.js tools/holarch-bench/test-*.js tools/holarch-maintenance/test-*.js",
     "lint": "node tools/config-lint/config-lint.js framework/CONFIG.md && node tools/module-forge/validate-module.js config framework/CONFIG.md",
     "dry-run": "node framework/bin/holarch-spawn.js --bootstrap --dry-run",
     "etat": "node tools/holarch-session/etat.js",
     "bootstrap": "node framework/bin/holarch-spawn.js --bootstrap",
     "mission": "node framework/bin/holarch-spawn.js",
-    "upgrade": "node tools/holarch-upgrade/holarch-upgrade.js"
+    "upgrade": "node tools/holarch-upgrade/holarch-upgrade.js",
+    "promote": "node tools/holarch-maintenance/promote.js",
+    "archive": "node tools/holarch-maintenance/archive.js",
+    "open": "node tools/holarch-maintenance/open.js"
   },
   "holarch": {
     "modele": "https://github.com/Movida/holarch.git",
-    "version": "1.11.2"
+    "version": "1.12.0"
   }
 }

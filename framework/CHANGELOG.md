@@ -10,6 +10,38 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.12.0 — 2026-09-11
+
+Mineure (gabarit ajouté, outils de maintenance, scripts npm) — promotion du chantier 8 (mission `holarch-outillage`,
+11 sessions, 22,26 USD, première mission sous le module `delegation-intra-session` promu et les défauts 180 000 / 400 000 /
+8 USD ; rapport `mission/shared/concepteur/RAPPORT.md`, archivage à suivre) :
+- **`tools/holarch-maintenance/`** : `promote.js` (copie fraîche, `npm ci` ou repli `npm install` sans lockfile, tests
+  avant / après, `--appliquer` sur le dépôt réel propre hors `mission/`, incrément de `framework/VERSION`, squelette de
+  CHANGELOG, jamais de commit), `archive.js` (préconditions refusantes, tag `mission-<nom>-final`, résidus, `git mv`,
+  squelettes transverses, commit sauf `--sans-commit`, jamais de push), `open.js` (CONFIG remise aux défauts du preset,
+  `mission/OBJECTIVE.md` depuis le gabarit, lignes « en cours », commit sauf `--sans-commit`), `lib/commun.js` ; 26 tests
+  (`test-*.js`, dépôts Git jetables) ; scripts npm `promote`, `archive`, `open`. Cette promotion a été faite avec
+  `promote.js` lui-même (`--appliquer --version mineure`) : 395 → 421 tests verts.
+- **`framework/templates/OBJECTIVE.template.md`** : gabarit d'objectif de mission.
+- Mesure de la mission (rapport §« Mesure de la délégation ») : délégation à des sous-agents dans 7/7 sessions de
+  l'implémenteur, contexte max instantané p90 198 602 tokens (seuil 180 000 dépassé par la queue d'hibernation, recommandation
+  de relever à ~240 000 — décision du mainteneur, mesure avant réglage), budget 8 USD jamais atteint (médiane 1,97).
+- Rejeu du cycle (critère §10.5) fait par la session de maintenance sur clones jetables, pas par une instance (`git clone`
+  refusé aux instances). **Correctifs de maintenance issus du rejeu**, dans cette même version (28 tests, dont 2 ajoutés) :
+  `archive.js` lit le nom de mission dans la ligne de titre `# Configuration — mission : <nom>` (seule forme des CONFIG
+  réels ; `nom_mission` en repli) ; ancres des fichiers transverses **structurelles** (fin de `docs/archive/README.md`,
+  dernière puce résidus d'`ENVIRONNEMENT.md` §10, ligne de tableau de la mission en `ROADMAP.md` §5, ligne `**État :` citant
+  la mission en `IMPLEMENTATION.md`, puce `**Missions**` du README, puce `docs/archive/` de `CLAUDE.md` ; `open.js` insère une
+  ligne de tableau avant `| Programme DEMIURGE`) au lieu de lignes littérales d'une mission précise ; `archive.js` et
+  `open.js` **transactionnels** (ancres et tag existant vérifiés avant la première écriture) ; `processusMissionVivant`
+  restreint au dépôt courant (verrous `mission/.holarch/live/` au pid vivant) au lieu d'un `ps` global qui refusait
+  l'archivage dès qu'une mission tournait dans un autre clone ; `promote.js` compte les tests au format spec de Node 24
+  (`ℹ pass N`) comme en TAP, et mesure la taille du prompt système (`prompt système: N`) au lieu de la longueur de la
+  sortie ; `insererSquelette` idempotent **localement** (le marqueur cité dans la prose d'un document empêchait l'insertion,
+  vu à l'archivage réel de `holarch-outillage`) ; copie fraîche de `promote.js` sous `/home/vscode` seulement s'il existe, sinon
+  `os.tmpdir()` (`HOLARCH_PROMOTE_BASE` pour forcer — la CI GitHub n'a pas `/home/vscode`, run rouge du 2026-09-11). Reste connu : `promote.js` clone à HEAD (rejouer un paquet déjà promu demande un worktree à `shaBase`, ce que
+  la session de maintenance a fait le 2026-09-11 : paquet chantier 7 → 382 verts + 4 MCP d'environnement).
+
 ## 1.11.2 — 2026-09-11
 
 Patch (tests seuls) :

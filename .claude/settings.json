@@ -71,6 +71,18 @@
           }
         ]
       }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/holarch-session/garde.js\"",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   }
 }
