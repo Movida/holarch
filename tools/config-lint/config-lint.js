@@ -91,6 +91,36 @@ function liste(cellule) {
   return String(cellule).split(/[,;]/).map((x) => nomModule(x)).filter((x) => !estVide(x));
 }
 
+/** Contenu d'une cellule de table, débarrassé des accents graves du markdown. */
+const texteCellule = (v) => String(v == null ? '' : v).replace(/`/g, '').trim();
+
+/**
+ * Cellule « Efforts » du catalogue → { permis[], invalides[] } (chantier 9, §11.2).
+ * Formes acceptées : intervalle `low…max` sur l'ordre canonique, liste `low, high`, ou vide (`—`)
+ * qui signifie « pas de contrainte connue » — et non « aucun effort permis » : un fournisseur dont
+ * on ignore les paliers ne doit pas faire échouer le lint.
+ * Volontairement dupliqué de `framework/bin/catalogue.js` (même règle, deux lectures indépendantes) :
+ * config-lint valide un texte et ne dépend d'aucun fichier de `framework/bin/`.
+ */
+function effortsDeCellule(cellule) {
+  const out = { permis: [], invalides: [] };
+  if (estVide(cellule)) return out;
+  const brut = String(cellule).replace(/`/g, '').trim();
+  const intervalle = /^([^\s…]+)\s*(?:…|\.\.\.|\.\.|–|—|-)\s*([^\s…]+)$/.exec(brut);
+  if (intervalle) {
+    const a = EFFORTS.indexOf(normaliser(intervalle[1]));
+    const b = EFFORTS.indexOf(normaliser(intervalle[2]));
+    if (a >= 0 && b >= a) out.permis = EFFORTS.slice(a, b + 1);
+    else out.invalides.push(brut);
+    return out;
+  }
+  for (const e of liste(brut)) {
+    const n = normaliser(e);
+    if (EFFORTS.includes(n)) out.permis.push(n); else out.invalides.push(e);
+  }
+  return out;
+}
+
 /** MANIFEST.md → Map(nom → { categorie, version, requiert[], incompatible[] }). */
 function parseManifest(texte) {
   const modules = new Map();
@@ -132,7 +162,46 @@ function parseConfig(texte) {
       effort: normaliser(ligne['effort'] || ''),
     });
   }
-  return { actifs, parametres, politique, aPolitique };
+  // Chantier 9, volet 2 (§11.2) : deux tables FACULTATIVES. Leur absence n'est jamais une erreur —
+  // un `CONFIG.md` 1.11 doit passer ce lint sans la moindre modification (compatibilité ascendante,
+  // critère d'acceptation du chantier). Les drapeaux `a…` distinguent « table absente » de « table
+  // présente mais vide », qui est une faute de configuration.
+  const aFournisseurs = sec.has('fournisseurs');
+  const fournisseurs = [];
+  for (const ligne of table(sec.get('fournisseurs') || '')) {
+    const nom = texteCellule(ligne['nom']);
+    if (estVide(nom)) continue;
+    fournisseurs.push({
+      nom,
+      executeur: texteCellule(ligne['executeur']),
+      url: texteCellule(ligne['url (variable)']),
+      jeton: texteCellule(ligne['jeton (variable)']),
+      secours: texteCellule(ligne['secours']),
+    });
+  }
+  // L'en-tête de la colonne de coût a deux formes selon que le catalogue écrit les tarifs de cache
+  // ou non (« Coût entrée / sortie … » ou « Coût entrée / sortie [/ cache écrit / cache lu] … ») :
+  // on la retrouve par son préfixe plutôt que par son libellé exact, pour lire les deux.
+  const celluleCout = (ligne) => {
+    const cle = Object.keys(ligne).find((k) => k.startsWith('cout'));
+    return cle === undefined ? '' : ligne[cle];
+  };
+  const aCatalogue = sec.has('catalogue de modeles');
+  const catalogue = [];
+  for (const ligne of table(sec.get('catalogue de modeles') || '')) {
+    const id = texteCellule(ligne['identifiant']);
+    if (estVide(id)) continue;
+    catalogue.push({
+      id,
+      fournisseur: texteCellule(ligne['fournisseur']),
+      reel: texteCellule(ligne['modele reel']),
+      efforts: texteCellule(ligne['efforts']),
+      cout: texteCellule(celluleCout(ligne)),
+      aptitudes: liste(ligne['aptitudes']),
+      equivalent: liste(ligne['equivalent']),
+    });
+  }
+  return { actifs, parametres, politique, aPolitique, fournisseurs, catalogue, aFournisseurs, aCatalogue };
 }
 
 /**
@@ -280,6 +349,93 @@ function lintConfig(entree) {
       if (!profilsVus.has(p)) avert(`politique de modèle : profil "${p}" non couvert — les défauts du module d'orchestration s'appliqueront.`);
     }
   }
+  // 1.3.g — chantier 9, §11.2 : fournisseurs et catalogue de modèles. Les deux tables sont
+  // facultatives ; absentes, ce bloc ne produit rien (un CONFIG.md 1.11 reste valide tel quel).
+  // Présentes, elles doivent être cohérentes entre elles, et la politique de modèle comme les
+  // paramètres de modèle doivent s'exprimer sur des identifiants du catalogue : c'est la seule
+  // garantie qu'un identifiant nommé quelque part est traduisible en modèle réel au lancement.
+  const fournisseursParNom = new Map((config.fournisseurs || []).map((f) => [f.nom, f]));
+  const catalogueParId = new Map((config.catalogue || []).map((m) => [m.id, m]));
+  if (config.aFournisseurs && fournisseursParNom.size === 0) err('table "## Fournisseurs" présente mais vide.');
+  if (config.aCatalogue && catalogueParId.size === 0) err('table "## Catalogue de modèles" présente mais vide.');
+  if (config.aCatalogue && !config.aFournisseurs) {
+    err('table "## Catalogue de modèles" présente sans "## Fournisseurs" : la colonne Fournisseur ne référence rien.');
+  }
+  if (config.aFournisseurs && !config.aCatalogue) {
+    avert('table "## Fournisseurs" présente sans "## Catalogue de modèles" : aucun modèle n\'est rattaché à ces fournisseurs.');
+  }
+  // Les exécuteurs sont lus sur le disque plutôt que listés en dur : ajouter `framework/bin/executeurs/
+  // <nom>.js` suffit à le rendre déclarable, sans toucher à ce lint. Répertoire absent (lint hors dépôt) ⇒
+  // contrôle silencieusement sauté, jamais une erreur inventée.
+  const dirExecuteurs = path.join(entree.racine || process.cwd(), 'framework', 'bin', 'executeurs');
+  const executeursConnus = fs.existsSync(dirExecuteurs)
+    ? fs.readdirSync(dirExecuteurs).filter((f) => f.endsWith('.js') && f !== 'index.js').map((f) => f.replace(/\.js$/, ''))
+    : null;
+  const VARIABLE_ENV = /^[A-Z][A-Z0-9_]*$/;
+  for (const f of config.fournisseurs || []) {
+    if (estVide(f.executeur)) err(`fournisseur "${f.nom}" : colonne Exécuteur vide.`);
+    else if (executeursConnus && !executeursConnus.includes(f.executeur)) {
+      err(`fournisseur "${f.nom}" : exécuteur "${f.executeur}" introuvable dans framework/bin/executeurs/ (connus : ${executeursConnus.join(', ')}).`);
+    }
+    if (!estVide(f.secours)) {
+      if (f.secours === f.nom) err(`fournisseur "${f.nom}" : déclaré comme son propre secours.`);
+      else if (!fournisseursParNom.has(f.secours)) err(`fournisseur "${f.nom}" : secours "${f.secours}" non déclaré dans "## Fournisseurs".`);
+    }
+    for (const [colonne, valeur] of [['URL (variable)', f.url], ['Jeton (variable)', f.jeton]]) {
+      if (!estVide(valeur) && !VARIABLE_ENV.test(valeur)) {
+        avert(`fournisseur "${f.nom}" : colonne ${colonne} — "${valeur}" n'est pas un nom de variable d'environnement (la valeur elle-même ne se met jamais dans CONFIG.md).`);
+      }
+    }
+  }
+  for (const m of config.catalogue || []) {
+    if (estVide(m.reel)) err(`catalogue : modèle "${m.id}" sans modèle réel.`);
+    if (estVide(m.fournisseur)) err(`catalogue : modèle "${m.id}" sans fournisseur.`);
+    else if (config.aFournisseurs && !fournisseursParNom.has(m.fournisseur)) {
+      err(`catalogue : modèle "${m.id}" — fournisseur "${m.fournisseur}" non déclaré dans "## Fournisseurs".`);
+    }
+    for (const mauvais of effortsDeCellule(m.efforts).invalides) {
+      err(`catalogue : modèle "${m.id}" — efforts "${mauvais}" illisibles (attendu un intervalle "low…max" ou une liste parmi : ${EFFORTS.join(', ')}).`);
+    }
+    // Deux états bien distincts pour la colonne « Coût », et deux diagnostics de gravité différente :
+    // vide = état légitime (tarif non public, ou fournisseur qui rapporte lui-même `cout_usd`), mais
+    // qui mérite d'être signalé car la session sera journalisée **sans coût** dans `SESSIONS.md` —
+    // jamais « 0,00 » — et un bilan de mission s'en trouvera incomplet : c'est un avertissement.
+    // Tarif écrit mais illisible = faute de saisie, donc une erreur.
+    if (estVide(m.cout)) {
+      avert(`catalogue : modèle "${m.id}" sans tarif — le coût d'une session ne pourra pas être estimé quand l'exécuteur ne le rapporte pas (la ligne de SESSIONS.md restera sans coût).`);
+    } else if (!/^[\d.,]+\s*\/\s*[\d.,]+(\s*\/\s*[\d.,]+\s*\/\s*[\d.,]+)?$/.test(m.cout)) {
+      err(`catalogue : modèle "${m.id}" — coût "${m.cout}" illisible (attendu "<entrée> / <sortie>" ou "<entrée> / <sortie> / <cache écrit> / <cache lu>" en USD par Mtok).`);
+    }
+    for (const e of m.equivalent) {
+      if (!catalogueParId.has(e)) err(`catalogue : modèle "${m.id}" — équivalent "${e}" absent du catalogue.`);
+      else if (catalogueParId.get(e).fournisseur === m.fournisseur) {
+        avert(`catalogue : modèle "${m.id}" — équivalent "${e}" chez le même fournisseur "${m.fournisseur}" : sans effet pour le repli sur limite (429).`);
+      }
+    }
+    for (const a of m.aptitudes) {
+      if (!PROFILS.includes(normaliser(a))) avert(`catalogue : modèle "${m.id}" — aptitude "${a}" hors des profils connus (${PROFILS.join(', ')}).`);
+    }
+  }
+  // Références croisées : tout identifiant de modèle nommé ailleurs dans CONFIG.md doit être au catalogue.
+  if (config.aCatalogue && catalogueParId.size > 0) {
+    const verifieId = (valeur, quoi) => {
+      if (estVide(valeur)) return null;
+      const m = catalogueParId.get(valeur);
+      if (!m) { err(`${quoi} : modèle "${valeur}" absent de "## Catalogue de modèles".`); return null; }
+      return m;
+    };
+    for (const ligne of config.politique) {
+      const m = verifieId(ligne.modele, `politique de modèle : profil "${ligne.profil}"`);
+      const permis = m ? effortsDeCellule(m.efforts).permis : [];
+      if (m && permis.length && !permis.includes(ligne.effort)) {
+        err(`politique de modèle : profil "${ligne.profil}" — effort "${ligne.effort}" hors des efforts déclarés pour "${m.id}" (${permis.join(', ')}).`);
+      }
+    }
+    for (const p of ['sous_agent_modele', 'modele_cli', 'modele_repli']) {
+      if (config.parametres.has(p)) verifieId(config.parametres.get(p), `paramètre "${p}"`);
+    }
+  }
+
   for (const nom of ENTIERS_POSITIFS) {
     if (!config.parametres.has(nom)) continue; // « Leur absence n'est pas une erreur » (BOOTSTRAP 1.3)
     const v = config.parametres.get(nom);
@@ -381,6 +537,7 @@ function main(argv) {
 }
 
 module.exports = { parseManifest, parseConfig, parseModuleParams, lintConfig, lintDepuisDisque, parseArgs, main,
+  effortsDeCellule,
   CATEGORIES_OBLIGATOIRES, PERMISSION_MODES, FORMATS_RAPPORT, EFFORTS, PROFILS };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

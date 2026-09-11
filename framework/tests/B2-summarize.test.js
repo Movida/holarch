@@ -39,10 +39,16 @@ const launcher = require(path.join(ROOT, 'framework', 'bin', 'holarch-spawn.js')
 // ---------------------------------------------------------------------------
 const LAUNCH = { chemin: 'concepteur/enfant', meta: { modele: 'sonnet', effort: 'medium' } };
 
+/** Un « Resultat » normalisé, tel que le rend `executeur.normaliser()` (chantier 9, volet 1) :
+ *  depuis l'extraction des exécuteurs, `summarize()` ne lit plus aucun champ propre à un
+ *  fournisseur — c'est cette forme commune, et elle seule, qui lui est donnée. */
 function res(over = {}) {
   return Object.assign({
-    type: 'result', subtype: 'success', session_id: 'abcdefgh-1111-2222-3333-444444444444',
-    total_cost_usd: 0.5, num_turns: 7, usage: {}, permission_denials: [], is_error: false,
+    session_id: 'abcdefgh-1111-2222-3333-444444444444',
+    tours: 7, cout_usd: 0.5,
+    tokens: { entree: null, cache_lu: null, cache_ecrit: null, sortie: null },
+    modeles: [], fin: 'success', sous_type: 'success', refus: 0,
+    statut_http: null, texte: '', brut: null,
   }, over);
 }
 function session(over = {}) {
@@ -96,14 +102,14 @@ test('summarize : une note d\'hibernation sur un STATUS non-WORKING ne masque pa
 test('summarize : aucun résultat JSON du CLI → code 2, avec le code de sortie et le journal brut', () => {
   const { text, code } = sum([session({ res: null, exitCode: 137, signal: 'SIGKILL', status: { etat: 'DELIVERED', note: '' } })]);
   assert.equal(code, 2);
-  assert.match(text, /aucun résultat JSON du CLI \(code 137, signal SIGKILL\)/);
+  assert.match(text, /aucun résultat exploitable de l'exécuteur \(code 137, signal SIGKILL\)/);
   assert.match(text, /\/tmp\/holarch-log\.stderr\.log/); // le parent doit pouvoir aller voir
   // Sans résultat JSON, coût et tours valent 0 plutôt que « ? » : la ligne reste lisible.
   assert.match(text, /· 0 tours · 0\.00 USD ·/);
 });
 
 test('summarize : résultat JSON en erreur → code 2 et pointeur vers le résultat brut', () => {
-  const { text, code } = sum([session({ res: res({ is_error: true, subtype: 'error_max_turns' }) })]);
+  const { text, code } = sum([session({ res: res({ fin: 'erreur', sous_type: 'error_max_turns' }) })]);
   assert.equal(code, 2);
   assert.match(text, /fin anormale : error_max_turns/);
   assert.match(text, /\/tmp\/holarch-log\.result\.json/);
@@ -130,7 +136,7 @@ test('summarize : un plantage pendant une hibernation volontaire reste signalé,
   // utile au parent est de relancer ; l'anomalie du CLI doit néanmoins rester visible dans le texte.
   const { text, code } = sum([session({ res: null, exitCode: 1, status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } })]);
   assert.equal(code, 3);
-  assert.match(text, /aucun résultat JSON du CLI/);
+  assert.match(text, /aucun résultat exploitable de l'exécuteur/);
   assert.match(text, /hibernation volontaire sans progrès/);
 });
 
@@ -139,8 +145,8 @@ test('summarize : un plantage pendant une hibernation volontaire reste signalé,
 // ---------------------------------------------------------------------------
 test('summarize : agrège coût, tours et durée sur toutes les tentatives, et liste les sessions', () => {
   const sessions = [
-    session({ res: res({ session_id: '11111111-a', total_cost_usd: 1.25, num_turns: 30 }), elapsedMs: 60000, status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } }),
-    session({ res: res({ session_id: '22222222-b', total_cost_usd: 2.5, num_turns: 12 }), elapsedMs: 5000 }),
+    session({ res: res({ session_id: '11111111-a', cout_usd: 1.25, tours: 30 }), elapsedMs: 60000, status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } }),
+    session({ res: res({ session_id: '22222222-b', cout_usd: 2.5, tours: 12 }), elapsedMs: 5000 }),
   ];
   const { text, code } = sum(sessions);
   assert.equal(code, 0); // le dernier STATUS est terminal : l'hibernation intermédiaire n'est pas une anomalie
@@ -151,7 +157,7 @@ test('summarize : agrège coût, tours et durée sur toutes les tentatives, et l
 test('summarize : une tentative sans résultat JSON n\'empêche pas d\'agréger les autres', () => {
   const sessions = [
     session({ res: null, status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } }),
-    session({ res: res({ total_cost_usd: 2, num_turns: 9 }) }),
+    session({ res: res({ cout_usd: 2, tours: 9 }) }),
   ];
   const { text } = sum(sessions);
   assert.match(text, /2 session\(s\) · 9 tours · 2\.00 USD/);
@@ -160,8 +166,8 @@ test('summarize : une tentative sans résultat JSON n\'empêche pas d\'agréger 
 
 test('summarize : compte les refus d\'outil de toutes les tentatives et reprend la note de STATUS', () => {
   const sessions = [
-    session({ res: res({ permission_denials: [{ tool_name: 'Edit' }, { tool_name: 'Bash' }] }), status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } }),
-    session({ res: res({ permission_denials: [{ tool_name: 'Write' }] }), status: { etat: 'BLOCKED', note: 'Manque la spécification du format de sortie.' } }),
+    session({ res: res({ refus: 2 }), status: { etat: 'WORKING', note: 'hibernation volontaire (contexte)' } }),
+    session({ res: res({ refus: 1 }), status: { etat: 'BLOCKED', note: 'Manque la spécification du format de sortie.' } }),
   ];
   const { text } = sum(sessions);
   assert.match(text, /ℹ 3 appel\(s\) d'outil refusé\(s\)/);
@@ -243,13 +249,14 @@ test('launchWithRelaunches : journalise le STATUS réel de chaque tentative dans
   const runner = (launch, attempt) => {
     if (attempt === 1) setStatus(root, 'WORKING', 'hibernation volontaire (contexte)');
     else setStatus(root, 'DELIVERED');
-    return { res: res({ num_turns: attempt * 10, total_cost_usd: 1 }), elapsedMs: 1000 };
+    return { res: res({ tours: attempt * 10, cout_usd: 1 }), elapsedMs: 1000 };
   };
   const sessions = launcher.launchWithRelaunches(root, 'concepteur/enfant', {}, runner);
   assert.equal(sessions.length, 2);
   const lignes = sessionsLines(root);
-  assert.match(lignes[0], /\| WORKING \| \d+ \/ \d+ \| — \/ — \|$/);
-  assert.match(lignes[1], /\| DELIVERED \| \d+ \/ \d+ \| — \/ — \|$/);
+  // Dernière cellule : « Fournisseur / modèle réel » (chantier 9, volet 2) — « — » sans catalogue.
+  assert.match(lignes[0], /\| WORKING \| \d+ \/ \d+ \| — \/ — \| — \|$/);
+  assert.match(lignes[1], /\| DELIVERED \| \d+ \/ \d+ \| — \/ — \| — \|$/);
   assert.equal(launcher.summarize(sessions[1].launch, sessions).code, 0);
 });
 
@@ -257,6 +264,6 @@ test('launchWithRelaunches : STATUS.md illisible → « (absent) » journalisé,
   const root = makeRoot(0);
   const runner = () => { fs.rmSync(path.join(root, 'mission/concepteur/enfant/STATUS.md')); return { res: res(), elapsedMs: 10 }; };
   const sessions = launcher.launchWithRelaunches(root, 'concepteur/enfant', {}, runner);
-  assert.match(sessionsLines(root)[0], /\| \(absent\) \| \d+ \/ \d+ \| — \/ — \|$/);
+  assert.match(sessionsLines(root)[0], /\| \(absent\) \| \d+ \/ \d+ \| — \/ — \| — \|$/);
   assert.match(launcher.summarize(sessions[0].launch, sessions).text, /STATUS=\(absent\)/);
 });

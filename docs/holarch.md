@@ -590,6 +590,17 @@ Les trois points restés ouverts en fin de conception ont été tranchés. Confo
 37. **Mission `holarch-outillage` préparée, non lancée (2026-09-11)** — sur la recommandation de la session de maintenance validée par le mainteneur (« on suit ta recommandation ; prépare tout mais ne lance pas ») : chantier 8 « outillage du cycle de maintenance » (`IMPLEMENTATION.md` §10 — `promote.js`, `archive.js`, `open.js`, gabarit d'OBJECTIVE), conduit comme première mission sous le module `delegation-intra-session` promu et sous les défauts 180 000 / 400 000 / 8 USD, avec la table par session exigée à la revue : la mesure de délégation que la décision 35 laisse ouverte. `mission/OBJECTIVE.md` et `CONFIG.md` (nom, paramètres aux défauts, 13 modules) sont écrits et committés ; le lancement (`node framework/bin/holarch-spawn.js --bootstrap`) revient à la session de maintenance suivante, la présente ayant atteint la taille où un compactage menacerait son fil.
 38. **Journée du 2026-09-11, après-midi (mission `holarch-outillage`)** — le mainteneur a fixé quatre choses : (a) les limites d'Anthropic ne doivent pas borner la solution, OpenRouter ou une plateforme comparable sera utilisable, et l'enjeu principal est que chaque instance spécialise son modèle selon sa tâche (chantier 9, `ROADMAP.md` §3, `IMPLEMENTATION.md` §11 ; non-objectif v1 §1.3 levé) ; (b) `Movida/holon-v2` reste privé (travaux en cours), le modèle `Movida/holarch` est la seule face publique ; (c) pas de routine cloud déclenchée par GitHub (limites refusées), la CI se vérifie localement après chaque push et publication (`ENVIRONNEMENT.md` §7) ; (d) « règles d'or » du dépôt : commits atomiques, arbre propre à chaque étape, relecture juste avant édition (garde des commits étrangers, `tools/holarch-session/garde.js`), aucun état rapporté sans vérification. Constat de mission acté : le rejeu empirique des outils de maintenance est un geste de la session de maintenance (une instance n'a pas `git clone`), validation humaine explicite en `IMPLEMENTATION.md` §10.5 ; le chantier 8 a été promu par `promote.js` et la mission archivée par `archive.js` (1.12.0).
 39. **Seuil de contexte 240 000 et `git clone` pour les instances (2026-09-11, framework 1.13.0)** — sur la mesure de `holarch-outillage` (p90 198 602, `docs/diagnostics/2026-09-11-seuil-contexte-240k.md`), le mainteneur relève `seuil_contexte_tokens` à 240 000 (autocompact 400 000 et budget 8 USD inchangés ; la prochaine mission mesure le coût par unité close à seuil relevé) et autorise les instances à cloner et à agir dans un clone (`git clone`, `git -C <dir> checkout|config`) pour que le rejeu d'outils de maintenance ne dépende plus d'une session interactive — sans jamais changer de branche dans leur propre worktree. Il ouvre lui-même la mission `holarch-fournisseurs` (chantier 9) avec `open.js`, premier usage réel de l'outil.
+40. **Chantier 9 promu (2026-09-11, framework 1.16.0, mission `holarch-fournisseurs`)** — quatre volets livrés par deux
+    enfants en parallèle (`mode_attente = detache`, réveil par livraison), 15 sessions, 86,31 USD, 38 unités. Le mainteneur a
+    suivi les recommandations de la session de maintenance : (a) l'écart de sévérité de la règle 2 du garde (transition
+    de `STATUS.md` journalisée, jamais réécrite par le lanceur après la mort d'une instance) est **accepté** — le lanceur ne
+    corrige pas un état qu'une instance a déclaré elle-même, `sleep-guard` reste la couche de correction quand
+    l'exécuteur a des hooks ; (b) la vérification réelle par l'exécuteur `passerelle` (clé d'un fournisseur compatible API
+    Messages, variables `HOLARCH_FOURNISSEUR_<NOM>_*`) est **reportée** au premier geste du chantier suivant, le reste du
+    chantier n'en dépendant pas ; (c) des cinq propositions du rapport, P2 (réconciliation manifeste ↔ paquet dans
+    `promote.js`) et P3 (le test du contrat réduit imprime sa marge) sont appliquées à la promotion, P1, P4 et P5 vont au
+    carnet `docs/IDEES.md`. Mesure retenue pour le seuil de contexte : maximum observé 172 796 tokens sur 15 sessions,
+    le seuil de 240 000 n'a jamais déclenché ; le facteur limitant d'une session est le budget de 8 USD.
 
 ## 16. Harnais d'exécution (v1.1 — 2026-09-02, synchronisé depuis le framework public le 2026-09-04)
 
@@ -597,13 +608,15 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
 
 | Fichier | Rôle |
 |---|---|
-| `framework/bin/holarch-spawn.js` | Lanceur : `node framework/bin/holarch-spawn.js <chemin>` (instance) ou `--bootstrap` (première session). Options : `--profil`, `--modele`, `--effort`, `--budget-usd`, `--max-tours`, `--permission-mode`, `--timeout-min`, `--add-dir` (répétable), `--dry-run`, `--json`. |
+| `framework/bin/holarch-spawn.js` | Lanceur : `node framework/bin/holarch-spawn.js <chemin>` (instance) ou `--bootstrap` (première session). Options : `--profil`, `--modele` (alias `--model`), `--effort`, `--budget-usd`, `--max-tours` (alias `--max-turns`), `--permission-mode`, `--timeout-min`, `--add-dir` (répétable), `--detach`, `--dry-run`, `--json`. Depuis 1.14.0, **aucun argument ni champ propre à Claude Code n'y subsiste** : le binaire, ses options, la forme de son JSON de résultat et la reconnaissance d'une limite 429 vivent sous `bin/executeurs/`. Les deux alias en anglais sont conservés pour les scripts existants — ce sont des noms d'options du lanceur, pas des options transmises telles quelles. |
+| `framework/bin/executeurs/` | Un module par manière de faire tourner une session : `claude-code.js` (le CLI local, exécuteur par défaut), `fake.js` (le faux binaire des tests, `HOLARCH_FAKE_CLAUDE`), `passerelle.js` (le même CLI pointé sur l'URL et le jeton d'un fournisseur compatible API Messages), `index.js` (sélection par nom, vérification du contrat). Contrat : `{ nom, capacites, preparer, executer, normaliser, limite }`. |
+| `framework/bin/catalogue.js` | Lecture des tables `## Fournisseurs` et `## Catalogue de modèles` de `CONFIG.md` : résolution d'un identifiant en modèle réel et en fournisseur, efforts permis, coût estimé d'une session à partir des tokens, fournisseur de secours et équivalent d'un modèle chez un autre fournisseur. Sans dépendance, tables facultatives. |
 | `framework/claude/instance-settings.json` | Réglages Claude Code passés par `--settings` : mémoire automatique coupée, variables d'environnement d'économie (pas de mise à jour ni de trafic non essentiel, cache de prompt 1 h, sous-agents sur `sonnet`, sortie Bash bornée, timeouts Bash longs pour la supervision), allowlist Bash des instances (1.13.0 : `git clone`, `git -C <dir> checkout|config` pour rejouer des outils dans un clone ; jamais `checkout`/`switch` sans `-C`), `permissions.deny` (`framework/**`, `mission/OBJECTIVE.md`, en motifs relatifs — second niveau, redondant avec `--disallowedTools`), hooks. |
 | `framework/hooks/holarch-hooks.js` | Garde-fous `sleep-guard` (Stop), `spawn-guard` (PreToolUse Bash), `wake-guard` et `framework-guard` (PreToolUse Write/Edit), `context-watch` (PostToolUse). Inertes hors lanceur, fail-open en cas d'erreur interne. |
 
 ### 16.1 Ce que fait le lanceur à chaque session
 
-1. **Résolution** : profil de l'instance (fiche registre ; `conception` pour la racine, `execution` par défaut pour un enfant sans profil) → modèle et effort. Précédence : option de ligne de commande > ligne `Effort` de la fiche registre (effort seulement : jugé par le parent pour la tâche, ou changé par l'instance elle-même) > table `## Politique de modèle` de `CONFIG.md` > `modele_cli`/`effort_cli` explicites de `CONFIG.md` > défauts de `direct-spawn`.
+1. **Résolution** : profil de l'instance (fiche registre ; `conception` pour la racine, `execution` par défaut pour un enfant sans profil) → modèle et effort. Précédence : option de ligne de commande > lignes `Modèle` et `Effort` de la fiche registre (`Modèle` depuis 1.16.0 : un identifiant du catalogue, posé par le parent au spawn pour spécialiser un enfant hors de la politique de son profil ; `Effort` jugé pour la tâche, ou changé par l'instance elle-même) > table `## Politique de modèle` de `CONFIG.md` > `modele_cli`/`effort_cli` explicites de `CONFIG.md` > défauts de `direct-spawn`. Un identifiant absent du catalogue est transmis tel quel à l'exécuteur — le catalogue nomme ce qu'il connaît, il n'est pas une liste blanche.
 2. **Prompt système** (`--append-system-prompt-file`) : KERNEL + CONFIG + modules actifs, identiques pour toutes les instances d'une mission → un seul préfixe à mettre en cache pour toute la mission ; `--exclude-dynamic-system-prompt-sections` sort les sections variables (répertoire, état Git) du prompt système. L'instance n'a plus rien à relire au réveil (KERNEL §2, §5.8).
 3. **Prompt utilisateur** : ROLE, MEMORY, STATUS (intégraux), 8 derniers messages d'INBOX (au-delà, une note de rappel signale les plus anciens masqués — jamais supprimés du fichier, à relire à la demande), 40 dernières lignes du JOURNAL et lignes `PROGRESS.md` de l'instance, puis description du harnais (plafonds, commandes autorisées, garde-fous) — la session sait à quoi s'attendre au lieu de le découvrir par des refus. Troncature par message complet (bloc `---\nid: …` à `---\nid: …` suivant, KERNEL §7), jamais par ligne brute : un message ne peut pas être coupé en deux. **Module `unites-indexees` actif** (chantier 1, framework 1.2.0) : ROLE, MEMORY borné, STATUS, la raison du réveil (`<reveil>` : messages reçus et commits depuis la dernière hibernation, `describeWakeReason`), les seuls messages d'INBOX non traités (`selectInboxMessages`) et `memoire/INDEX.md` régénéré par le lanceur (une ligne par fiche d'unité, au plus 60) — ni JOURNAL ni PROGRESS : la mémoire est adressée par l'index, pas rechargée.
 4. **Options CLI** : `--model`, `--effort`, `--permission-mode` (CONFIG), `--output-format json`, `--max-turns`, `--max-budget-usd`, `--autocompact`, `--tools` (8 outils : Read, Write, Edit, Bash, Glob, Grep, Agent, TodoWrite), `--disable-slash-commands`, `--strict-mcp-config` (aucun serveur MCP), `--disallowedTools` (`Edit` et `Write` sous `framework/` et sur `mission/OBJECTIVE.md`, en motifs **relatifs** à la racine du dépôt — un chemin absolu y est inerte, dupliqués en défense en profondeur dans `permissions.deny` d'`instance-settings.json`), `--settings`, `-n holon:<chemin>`, `--fallback-model` si `modele_repli` est défini, `--add-dir <dir>` répété pour chaque option `--add-dir` du lanceur (accès en plus de la racine HOLARCH à un dépôt externe). stdin fermé.
@@ -626,6 +639,45 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
 11. **Réveil du parent évalué après chaque session** (framework 1.9.0, geste de maintenance à la promotion du chantier 6) : jusqu'en 1.8.2, `wakeWaiters` n'était appelé qu'à la sortie de la boucle de ré-incarnation d'un enfant (`finishLaunch`) — un enfant qui posait une `CLARIFICATION` puis continuait d'hiberner et de se ré-incarner ne réveillait jamais son parent avant sa livraison (constaté sur `holarch-contexte`, le mainteneur a répondu à la place du parent). Le lanceur évalue désormais les guetteurs après chaque session ; l'appel est idempotent (parent vivant ou déjà réveillé ignoré ; « récent » = postérieur au dernier commit de `STATUS.md` du parent, donc pas de re-réveil sur le même message) et `finishLaunch` réévalue une dernière fois sur l'état final.
 12. **Délégation intra-session, contrat réduit, fusible mesuré** (chantier 7, framework 1.10.0, `IMPLEMENTATION.md` §9) : quand le module `extensions/delegation-intra-session` est actif, le lanceur passe `--agents` avec la définition du sous-agent `holarch-unite` (prompt court depuis `framework/templates/SOUS-AGENT.template.md`, outils sans `Agent`, modèle `sous_agent_modele`) ; le prompt système ne porte plus, par module, que l'en-tête, la table `## Paramètres` et les `## Règles injectées` (84 565 → 51 775 caractères mesurés) ; `SessionStart` injecte le rappel d'orientation ; `autocompact_tokens` est un paramètre de `CONFIG.md`. **Maintenance 1.11.0, même jour** : verrou de vivacité posé dès le réveil (course `wakeWaiters`/`finishLaunch`, deux sessions concurrentes constatées) ; `--reprendre` après un lanceur mort ; horloge UTC, sessions jouées et coût cumulé dans le prompt de réveil ; journal du lanceur committé par le lanceur pour une racine ; fichier de contexte lu dans le worktree de l'instance ; `context-watch` signale le courrier arrivé en cours de session et un fait de contexte par palier de 50k ; `sleep-guard` refuse un constat « impossible » sans message. Défauts réglés sur mesure : budget 8 USD, seuil 180 000, autocompact 400 000.
 
+13. **Indépendance du fournisseur de modèles** (chantier 9, framework 1.16.0,
+    `IMPLEMENTATION.md` §11) : le lanceur ne sait plus lancer une session, il sait lancer un
+    **exécuteur**. Trois conséquences visibles.
+
+    - **Interface.** `bin/executeurs/index.js` résout un nom en module et vérifie son contrat
+      (`verifierContrat`) : `capacites` (`sous_agents`, `hooks`, `prompt_systeme_fichier`,
+      `transcription`, quatre booléens obligatoires) puis `preparer` (→ `{bin, args, env, cwd, stdin}`),
+      `executer` (→ `{stdout, stderr, exitCode, signal, error, elapsedMs}`), `normaliser` (→ le
+      `Resultat` commun : `session_id`, `tours`, `cout_usd` **ou `null`**, `tokens`, `modeles`, `fin`,
+      `statut_http`) et `limite` (→ `{texte, repriseIso, attenteMs}` ou `null`). Le nom de l'exécuteur
+      est choisi par `nomPour` : `fake` si `HOLARCH_FAKE_CLAUDE` est posé, sinon l'exécuteur du
+      fournisseur du modèle résolu, sinon le paramètre `executeur` de `CONFIG.md`, sinon `claude-code`.
+      Un nom inconnu **jette** : jamais de repli silencieux sur l'exécuteur par défaut, une session
+      lancée sur le mauvais fournisseur étant indétectable après coup. `capacites` conditionne le
+      reste du harnais plutôt que de le supposer : sans `sous_agents`, `--agents` n'est pas passé et
+      `delegation-intra-session` dégrade proprement ; sans `hooks` ni `transcription`, `context-watch`
+      n'a rien à lire et la mesure de contexte est absente, pas fausse.
+    - **Catalogue et coût.** `bin/catalogue.js` lit deux tables **facultatives** de `CONFIG.md` —
+      `## Fournisseurs` (nom, exécuteur, variables d'URL et de jeton, fournisseur de secours) et
+      `## Catalogue de modèles` (identifiant, fournisseur, modèle réel, efforts permis, coût,
+      aptitudes, équivalent chez un autre fournisseur). La colonne de coût accepte **deux ou quatre**
+      valeurs en USD par million de tokens (`entrée / sortie`, ou `entrée / sortie / cache écrit /
+      cache lu`) : la forme courte dérive le cache du tarif d'entrée (×0,1 en lecture, ×1,25 en
+      écriture), la forme longue prime toujours sur cette dérivation — `claude-fable-5-1` facture la
+      lecture de cache à 2,5 % de son entrée, soit quatre fois moins que la dérivation, sur le poste
+      qui domine la facture d'une session longue. Quand l'exécuteur ne rapporte pas de coût
+      (`cout_usd = null`, cas d'une passerelle), le lanceur le calcule depuis les tokens et le tarif,
+      et marque la valeur d'un `≈` dans `SESSIONS.md`. **Un modèle sans tarif au catalogue est
+      journalisé sans coût — cellule vide, jamais `0,00`** : une somme incomplète doit se voir comme
+      telle dans un bilan de mission, et non passer pour une somme exacte. Treizième colonne de
+      `SESSIONS.md`, en fin de ligne : `Fournisseur / modèle réel`.
+    - **Repli sur limite (429).** Quand l'exécuteur reconnaît une limite de sessions de l'API et que
+      le fournisseur quitté déclare un `Secours` chez qui le modèle courant a un `Équivalent`, le
+      lanceur relance **immédiatement**, sans attente, sur le fournisseur de secours ; il l'écrit sur
+      stderr et marque la ligne de session `repli depuis <fournisseur>` dans sa colonne `Fin`. Un seul
+      repli par invocation : si le secours refuse à son tour, on retombe sur l'attente. Sans `Secours`
+      ni `Équivalent` — donc pour toute mission qui n'a qu'un fournisseur, dont celle-ci —, le
+      comportement est **exactement** l'attente d'avant (`repriseIso`, à défaut `HOLARCH_ATTENTE_429_MS`).
+
 ### 16.2 Garde-fous
 
 | Hook | Événement | Effet |
@@ -635,6 +687,58 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
 | `wake-guard` | `PreToolUse` (Write, Edit) | Symétrique de `sleep-guard` côté réveil : refuse tout `Write`/`Edit` hors de l'arbre propre de l'instance (`mission/<chemin>/**`, sa ligne `registry/PROGRESS.md`, sa fiche registre) tant que son `STATUS.md` n'est pas passé à un état actif (`WORKING`, `WAITING_CHILDREN`, `BLOCKED`) et qu'elle n'a pas ajouté sa propre ligne `ON_ORIENT` à `registry/PROGRESS.md` **depuis le début de la session courante** — détecté par le contenu ajouté à `PROGRESS.md` depuis une baseline calculée par le **lanceur avant de démarrer la session** (`HOLARCH_PROGRESS_BASELINE`, pas au premier appel du hook côté session : une baseline posée trop tard refuserait systématiquement la toute première écriture d'une instance pourtant déjà conforme). Une fois la porte ouverte, elle reste ouverte pour le reste de la session (pas de re-vérification à chaque écriture). |
 | `framework-guard` | `PreToolUse` (Write, Edit) | Refuse tout `Write`/`Edit` sous `framework/`, `docs/`, `tools/` ou sur `mission/OBJECTIVE.md` — hors de l'arbre propre de l'instance (`mission/<instance>/**`, `mission/shared/<instance>/**`) —, quel que soit l'état de `STATUS.md`. Différent de `wake-guard` par la portée : `wake-guard` porte sur l'arbre autorisé selon la phase de l'instance (gouverné par `ON_ORIENT`/l'état actif) et s'ouvre une fois la porte franchie ; `framework-guard` porte sur une liste fixe de répertoires qui ne sont jamais la production d'une mission (le produit et la documentation du harnais lui-même) et refuse inconditionnellement, indépendamment de `STATUS.md`/`PROGRESS.md`. Doublé, en défense en profondeur, par `permissions.deny` d'`instance-settings.json` (`framework/**`, `docs/**`, `tools/**`, `mission/OBJECTIVE.md`) — ceinture et bretelles, `--disallowedTools` du lanceur restant le troisième niveau pour `framework/**` et `mission/OBJECTIVE.md` (chantier 7 U2, `IMPLEMENTATION.md` §9.4). |
 | `context-watch` | `PostToolUse` (tous outils) | Lit l'usage du dernier message assistant dans la transcription (entrée + cache lu + cache écrit = contexte réel) ; au-delà de `seuil_contexte_tokens`, injecte l'ordre d'hiberner volontairement (une fois par palier de 20 000 tokens ; ton renforcé au-delà de 125 % du seuil). Remplace, quand le lanceur est utilisé, l'heuristique auto-rapportée de `context-budget`. **Depuis 1.9.0**, persiste aussi la mesure instantanée (`{session_id, depart, max, dernier, tours}`) dans `mission/.holarch/live/<chemin-tirets>.contexte.json`, lue et consommée par `appendSessionLine` en fin de session (colonne 12 de `SESSIONS.md`, §16.1 point 10). Lit aussi la demande d'arrêt propre (`mission/.holarch/stop/<instance>`, posée par `--arret`) et injecte une seule fois par session l'ordre d'hiberner avec la note « hibernation volontaire (arrêt demandé) », que le lanceur ne ré-incarne jamais (chantier 2). |
+
+### Gardes a posteriori : vérifier une session par le dépôt
+
+Les hooks de `framework/hooks/holarch-hooks.js` sont **préventifs** : ils refusent une écriture ou un
+spawn avant qu'il n'ait lieu. Ils dépendent du mécanisme de permissions de Claude Code et ne sont donc
+pas disponibles chez tous les fournisseurs (`capacites.hooks` peut être faux). La garantie portable
+est un **garde a posteriori**, fondé sur le seul dépôt Git, exécuté par le lanceur après chaque
+session, quel que soit l'exécuteur :
+
+```js
+const { verifierSession } = require('./gardes/git.js');
+const { ecarts } = verifierSession(root, chemin, avant, apres);
+// ecarts : Array<{ regle: 1|2|3, chemin: string, detail: string }>
+```
+
+- `root` : racine du dépôt ; `chemin` : chemin d'instance depuis `mission/` ;
+- `avant` / `apres` : shas bornant la session. Ils doivent borner **les seuls commits de l'instance**
+  — sous `git-branches`, la HEAD de sa branche avant et après l'incarnation. Deux points d'une
+  branche partagée imputeraient à l'instance des commits étrangers (faux positifs de règle 1 mesurés
+  dans `EQUIVALENCE-GARDES.md` §4).
+
+**Trois règles**, transposition directe du KERNEL :
+
+1. **Écritures hors de l'arbre autorisé** (KERNEL §4). Diff `avant..apres` : sont autorisés
+   `mission/<chemin>/`, `mission/shared/<chemin>/`, la fiche registre de l'instance et celles de ses
+   descendants (créées au spawn), les flux partagés de `mission/registry/`, et l'`INBOX.md` du
+   parent. Sont refusés `framework/`, `docs/`, `tools/`, `mission/OBJECTIVE.md`, la fiche registre
+   d'une autre instance, et tout chemin hors de `mission/`. `mission/.holarch/` est ignoré (jamais
+   committé).
+2. **Transition de `STATUS.md`** (KERNEL §3 et règles de `sleep-guard`) : état final valide et
+   **accessible** depuis l'état de départ dans la machine à états — le garde ne voit que les deux
+   extrémités d'une session, pas les états traversés ; `WORKING` toléré seulement avec une note
+   « hibernation volontaire » ; `WAITING_CHILDREN` et `BLOCKED` exigent une ligne `Réveil` valide ; un
+   constat de blocage dans la dernière entrée de `JOURNAL.md` sans `BLOCKER`, `CLARIFICATION` ou
+   `PROPOSAL` émis le même jour est un écart (KERNEL §6.3 : jamais de refus silencieux).
+3. **Enfants créés hors budget** (`instance-budget`) : enfants comptés dans l'arbre de l'instance à
+   `apres` **et** sur les branches d'enfants (sous `worktree`, le commit de spawn est posé sur la
+   branche de l'enfant), comparés au budget alloué de la fiche registre.
+
+**Propriétés garanties.** Le module est **pur** — il n'écrit aucun fichier, ne lance aucune session,
+n'émet aucune `ALERT` : la conduite à tenir sur un écart est câblée par le lanceur (un écart de règle
+1 ou 3 produit une `ALERT` dans l'`INBOX.md` du parent et met la session en `fin = erreur` ; un écart
+de règle 2 est journalisé et corrigé comme le fait `sleep-guard`). Il est **fail-open** (§0.2),
+règle par règle : dépôt absent, shas inconnus, `git` indisponible ou erreur interne ⇒ `{ ecarts: [] }`,
+jamais d'exception. Il est **sans dépendance** npm et n'appelle Git qu'en lecture.
+
+**Ce qu'il ne fait pas.** Il ne remplace pas les hooks : il constate là où ils empêchent. Une
+tentative refusée par un hook ne laisse aucune trace committée — elle est donc, par construction,
+invisible au garde. Chez un fournisseur sans hooks, une violation n'est pas bloquée mais signalée
+après coup. Il ne voit pas non plus les états intermédiaires d'une session, les écritures compensées
+avant le commit final, ni le travail non committé. La mesure complète de ce recouvrement, chiffrée
+sur les sessions réelles de la mission `holarch-outillage`, est dans `EQUIVALENCE-GARDES.md`.
 
 ### 16.3 Mesures qui ont motivé ces choix (ce dépôt, Claude Code 2.1.257, 2026-09-02)
 
@@ -668,6 +772,22 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
 - `--add-dir` donne accès en lecture/écriture aux outils de fichiers et à `Bash cd`/`ls` dans le répertoire ajouté, mais l'allowlist Bash de `instance-settings.json` (`git status *`, `git diff *`, …) ne couvre que des invocations `git` sans dépôt explicite : `git -C <dépôt-externe> status` reste soumis à approbation interactive (refusée en session non interactive). Contournement : l'instance doit `cd` dans le répertoire ajouté avant d'invoquer `git` sans `-C`.
 - Délégation intra-session (`--agents`, module `extensions/delegation-intra-session` du chantier 7, `IMPLEMENTATION.md` §9.1) : quand ce module est actif, le lanceur construit la définition du sous-agent `holarch-unite` (description, prompt ≤ 2 000 caractères construit depuis `framework/templates/SOUS-AGENT.template.md`, outils Read/Write/Edit/Bash/Glob/Grep **sans** `Agent` — pas de cascade possible —, `model` = paramètre `sous_agent_modele` du module (défaut `sonnet`), effort = `sous_agent_effort` (défaut `medium`)) et le passe en option `--agents` de la session ; `--tools` de la session elle-même garde `Agent`. `context-watch` ignore la transcription d'un sous-agent, reconnue à son chemin `<sid>/subagents/*.jsonl` (distinct de `<sid>.jsonl`, la transcription de l'instance) : la mesure instantanée du contexte (point 10 de §16.1) et le fusible de `seuil_contexte_tokens` ne portent que sur l'instance, jamais sur ses sous-agents. `tools/holarch-bench/bench.js --transcriptions` lit aussi ce dossier `<sid>/subagents/` et publie séparément le contexte de l'instance (départ/max) et les tokens/coût des sous-agents par session. Limite assumée : la délégation ne couvre que les unités marquées `déléguée` dans la fiche de plan (écriture de fichiers, lecture large, exécution de tests) — jamais `ON_ORIENT` ni `ON_SLEEP`, jamais de sous-agent qui en lance un autre ; l'instance reste seule responsable de la vérification (`git diff --stat`, tests ciblés), de la correction et du commit au retour du sous-agent.
 
+- L'exécuteur `passerelle` fait tourner le **même CLI Claude Code** contre l'URL et le jeton d'un
+  autre fournisseur : il hérite donc de ses capacités (hooks, sous-agents, transcription) mais reste
+  soumis à ce que ce fournisseur implémente réellement de l'API Messages. Un exécuteur `api-messages`
+  qui parlerait directement le protocole HTTP est rendu possible par l'interface (c'est ce que
+  `capacites.hooks = false` a pour rôle de faire dégrader proprement) ; il n'est pas écrit — décision
+  D3 du chantier 9 : ne généraliser qu'au moment où une seconde implémentation réelle existe.
+- Le coût calculé par le catalogue (`≈`) est une estimation à partir des tokens rapportés et du tarif
+  liste de la table : il vaut ce que valent ces deux entrées. Un tarif périmé dans `CONFIG.md` produit
+  un chiffre faux sans que rien ne le signale — le catalogue est une donnée tenue à la main, pas une
+  source de vérité interrogée en ligne. `config-lint` vérifie la forme d'un tarif (et avertit d'une
+  cellule vide), jamais sa valeur.
+- La cohérence entre le modèle demandé et le catalogue est signalée sur stderr, jamais opposée en
+  refus : un identifiant inconnu, un effort hors de la plage déclarée ou un fournisseur sans variable
+  d'environnement renseignée laissent la session partir. Le harnais préfère ici une session qui tourne
+  avec un avertissement à un lancement refusé sur une table mal tenue — choix inverse de celui fait
+  pour un nom d'exécuteur inconnu, où l'erreur est silencieuse une fois la session partie.
 **2026-09-04 — synchronisation du harnais depuis le framework public (`origin/main`, dépôt `Movida/holon`).** Cette section (§16 entière, plus la table T1-T7 en cas de recoupement futur et le format `CONFIG.md` §9.1) reflète désormais le lanceur/hooks du framework public plutôt qu'une version antérieure propre à cette mission : `resolveOverrides`/« Overrides hiérarchiques » (§9.1), jamais dogfoodable par la holarchie elle-même (§15, décision git-branches) et déjà signalé comme risqué par sa propre proposition, a été retiré plutôt que corrigé ; `presetWorking`/la ligne « démarrée » de `SESSIONS.md` ont été retirés avec lui (limite reformulée ci-dessus, pas résolue) ; `wake-guard` a été ajouté (garde-fou contre l'état périmé injecté à la ré-incarnation — la friction que `concepteur/holon-d2` avait elle-même diagnostiquée en itération 4, `docs/archive/mission-holon-v2/concepteur/JOURNAL.md`) ; le bug de `launchWithRelaunches` qui réutilisait un lancement figé d'une ré-incarnation à l'autre a été corrigé ; `--disallowedTools` (motifs relatifs, `Write` et `Edit`) et `permissions.deny` défendent maintenant en profondeur le refus d'écriture sous `framework/`, qui ne tenait plus que par la discipline de l'instance ; `--add-dir` a été ajouté à la surface CLI. Détail complet et arbitrage : `mission/registry/DECISIONS.md`, entrée du même jour.
 
 ---

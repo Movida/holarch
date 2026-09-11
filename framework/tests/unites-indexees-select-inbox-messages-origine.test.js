@@ -13,6 +13,14 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const SPAWN_JS_SRC = path.join(__dirname, '..', 'bin', 'holarch-spawn.js');
+// executeurs/ : holarch-spawn.js charge `require('./executeurs')` (chantier 9, volet 1) — sans ce
+// répertoire dans le sandbox, le require du lanceur échoue en MODULE_NOT_FOUND. Copié récursivement,
+// comme reveil.js ci-dessous, jamais modifié par ce chantier : simple fixture de test.
+const EXECUTEURS_SRC = path.join(__dirname, '..', 'bin', 'executeurs');
+// catalogue.js : même raison (chantier 9, volet 2 — `require('./catalogue')`).
+const CATALOGUE_SRC = path.join(__dirname, '..', 'bin', 'catalogue.js');
+// gardes/ : même raison (chantier 9, volet 4 — `require('./gardes/git')`, garde a posteriori §11.4).
+const GARDES_SRC = path.join(__dirname, '..', 'bin', 'gardes');
 // reveil.js n'est pas modifié par ce chantier : simple fixture, retrouvée en remontant depuis ce
 // fichier jusqu'à la racine du dépôt réel (celle qui contient framework/bin/reveil.js), plutôt qu'un
 // nombre fixe de `..` — robuste à un déplacement du paquet de livraison dans l'arborescence mission/.
@@ -60,6 +68,9 @@ function makeRoot() {
   const w = (rel, content) => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, content); };
   w('framework/bin/holarch-spawn.js', fs.readFileSync(SPAWN_JS_SRC, 'utf8'));
   w('framework/bin/reveil.js', fs.readFileSync(REVEIL_SRC, 'utf8'));
+  fs.cpSync(EXECUTEURS_SRC, path.join(root, 'framework', 'bin', 'executeurs'), { recursive: true });
+  w('framework/bin/catalogue.js', fs.readFileSync(CATALOGUE_SRC, 'utf8'));
+  fs.cpSync(GARDES_SRC, path.join(root, 'framework', 'bin', 'gardes'), { recursive: true });
   w('tools/message-lint/message-lint.js', fs.readFileSync(MESSAGE_LINT_SRC, 'utf8'));
   w('mission/x/MEMORY.md', '# Mémoire\n## État courant\nOK.\n');
   w('mission/x/OUTBOX.md', '# Boîte sortie\n');

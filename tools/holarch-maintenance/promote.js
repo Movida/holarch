@@ -123,6 +123,19 @@ function main() {
     return;
   }
 
+  // P2 (rapport holarch-fournisseurs, 2026-09-11) : réconciliation manifeste ↔ fichiers du paquet. Un fichier ajouté sous
+  // cible-*/ mais oublié dans cibles[] passait en silence, dry-run vert compris (le test du câblage du garde a failli ne
+  // jamais être promu). cible-docs/ est exclu : ses fragments s'insèrent à la main.
+  const declares = new Set(manifest.cibles.map((c) => c.depuis));
+  const oublies = [];
+  const marcher = (dir, rel) => { for (const ent of fs.readdirSync(dir, { withFileTypes: true })) { const r = `${rel}/${ent.name}`; if (ent.isDirectory()) marcher(path.join(dir, ent.name), r); else if (!declares.has(r)) oublies.push(r); } };
+  for (const ent of fs.readdirSync(dossierPaquetAbsolu, { withFileTypes: true })) if (ent.isDirectory() && ent.name.startsWith('cible-') && ent.name !== 'cible-docs') marcher(path.join(dossierPaquetAbsolu, ent.name), ent.name);
+  const introuvables = manifest.cibles.filter((c) => !fs.existsSync(path.join(dossierPaquetAbsolu, c.depuis))).map((c) => c.depuis);
+  if (oublies.length || introuvables.length) {
+    process.stderr.write(`MANIFEST.json désaccordé avec le paquet : ${oublies.length ? `${oublies.length} fichier(s) sous cible-*/ absent(s) de cibles[] (${oublies.join(', ')})` : ''}${oublies.length && introuvables.length ? ' ; ' : ''}${introuvables.length ? `${introuvables.length} cible(s) sans fichier dans le paquet (${introuvables.join(', ')})` : ''}\n`);
+    process.exitCode = 1;
+    return;
+  }
   const depotReel = process.cwd();
 
   const catFile = executer('git', ['cat-file', '-e', manifest.shaBase], { cwd: depotReel });

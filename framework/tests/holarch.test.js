@@ -9,6 +9,9 @@ const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const launcher = require(path.join(ROOT, 'framework', 'bin', 'holarch-spawn.js'));
+const executeurs = require(path.join(ROOT, 'framework', 'bin', 'executeurs'));
+/** Sortie brute d'une session `claude-code` → Resultat normalisé, comme le fait `runOnce`. */
+const normaliser = (stdout) => executeurs.resoudre('claude-code').normaliser({ stdout });
 const HOOKS = path.join(ROOT, 'framework', 'hooks', 'holarch-hooks.js');
 
 const CONFIG = `# Configuration — mission : test-harnais
@@ -142,7 +145,10 @@ test('resolveProfile : profil exploration (fable/xhigh par défaut) et effort ju
 test('prepareLaunch : arguments CLI, prompts injectés, environnement des hooks', () => {
   const root = makeRoot();
   const l = launcher.prepareLaunch(root, 'concepteur/enfant', {});
-  const a = l.args;
+  // Depuis l'extraction des exécuteurs (chantier 9), l'intention de lancement ne porte plus
+  // d'arguments : ceux-ci sont construits par l'exécuteur, et `apercuCommande` les montre sans
+  // lancer de session — c'est aussi ce qu'imprime `--dry-run`.
+  const a = launcher.apercuCommande(l).args;
   const val = (flag) => a[a.indexOf(flag) + 1];
   assert.equal(val('--model'), 'sonnet');
   assert.equal(val('--effort'), 'low');
@@ -175,9 +181,10 @@ test('prepareLaunch : arguments CLI, prompts injectés, environnement des hooks'
   try { assert.equal(launcher.prepareLaunch(root, 'concepteur/enfant', {}).env.GIT_AUTHOR_NAME, 'Quelqu\'un'); } finally { if (prevName === undefined) delete process.env.GIT_AUTHOR_NAME; else process.env.GIT_AUTHOR_NAME = prevName; }
   assert.equal(l.env.HOLARCH_CONTEXT_LIMIT, '240000'); // défaut 1.13.0 (180k → 240k, décision 39, diagnostic du 2026-09-11)
   const withDirs = launcher.prepareLaunch(root, 'concepteur/enfant', { addDir: ['/tmp/depot-externe', 'relatif'] });
-  const dirArgs = withDirs.args.reduce((acc, cur, i) => (withDirs.args[i - 1] === '--add-dir' ? acc.concat(cur) : acc), []);
+  const withDirsArgs = launcher.apercuCommande(withDirs).args;
+  const dirArgs = withDirsArgs.reduce((acc, cur, i) => (withDirsArgs[i - 1] === '--add-dir' ? acc.concat(cur) : acc), []);
   assert.deepEqual(dirArgs, ['/tmp/depot-externe', path.resolve('relatif')]);
-  assert.deepEqual(launcher.prepareLaunch(root, 'concepteur/enfant', {}).args.filter((x) => x === '--add-dir'), []);
+  assert.deepEqual(launcher.apercuCommande(launcher.prepareLaunch(root, 'concepteur/enfant', {})).args.filter((x) => x === '--add-dir'), []);
   const b = launcher.prepareLaunch(root, 'concepteur', { bootstrap: true });
   assert.match(b.systemPrompt, /BOOTSTRAP de test/);
   assert.match(b.prompt, /Objectif de test/);
@@ -217,7 +224,11 @@ test('prepareLaunch : INBOX.md tronqué dans le prompt au-delà du seuil, avec n
 
 test('parseResultJson + appendSessionLine', () => {
   const root = makeRoot();
-  const res = launcher.parseResultJson('Warning: x\n{"type":"result","subtype":"success","session_id":"abc-123","total_cost_usd":0.5,"num_turns":7,"usage":{"input_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":4},"modelUsage":{"claude-sonnet-5":{}, "claude-haiku-4-5-20251001":{}},"permission_denials":[],"is_error":false}\n');
+  const stdout = 'Warning: x\n{"type":"result","subtype":"success","session_id":"abc-123","total_cost_usd":0.5,"num_turns":7,"usage":{"input_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3,"output_tokens":4},"modelUsage":{"claude-sonnet-5":{}, "claude-haiku-4-5-20251001":{}},"permission_denials":[],"is_error":false}\n';
+  // `parseResultJson` reste exportée par compatibilité et rend toujours l'objet brut du CLI…
+  assert.equal(launcher.parseResultJson(stdout).session_id, 'abc-123');
+  // …mais SESSIONS.md est désormais écrit depuis le Resultat normalisé, seul objet que le lanceur lise.
+  const res = normaliser(stdout);
   assert.equal(res.session_id, 'abc-123');
   launcher.appendSessionLine(root, 'test-harnais', 'concepteur/enfant', { modele: 'sonnet', effort: 'low' }, res, 65000, 'DELIVERED');
   const s = fs.readFileSync(path.join(root, 'mission', 'registry', 'SESSIONS.md'), 'utf8');
@@ -227,7 +238,7 @@ test('parseResultJson + appendSessionLine', () => {
 
 test('appendSessionLine : coût par modèle si une délégation Agent en a introduit un second (haiku filtré)', () => {
   const root = makeRoot();
-  const res = launcher.parseResultJson('{"type":"result","subtype":"success","session_id":"xyz-789","total_cost_usd":1.5649,"num_turns":15,"usage":{},"modelUsage":{"claude-opus-5":{"costUSD":1.2936},"claude-sonnet-5":{"costUSD":0.2713},"claude-haiku-4-5-20251001":{"costUSD":0.0001}},"permission_denials":[],"is_error":false}\n');
+  const res = normaliser('{"type":"result","subtype":"success","session_id":"xyz-789","total_cost_usd":1.5649,"num_turns":15,"usage":{},"modelUsage":{"claude-opus-5":{"costUSD":1.2936},"claude-sonnet-5":{"costUSD":0.2713},"claude-haiku-4-5-20251001":{"costUSD":0.0001}},"permission_denials":[],"is_error":false}\n');
   launcher.appendSessionLine(root, 'test-harnais', 'concepteur/enfant', { modele: 'opus', effort: 'high' }, res, 1000, 'DELIVERED');
   const s = fs.readFileSync(path.join(root, 'mission', 'registry', 'SESSIONS.md'), 'utf8');
   const row = s.split('\n').find((l) => l.includes('xyz-789'));
@@ -552,7 +563,7 @@ test('buildUserPrompt sur le corpus archivé (concepteur de holon-v2, état fina
   assert.ok(tailles.JOURNAL <= 8000 && tailles.PROGRESS <= 4000 && tailles.INBOX <= 12000, JSON.stringify(tailles));
 });
 
-test('appendSessionLine : colonne de réveil (caractères système / utilisateur), en-tête à douze colonnes sur fichier neuf', () => {
+test('appendSessionLine : colonne de réveil (caractères système / utilisateur), en-tête à treize colonnes sur fichier neuf', () => {
   const root = makeRoot();
   const res = launcher.parseResultJson('{"type":"result","subtype":"success","session_id":"col-11","total_cost_usd":0.1,"num_turns":1,"usage":{},"permission_denials":[],"is_error":false}\n');
   const meta = { modele: 'opus', effort: 'high' };
@@ -560,10 +571,12 @@ test('appendSessionLine : colonne de réveil (caractères système / utilisateur
   const p = path.join(root, 'mission', 'registry', 'SESSIONS.md');
   const s = fs.readFileSync(p, 'utf8');
   const entete = s.split('\n').find((l) => l.startsWith('| Date (UTC)'));
-  assert.equal(entete.split('|').length - 2, 12);
+  // Treize depuis le chantier 9 (volet 2) : « Fournisseur / modèle réel » est ajoutée en fin de ligne,
+  // comme l'a été « Contexte » — sans catalogue, la cellule vaut « — ».
+  assert.equal(entete.split('|').length - 2, 13);
   assert.match(entete, /\| Réveil \(car\. système \/ utilisateur\) \|/);
-  assert.match(entete, /\| Contexte \(départ \/ max\) \|$/);
-  assert.match(s.split('\n').find((l) => l.includes('col-11')), /\| DELIVERED \| 66804 \/ 4107 \| — \/ — \|$/);
+  assert.match(entete, /\| Contexte \(départ \/ max\) \| Fournisseur \/ modèle réel \|$/);
+  assert.match(s.split('\n').find((l) => l.includes('col-11')), /\| DELIVERED \| 66804 \/ 4107 \| — \/ — \| — \|$/);
   launcher.appendSessionLine(root, 'test-harnais', 'concepteur', meta, res, 10, 'DELIVERED');
-  assert.match(fs.readFileSync(p, 'utf8').trim().split('\n').pop(), /\| DELIVERED \| — \| — \/ — \|$/);
+  assert.match(fs.readFileSync(p, 'utf8').trim().split('\n').pop(), /\| DELIVERED \| — \| — \/ — \| — \|$/);
 });

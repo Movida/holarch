@@ -114,6 +114,177 @@ function p90(nums) {
   return s[idx];
 }
 
+// « Coût USD » : « 1.2345 », « ≈ 1.2345 » (coût calculé par le catalogue de modèles quand l'exécuteur
+// ne le rapporte pas — chantier 9, volet 2) ou « ? ». Le « ≈ » est retiré avant lecture, mais compté
+// à part : une médiane dont la moitié des lignes est estimée ne se lit pas comme une médiane mesurée.
+function parseCoutCell(v) {
+  if (v === undefined) return { usd: null, estime: false };
+  const t = String(v).trim();
+  const estime = t.startsWith('≈');
+  const n = Number(t.replace('≈', '').replace(',', '.').trim());
+  return { usd: Number.isFinite(n) && t !== '' && t !== '?' && t !== '—' ? n : null, estime };
+}
+
+// « anthropic / claude-opus-5 » → { fournisseur, modele } ; « — » ou cellule absente → fournisseur
+// « non renseigné » : une ligne de SESSIONS.md antérieure au chantier 9 n'a pas cette colonne, et une
+// ligne d'un modèle hors catalogue l'a vide. Les deux cas restent visibles dans le rapport plutôt que
+// silencieusement fondus dans le fournisseur majoritaire.
+const FOURNISSEUR_INCONNU = 'non renseigné';
+function parseFournisseurCell(v) {
+  const t = String(v === undefined ? '' : v).trim();
+  if (t === '' || t === '—' || t === '?') return { fournisseur: FOURNISSEUR_INCONNU, modele: null };
+  const parts = t.split('/').map((p) => p.trim()).filter(Boolean);
+  return { fournisseur: parts[0] || FOURNISSEUR_INCONNU, modele: parts[1] || null };
+}
+
+// Ventilation par fournisseur (chantier 9, §11.2 : « le banc ventile contexte et coût par fournisseur
+// et par type d'unité ; c'est la mesure qui fondera les choix de modèle »). Retourne null quand la
+// colonne n'existe pas — un SESSIONS.md antérieur ne produit alors aucune section, pas une section vide.
+function ventilerParFournisseur(headers, rows) {
+  const colF = findCol(headers, ['fournisseur']);
+  if (!colF) return null;
+  const colCout = findCol(headers, ['coût', 'cout']);
+  const colTours = findCol(headers, ['tours']);
+  const colTokens = findCol(headers, ['tokens']);
+  const colContexteInstant = findCol(headers, ['contexte (départ', 'contexte (depart']);
+  const groupes = new Map();
+  for (const r of rows) {
+    const { fournisseur, modele } = parseFournisseurCell(r[colF]);
+    if (!groupes.has(fournisseur)) groupes.set(fournisseur, { fournisseur, nSessions: 0, couts: [], nEstimes: 0, tours: [], tokens: [], maxs: [], modeles: new Map() });
+    const g = groupes.get(fournisseur);
+    g.nSessions += 1;
+    const cle = modele || FOURNISSEUR_INCONNU;
+    g.modeles.set(cle, (g.modeles.get(cle) || 0) + 1);
+    if (colCout) {
+      const c = parseCoutCell(r[colCout]);
+      if (c.usd !== null) g.couts.push(c.usd);
+      if (c.estime) g.nEstimes += 1;
+    }
+    if (colTours) { const n = parseNumberCell(r[colTours]); if (n !== null) g.tours.push(n); }
+    if (colTokens) { const n = parseTokensCell(r[colTokens]); if (n !== null) g.tokens.push(n); }
+    if (colContexteInstant) { const c = parseContexteInstantCell(r[colContexteInstant]); if (c !== null) g.maxs.push(c.max); }
+  }
+  return [...groupes.values()]
+    .map((g) => ({
+      fournisseur: g.fournisseur,
+      nSessions: g.nSessions,
+      coutTotal: g.couts.length ? g.couts.reduce((a, n) => a + n, 0) : null,
+      coutMediane: median(g.couts),
+      nCouts: g.couts.length,
+      nEstimes: g.nEstimes,
+      toursMediane: median(g.tours),
+      contexteTokensMediane: median(g.tokens),
+      contexteMaxP90: p90(g.maxs),
+      nContexte: g.maxs.length,
+      modeles: [...g.modeles.entries()].map(([modele, n]) => ({ modele, nSessions: n })).sort((a, b) => b.nSessions - a.nSessions),
+    }))
+    .sort((a, b) => b.nSessions - a.nSessions);
+}
+
+// ---------------------------------------------------------------------------
+// Ventilation par type d'unité (fiches memoire/U<n>-….md, module unites-indexees)
+// ---------------------------------------------------------------------------
+// §11.2 parle d'une « colonne `type` de la fiche d'unité, déjà présente » : elle ne l'est pas dans
+// framework/templates/UNITE.template.md (au 2026-09-11, l'en-tête porte id, date, critere, resultat,
+// preuve, commit, tags — et `mode: directe|déléguée` quand delegation-intra-session est actif). Plutôt
+// que d'inventer une colonne ou de ne rien ventiler, la lecture est tolérante et l'ordre de préférence
+// est explicite : `type:` si l'instance en écrit un, sinon `mode:`, sinon « non renseigné ».
+function enteteFicheUnite(texte) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(texte || '').replace(/^(<!--[\s\S]*?-->\s*)/, ''));
+  if (!m) return {};
+  const e = {};
+  for (const l of m[1].split('\n')) {
+    const kv = /^([a-zA-Zé_-]+)\s*:\s*(.*)$/.exec(l.trim());
+    if (kv) e[kv[1].toLowerCase()] = kv[2].trim();
+  }
+  return e;
+}
+
+const TYPE_UNITE_INCONNU = 'non renseigné';
+function typeDUnite(entete) {
+  const brut = (entete.type || entete.mode || '').trim();
+  return brut === '' || brut === '—' ? TYPE_UNITE_INCONNU : brut.toLowerCase();
+}
+
+// « contexte: 48690 → 61230 » ou « contexte: 48690 / 61230 » (module delegation-intra-session : « le
+// contexte de ta propre session avant et après cette unité ») → delta, ou null si absent/illisible.
+function deltaContexteFiche(entete) {
+  const t = String(entete.contexte || '').trim();
+  if (!t) return null;
+  const parts = t.split(/→|->|\//).map((p) => Number(String(p).replace(/[^\d.]/g, '')));
+  if (parts.length < 2 || parts.some((n) => !Number.isFinite(n))) return null;
+  return parts[1] - parts[0];
+}
+
+/** Toutes les fiches d'unité sous <racineMission> : [{ instance, fichier, entete }]. */
+function lireFichesUnites(racineMission) {
+  const fiches = [];
+  const visiter = (dir, profondeur) => {
+    if (profondeur > 6) return;
+    let entrees;
+    try { entrees = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entrees) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name === '.holarch' || e.name === 'node_modules' || e.name === 'graveyard') continue;
+        if (e.name === 'memoire') {
+          for (const f of fs.readdirSync(p)) {
+            if (!/^U\d+[a-z]*-.*\.md$/.test(f)) continue; // INDEX.md et tout le reste sont ignorés
+            let texte;
+            try { texte = fs.readFileSync(path.join(p, f), 'utf8'); } catch (_) { continue; }
+            fiches.push({
+              instance: path.relative(racineMission, dir) || '.',
+              fichier: path.join(p, f),
+              entete: enteteFicheUnite(texte),
+            });
+          }
+          continue;
+        }
+        visiter(p, profondeur + 1);
+      }
+    }
+  };
+  visiter(racineMission, 0);
+  return fiches;
+}
+
+function ventilerParTypeUnite(fiches) {
+  if (!fiches || !fiches.length) return null;
+  const groupes = new Map();
+  for (const f of fiches) {
+    const t = typeDUnite(f.entete);
+    if (!groupes.has(t)) groupes.set(t, { type: t, n: 0, resultats: { PASS: 0, PARTIEL: 0, FAIL: 0, autre: 0 }, instances: new Set(), deltas: [] });
+    const g = groupes.get(t);
+    g.n += 1;
+    const res = String(f.entete.resultat || '').toUpperCase();
+    if (res === 'PASS' || res === 'PARTIEL' || res === 'FAIL') g.resultats[res] += 1; else g.resultats.autre += 1;
+    g.instances.add(f.instance);
+    const d = deltaContexteFiche(f.entete);
+    if (d !== null) g.deltas.push(d);
+  }
+  return [...groupes.values()]
+    .map((g) => ({
+      type: g.type,
+      n: g.n,
+      resultats: g.resultats,
+      nInstances: g.instances.size,
+      deltaContexteMediane: median(g.deltas),
+      nDeltas: g.deltas.length,
+    }))
+    .sort((a, b) => b.n - a.n);
+}
+
+/** mission/registry/SESSIONS.md → mission/ ; tout autre chemin → null (le banc reste utilisable hors dépôt). */
+function racineMissionDepuisSessions(fichierPath) {
+  try {
+    const abs = path.resolve(fichierPath);
+    const dir = path.dirname(abs);
+    if (path.basename(dir) !== 'registry') return null;
+    const racine = path.dirname(dir);
+    return fs.existsSync(racine) ? racine : null;
+  } catch (_) { return null; }
+}
+
 // ---------------------------------------------------------------------------
 // --calibrer
 // ---------------------------------------------------------------------------
@@ -122,8 +293,9 @@ function p90(nums) {
 // part_contexte_fixe, plutôt qu'une lecture de mission/framework/CONFIG.md.
 const SEUIL_CONTEXTE_TOKENS_DEFAUT = 120000;
 
-function calibrer(text) {
+function calibrer(text, options) {
   const { headers, rows } = parseSessionsMd(text);
+  const racineUnites = (options && options.racineUnites) || null;
   const colCout = findCol(headers, ['coût', 'cout']);
   const colTours = findCol(headers, ['tours']);
   const colTokens = findCol(headers, ['tokens']);
@@ -131,7 +303,7 @@ function calibrer(text) {
   const colReveil = findCol(headers, ['réveil', 'reveil']);
   const colContexteInstant = findCol(headers, ['contexte (départ', 'contexte (depart']);
 
-  const couts = colCout ? rows.map((r) => parseNumberCell(r[colCout])).filter((n) => n !== null) : [];
+  const couts = colCout ? rows.map((r) => parseCoutCell(r[colCout]).usd).filter((n) => n !== null) : [];
   const tours = colTours ? rows.map((r) => parseNumberCell(r[colTours])).filter((n) => n !== null) : [];
   const tokens = colTokens ? rows.map((r) => parseTokensCell(r[colTokens])).filter((n) => n !== null) : [];
   const reveilChars = colReveil ? rows.map((r) => parseReveilCell(r[colReveil])).filter((n) => n !== null) : [];
@@ -164,7 +336,17 @@ function calibrer(text) {
     : (tokens.length ? Math.ceil(p90(tokens) / 5000) * 5000 : null);
   const partContexteFixe = departs.length ? median(departs) / SEUIL_CONTEXTE_TOKENS_DEFAUT : null;
 
+  const parFournisseur = ventilerParFournisseur(headers, rows);
+  const fichesUnites = racineUnites ? lireFichesUnites(racineUnites) : [];
+  const parTypeUnite = ventilerParTypeUnite(fichesUnites);
+
   return {
+    ventilation: {
+      parFournisseur,
+      parTypeUnite,
+      nFichesUnites: fichesUnites.length,
+      racineUnites,
+    },
     fichier: {
       nSessions: rows.length,
       nInstances: parInstance.size,
@@ -245,6 +427,27 @@ function formatCalibrerReport(fichierPath, r, subagents) {
     l.push('  coût USD des sous-agents — pas de coût calculé, motif : bench.js ne contient aucune table de tarification ($/token par');
     l.push('                           modèle) ; le coût de l\'instance ci-dessus vient uniquement de la colonne Coût USD de SESSIONS.md,');
     l.push('                           jamais recalculé depuis des tokens — appliquer la même règle aux sous-agents plutôt que d\'inventer un prix.');
+  }
+  if (r.ventilation && r.ventilation.parFournisseur) {
+    l.push('');
+    l.push('Ventilation par fournisseur (colonne « Fournisseur / modèle réel ») :');
+    for (const g of r.ventilation.parFournisseur) {
+      const modeles = g.modeles.map((m) => `${m.modele} ×${m.nSessions}`).join(', ');
+      l.push(`  ${g.fournisseur} — ${g.nSessions} session(s) ; coût total ${fmt(g.coutTotal)} USD, médiane ${fmt(g.coutMediane)} (n=${g.nCouts}${g.nEstimes ? `, dont ${g.nEstimes} estimé(s) « ≈ » par le catalogue` : ''})`);
+      l.push(`      contexte max p90 ${fmt(g.contexteMaxP90)} (n=${g.nContexte}), contexte tokens médiane ${fmt(g.contexteTokensMediane)}, tours médiane ${fmt(g.toursMediane)}`);
+      l.push(`      modèles réels : ${modeles || '—'}`);
+    }
+  }
+  if (r.ventilation && r.ventilation.parTypeUnite) {
+    l.push('');
+    l.push(`Ventilation par type d'unité (${r.ventilation.nFichesUnites} fiche(s) memoire/U<n>-….md sous ${r.ventilation.racineUnites}) :`);
+    for (const g of r.ventilation.parTypeUnite) {
+      l.push(`  ${g.type} — ${g.n} unité(s), ${g.resultats.PASS} PASS / ${g.resultats.PARTIEL} PARTIEL / ${g.resultats.FAIL} FAIL${g.resultats.autre ? ` / ${g.resultats.autre} sans résultat lisible` : ''}, ${g.nInstances} instance(s)`);
+      if (g.nDeltas) l.push(`      Δ contexte médian ${fmt(g.deltaContexteMediane)} tokens (n=${g.nDeltas})`);
+    }
+    l.push("  type d'unité : clé `type:` de l'en-tête de fiche si l'instance en écrit une, sinon `mode:` (directe/déléguée) — voir README.");
+    l.push('  coût par unité — non calculable : SESSIONS.md compte par session, une session porte 1 à 3 unités et ne dit pas');
+    l.push("                   laquelle a coûté quoi. Le rapporter par type d'unité supposerait une répartition inventée.");
   }
   return l.join('\n');
 }
@@ -391,7 +594,7 @@ function calculerMetriques(root) {
   const colCout = findCol(headers, ['coût', 'cout']);
   const colTours = findCol(headers, ['tours']);
   const colContexteInstant = findCol(headers, ['contexte (départ', 'contexte (depart']);
-  const couts = colCout ? rows.map((r) => parseNumberCell(r[colCout])).filter((n) => n !== null) : [];
+  const couts = colCout ? rows.map((r) => parseCoutCell(r[colCout]).usd).filter((n) => n !== null) : [];
   const tours = colTours ? rows.map((r) => parseNumberCell(r[colTours])).filter((n) => n !== null) : [];
   const maxs = colContexteInstant
     ? rows.map((r) => parseContexteInstantCell(r[colContexteInstant])).filter((c) => c !== null).map((c) => c.max)
@@ -824,7 +1027,7 @@ function usage() {
     'Usage :',
     '  node bench.js --a-sec',
     '  node bench.js --reel <mission> --budget-usd <n>',
-    '  node bench.js --calibrer <fichier-SESSIONS.md>',
+    '  node bench.js --calibrer <fichier-SESSIONS.md> [--unites <dossier mission/>]',
     '  node bench.js --calibrer --transcriptions <dossier-de-*.jsonl>',
   ].join('\n');
 }
@@ -866,7 +1069,11 @@ function main(argv) {
         return;
       }
     }
-    const r = calibrer(text);
+    const unitesIdx = args.indexOf('--unites');
+    const racineUnites = unitesIdx !== -1
+      ? args[unitesIdx + 1]
+      : (transIdx !== -1 ? null : racineMissionDepuisSessions(fichierPath));
+    const r = calibrer(text, { racineUnites });
     process.stdout.write(`${formatCalibrerReport(fichierPath, r, subagents)}\n`);
     return;
   }
@@ -901,6 +1108,15 @@ module.exports = {
   p90,
   calibrer,
   formatCalibrerReport,
+  parseCoutCell,
+  parseFournisseurCell,
+  ventilerParFournisseur,
+  enteteFicheUnite,
+  typeDUnite,
+  deltaContexteFiche,
+  lireFichesUnites,
+  ventilerParTypeUnite,
+  racineMissionDepuisSessions,
   trouverRacineDepot,
   resoudreCible,
   gitHashFramework,

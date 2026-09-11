@@ -3,8 +3,11 @@
 /**
  * holarch-spawn.js — lanceur d'instance HOLARCH (framework v1.1).
  *
- * Incarne une instance (ou exécute le bootstrap) via `claude -p` avec les options
- * qui rendent la session économe et bornée :
+ * Incarne une instance (ou exécute le bootstrap) via l'**exécuteur** sélectionné
+ * (`bin/executeurs/`, `claude-code` par défaut), avec ce qui rend la session économe et bornée.
+ * Tout ce qui est propre à un fournisseur — nom du binaire, arguments, champs du résultat,
+ * reconnaissance d'une limite 429 — vit dans `bin/executeurs/<nom>.js` : ce fichier n'en connaît
+ * rien et ne manipule que l'intention de session et le `Resultat` normalisé (chantier 9, volet 1) :
  *   - modèle / effort résolus depuis CONFIG.md (politique par profil) et la fiche registre (profil, et effort
  *     jugé par instance — ligne `Effort`) ; changement de régime décidé par l'instance entre deux sessions
  *     (fiche modifiée + hibernation volontaire) → ré-incarnation sur le nouveau régime, décomptée à part ;
@@ -15,8 +18,9 @@
  *     si le module mémoire `unites-indexees` est actif : ROLE, MEMORY, STATUS, <reveil>, INBOX (sélection
  *     ciblée), memoire/INDEX.md — ni JOURNAL.md ni PROGRESS.md (chantier 1, mémoire adressée) ;
  *   - outils restreints, skills/MCP désactivés, mémoire automatique coupée ;
- *   - fusibles durs : --max-turns, --max-budget-usd, --autocompact, hooks (framework/hooks/) ;
- *   - résultat JSON exploité : coût, tokens, tours, session → registry/SESSIONS.md (append-only).
+ *   - fusibles durs : plafonds de tours et de dépense, compactage, hooks (framework/hooks/),
+ *     traduits en options concrètes par l'exécuteur — et seulement s'il en a la capacité ;
+ *   - `Resultat` normalisé exploité : coût, tokens, tours, session → registry/SESSIONS.md (append-only).
  *
  * Usage :
  *   node framework/bin/holarch-spawn.js <chemin-instance> [options]
@@ -26,7 +30,7 @@
  *           (--add-dir répétable : un dépôt externe accessible en lecture/écriture par la session,
  *           en plus de la racine HOLARCH — cf. docs/holarch.md §16.1)
  * Codes de sortie : 0 état terminal atteint (≠ WORKING) · 1 erreur du lanceur ·
- *                   2 session terminée avec STATUS=WORKING ou erreur du CLI ·
+ *                   2 session terminée avec STATUS=WORKING ou erreur de l'exécuteur ·
  *                   3 hibernations volontaires épuisées (STATUS encore WORKING).
  * Aucune dépendance hors Node.js (déjà requis par Claude Code).
  */
@@ -35,6 +39,15 @@ const path = require('path');
 const os = require('os');
 const { spawnSync, spawn } = require('child_process');
 const reveil = require('./reveil');
+// Exécuteurs (chantier 9, volet 1) : tout ce qui est propre à un fournisseur de modèles — nom du
+// binaire, arguments, champs du JSON de résultat, motif de limite — vit sous `bin/executeurs/`.
+// Le lanceur ne connaît que le contrat { nom, capacites, preparer, executer, normaliser, limite }.
+const executeurs = require('./executeurs');
+// Catalogue de modèles (chantier 9, volet 2) : les deux tables facultatives `## Fournisseurs` et
+// `## Catalogue de modèles` de CONFIG.md. Module pur : il traduit du texte en données et ne sait
+// rien du lanceur. Tables absentes ⇒ catalogue vide ⇒ comportement d'un CONFIG.md 1.11, inchangé.
+const catalogue = require('./catalogue');
+const gardeGit = require('./gardes/git');
 
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const VALID_PERMISSION_MODES = ['acceptEdits', 'default', 'manual', 'plan', 'auto', 'dontAsk', 'bypassPermissions'];
@@ -46,6 +59,9 @@ const DEFAULTS = {
   effort_cli: 'high',
   modele_repli: '',
   permission_mode: 'acceptEdits',
+  // Exécuteur par défaut de la mission. Vide ⇒ sélection par `executeurs.nomPour` (fournisseur du
+  // catalogue, sinon l'exécuteur par défaut). Un nom inconnu fait échouer le lancement, franchement.
+  executeur: '',
   // 1.11.0 : 5 → 8 USD, 120k → 180k et 180k → 400k. Mesuré sur trois missions (2026-09-11) : un enfant démarre à ~69k,
   // clôt vers seuil + 25k ; à 250k le fusible n'a jamais sonné et c'est le budget qui arbitrait (holarch-delegation).
   budget_usd_par_session: '8',
@@ -277,7 +293,7 @@ function parseConfig(text) {
 }
 
 function parseFiche(text) {
-  const f = { profil: '', effort: '', alloue: null, consomme: null, statut: '' };
+  const f = { profil: '', effort: '', modele: '', alloue: null, consomme: null, statut: '' };
   if (!text) return f;
   const row = (label) => {
     const m = text.match(new RegExp(`^\\|\\s*${label}\\s*\\|\\s*(.*?)\\s*\\|\\s*$`, 'mi'));
@@ -285,6 +301,10 @@ function parseFiche(text) {
   };
   f.profil = row('Profil').toLowerCase();
   f.effort = row('Effort').toLowerCase(); // optionnel : effort jugé pour la tâche (direct-spawn), prime sur celui du profil
+  // Optionnel (chantier 9, volet 2) : identifiant du catalogue de modèles posé par le parent au spawn
+  // (« choisis le modèle de l'enfant selon sa tâche, sinon la politique décide »). La casse est
+  // conservée : un identifiant de catalogue peut en porter (`opus@openrouter`, `Sonnet-4.5`).
+  f.modele = row('Mod[èe]le');
   f.statut = row('Statut');
   const b = row('Budget allou[ée] / consomm[ée]').match(/(\d+)\s*\/\s*(\d+)/);
   if (b) { f.alloue = Number(b[1]); f.consomme = Number(b[2]); }
@@ -318,26 +338,76 @@ function resolveParams(cfg) {
 function resolveProfile(cfg, fiche, chemin, overrides) {
   const depth = chemin.split('/').length;
   let profil = (overrides.profil || fiche.profil || (depth === 1 ? 'conception' : 'execution')).toLowerCase();
-  // Précédence : option CLI > ligne `Effort` de la fiche registre (effort seulement — jugé par le parent pour la
-  // tâche, ou changé par l'instance elle-même : direct-spawn) > table « Politique de modèle » de CONFIG.md >
+  // Précédence : option CLI > lignes `Modèle` et `Effort` de la fiche registre (jugées par le parent pour la
+  // tâche, ou changées par l'instance elle-même : direct-spawn) > table « Politique de modèle » de CONFIG.md >
   // modele_cli/effort_cli explicites de CONFIG.md > politique par défaut du module (DEFAULT_POLICY) > DEFAULTS.
-  // Le modèle, lui, vient toujours du profil (ou de l'option CLI).
+  // La ligne `Modèle` (chantier 9, volet 2) nomme un identifiant du catalogue ; elle est facultative, et son
+  // absence redonne exactement le comportement antérieur (le modèle vient du profil).
   const explicit = cfg.params || {};
   let modele = explicit.modele_cli || (DEFAULT_POLICY[profil] && DEFAULT_POLICY[profil].modele) || DEFAULTS.modele_cli;
   let effort = explicit.effort_cli || (DEFAULT_POLICY[profil] && DEFAULT_POLICY[profil].effort) || DEFAULTS.effort_cli;
   let origineEffort = explicit.effort_cli ? 'config' : 'defaut';
+  let origineModele = explicit.modele_cli ? 'config' : 'defaut';
   const row = (cfg.policy || {})[profil];
-  if (row) { modele = row.modele || modele; if (row.effort) { effort = row.effort; origineEffort = 'config'; } }
+  if (row) { if (row.modele) { modele = row.modele; origineModele = 'config'; } if (row.effort) { effort = row.effort; origineEffort = 'config'; } }
   else if (!DEFAULT_POLICY[profil]) profil = `${profil} (profil inconnu → défauts)`;
+  if (fiche.modele) { modele = fiche.modele; origineModele = 'fiche'; }
   if (fiche.effort) {
     if (VALID_EFFORTS.includes(fiche.effort)) { effort = fiche.effort; origineEffort = 'fiche'; }
     else process.stderr.write(`HOLARCH ▸ ${chemin} ▸ effort « ${fiche.effort} » de la fiche registre non reconnu (valeurs : ${VALID_EFFORTS.join(', ')}) — ignoré, effort du profil conservé\n`);
   }
-  if (overrides.modele) modele = overrides.modele;
+  if (overrides.modele) { modele = overrides.modele; origineModele = 'option'; }
   if (overrides.effort) { effort = overrides.effort; origineEffort = 'option'; }
   effort = String(effort).toLowerCase();
   if (!VALID_EFFORTS.includes(effort)) throw new Error(`effort invalide « ${effort} » (valeurs : ${VALID_EFFORTS.join(', ')})`);
-  return { profil, modele, effort, depth, origine_effort: origineEffort };
+  return { profil, modele, effort, depth, origine_effort: origineEffort, origine_modele: origineModele };
+}
+
+/**
+ * Complète le régime résolu par ce que le catalogue de modèles (volet 2) sait du modèle demandé :
+ * `fournisseur` (nom, ou null), `modele_reel` (ce qui sera réellement envoyé) et `tarif` (l'entrée de
+ * catalogue, pour le coût estimé). Catalogue vide ou identifiant hors catalogue ⇒ `fournisseur` null
+ * et `modele_reel` égal à l'identifiant : le lanceur se comporte alors exactement comme avant le
+ * chantier 9 (compatibilité ascendante d'un `CONFIG.md` 1.11).
+ * Les incohérences sont **signalées sans bloquer** (stderr) : une table mal remplie ne doit pas
+ * empêcher une session d'avoir lieu — `config-lint` est là pour la refuser, en amont et à froid.
+ */
+function enrichirMeta(meta, cat, chemin, opts) {
+  const entree = catalogue.modele(cat, meta.modele);
+  const f = catalogue.fournisseurDe(cat, meta.modele);
+  meta.modele_reel = catalogue.modeleReel(cat, meta.modele);
+  meta.fournisseur = f ? f.nom : null;
+  meta.tarif = entree || null;
+  // Marque portée par la session de repli (volet 3) jusqu'à la colonne « Fin » de SESSIONS.md.
+  meta.repli_depuis = (opts && opts.repliDepuis) || null;
+  if (entree && !catalogue.effortPermis(entree, meta.effort)) {
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ effort « ${meta.effort} » hors des paliers déclarés pour « ${meta.modele} » (${(entree.efforts || []).join(', ')}) — lancé tel quel\n`);
+  }
+  if (cat && (cat.aFournisseurs || cat.aCatalogue)) {
+    const ecarts = catalogue.verifierCatalogue(cat);
+    if (ecarts.length) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ catalogue de modèles incohérent : ${ecarts.join(' ; ')}\n`);
+  }
+  return meta;
+}
+
+/**
+ * Fiche de fournisseur transmise à l'exécuteur (`launch.fournisseur`) : ce que le catalogue déclare,
+ * plus l'URL et le jeton **lus dans l'environnement** aux variables nommées par la table (jamais
+ * committés, geste du mainteneur). null si le modèle n'a pas de fournisseur déclaré.
+ */
+function fournisseurPour(cat, meta, env) {
+  const f = catalogue.fournisseurDe(cat, meta.modele);
+  if (!f) return null;
+  return {
+    nom: f.nom,
+    executeur: f.executeur,
+    secours: f.secours,
+    modele_reel: meta.modele_reel,
+    url_var: f.url_var,
+    jeton_var: f.jeton_var,
+    url: f.url_var ? (env[f.url_var] || null) : null,
+    jeton: f.jeton_var ? (env[f.jeton_var] || null) : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +764,29 @@ function parametresEffectifs(root, cfg) {
   return `<parametres-effectifs note="valeurs en vigueur pour cette session — CONFIG.md sinon défaut du module ; les sections ## Paramètres des modules ne sont pas injectées, ceci les résume">\n${lignes.join('\n')}\n</parametres-effectifs>`;
 }
 
+/**
+ * Retire d'un `CONFIG.md` les sections `## Fournisseurs` et `## Catalogue de modèles` (chantier 9 §11.2).
+ * Ces deux tables sont des données du **lanceur** — traduire un identifiant de modèle en modèle réel,
+ * calculer un coût, nommer les variables d'environnement d'un jeton — jamais du contrat d'une instance :
+ * aucune règle du KERNEL ni d'un module ne s'y réfère, et une instance n'a pas à connaître les tarifs ni
+ * les noms de variables de jetons (moindre diffusion, et ~900 caractères de prompt système économisés à
+ * chaque réveil). Un `CONFIG.md` sans ces tables (format 1.11) est renvoyé inchangé.
+ */
+function elaguerSectionsLanceur(text) {
+  const estElaguee = (l) => /^##\s+(Fournisseurs|Catalogue de mod[èe]les)\s*$/.test(l.trim());
+  const out = [];
+  let skip = false;
+  for (const l of text.split('\n')) {
+    if (/^##\s/.test(l)) {
+      skip = estElaguee(l);
+      if (skip) while (out.length && out[out.length - 1].trim() === '') out.pop();
+    }
+    if (!skip) out.push(l);
+  }
+  const r = out.join('\n');
+  return r === '' || r.endsWith('\n') ? r : `${r}\n`;
+}
+
 function buildSystemPrompt(root, cfg, bootstrap) {
   const parts = [];
   parts.push(
@@ -709,9 +802,18 @@ function buildSystemPrompt(root, cfg, bootstrap) {
     const c = readIf(path.join(root, rel));
     parts.push(c === null ? `<fichier chemin="${rel}" note="INTROUVABLE sur disque"></fichier>` : fileBlock(rel, extraireEnTeteEtReglesInjectees(c), 'en-tête + Règles injectées seulement — texte complet sur disque, chantier 7 §9.2'));
   };
+  const pushConfig = () => {
+    const rel = 'framework/CONFIG.md';
+    const c = readIf(path.join(root, rel));
+    if (c === null) { parts.push(`<fichier chemin="${rel}" note="INTROUVABLE sur disque"></fichier>`); return; }
+    const reduit = elaguerSectionsLanceur(c);
+    parts.push(reduit === c
+      ? fileBlock(rel, c)
+      : fileBlock(rel, reduit, 'sections « Fournisseurs » et « Catalogue de modèles » retirées : données du lanceur, pas du contrat'));
+  };
   if (bootstrap) push('framework/BOOTSTRAP.md');
   push('framework/KERNEL.md');
-  push('framework/CONFIG.md');
+  pushConfig();
   if (bootstrap) push('framework/MANIFEST.md');
   const seen = new Set();
   for (const { categorie, module } of cfg.modules) {
@@ -732,8 +834,8 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg, extra
   const departPrecedent = bootstrap ? null : lastContexteDepart(root, chemin);
   const harnais = [
     `Harnais de cette session : profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}${meta.origine_effort === 'fiche' ? ' (posé dans ta fiche registre)' : ''}, au plus ${params.max_tours_par_session} tours et ${params.budget_usd_par_session} USD (tarif liste) ; un hook te préviendra si ton contexte dépasse ${Math.round(Number(params.seuil_contexte_tokens) / 1000)}k tokens — tu devras alors hiberner volontairement (KERNEL §5.8 : MEMORY.md complet, STATUS.md laissé à son état réel avec la note « hibernation volontaire (contexte) », commit, fin de session ; le lanceur te ré-incarne avec un contexte neuf tant que chaque session laisse une trace de progrès — une fiche d'unité ou un commit [${chemin}] — au plus ${params.relances_max} session(s) consécutive(s) sans progrès et ${params.sessions_max_par_instance} sessions en tout, après quoi il alerte ton parent).${departPrecedent ? ` Ta session précédente avait démarré avec un contexte de ${departPrecedent} tokens (colonne « Contexte (départ / max) » de registry/SESSIONS.md).` : ''}`,
-    `Ton modèle et ton effort sont fixés pour toute cette session ; changer de régime n'est possible qu'entre deux sessions (module d'orchestration, ON_PLAN) : ligne \`Profil\` ou \`Effort\` de ta propre fiche registre, justification dans JOURNAL.md et PROGRESS.md, puis hibernation volontaire avec la note « hibernation volontaire (changement de régime : <ancien> → <nouveau>) » — le lanceur te ré-incarne sur le nouveau régime (au plus ${params.changements_regime_max} fois, décompté à part des ré-incarnations de contexte).`,
-    "Commandes Bash exécutables sans approbation : git add/commit/mv/status/log/diff/show/branch/switch/merge (toujours depuis la racine, jamais `git -C`), mkdir, ls, wc, head, tail, grep, find, diff, date, echo, printf, pwd, python3, pytest, node, npm test, npm run, et `node framework/bin/holarch-spawn.js <chemin-enfant>` pour incarner un enfant. Deux causes de refus mesurées (un appel refusé sur dix tours, holarch-fournisseurs 2026-09-11), à éviter : écrire un fichier par redirection Bash (`>`, `>>`, heredoc — utilise Write ou Edit) et lire ou écrire par un chemin absolu hors de ton arbre de travail (utilise des chemins relatifs à ta racine). Une commande composée (`;`, `&&`, `|`) n'est acceptée que si chacun de ses segments l'est. Toute autre commande est refusée immédiatement (pas de blocage) : adapte-toi au lieu de réessayer. Toute écriture sous framework/ ou dans mission/OBJECTIVE.md est refusée mécaniquement (KERNEL §4).",
+    `Ton modèle et ton effort sont fixés pour toute cette session ; changer de régime n'est possible qu'entre deux sessions (module d'orchestration, ON_PLAN) : ligne \`Profil\`, \`Effort\` ou \`Modèle\` de ta propre fiche registre, justification dans JOURNAL.md et PROGRESS.md, puis hibernation volontaire avec la note « hibernation volontaire (changement de régime : <ancien> → <nouveau>) » — le lanceur te ré-incarne sur le nouveau régime (au plus ${params.changements_regime_max} fois, décompté à part des ré-incarnations de contexte).`,
+    "Commandes Bash exécutables sans approbation : git add/commit/mv/status/log/diff/show/branch/switch/merge (toujours depuis la racine, jamais `git -C`), mkdir, ls, wc, head, tail, grep, find, diff, date, echo, printf, pwd, python3, pytest, node, npm test, npm run, et `node framework/bin/holarch-spawn.js <chemin-enfant>` pour incarner un enfant. Une commande composée (`;`, `&&`, `|`) n'est acceptée que si chacun de ses segments l'est. Toute autre commande est refusée immédiatement (pas de blocage) : adapte-toi au lieu de réessayer. Toute écriture sous framework/ ou dans mission/OBJECTIVE.md est refusée mécaniquement (KERNEL §4).",
     `Horloge du harnais : il est ${nowIso()} (UTC) — date tes messages et tes fiches avec \`date -u +%FT%TZ\`, jamais de mémoire.${bootstrap ? '' : ` Sessions déjà jouées par cette instance : ${countSessions(root, chemin)} ; coût cumulé ${coutCumule(root, chemin).toFixed(2)} USD au tarif liste (registry/SESSIONS.md, tenu par le lanceur).`}`,
     "Un garde-fou empêche la fin de session tant que STATUS.md indique WORKING sans note d'hibernation volontaire, ou tant que des modifications de mission/ ne sont pas committées : passe toujours par ON_SLEEP.",
   ];
@@ -881,7 +983,9 @@ function prepareLaunch(root, chemin, opts) {
   // fichier stop — c'est launchWithRelaunches qui l'a déjà lu et consommé avant de décider de ré-incarner.
   // Un --dry-run n'incarne rien : il ne doit pas non plus consommer une demande d'arrêt en attente (constaté le 2026-09-11).
   if (!opts.relance && !opts.dryRun) { try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* rien à supprimer */ } }
-  const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
+  const cfgTexte = readIf(path.join(root, 'framework', 'CONFIG.md'));
+  const cfg = parseConfig(cfgTexte);
+  const cat = catalogue.parseCatalogue(cfgTexte);
   const params = resolveParams(cfg);
   const workspace = bootstrap ? { cwd: root, branche: null } : resolveWorkspace(root, chemin, cfg);
   // 1.14.0 : messages committés par le parent pour cet enfant, relayés dans son worktree avant de lire son INBOX.
@@ -893,7 +997,7 @@ function prepareLaunch(root, chemin, opts) {
     } catch (e) { process.stderr.write(`HOLARCH ▸ ${chemin} ▸ relais INBOX ignoré (${e.message})\n`); }
   }
   const fiche = bootstrap ? parseFiche(null) : parseFiche(readIf(fichePath(root, chemin)));
-  const meta = resolveProfile(cfg, fiche, chemin, opts);
+  const meta = enrichirMeta(resolveProfile(cfg, fiche, chemin, opts), cat, chemin, opts);
   if (!bootstrap) {
     const base = path.join(workspace.cwd, 'mission', chemin);
     for (const name of ['ROLE.md', 'STATUS.md']) {
@@ -907,7 +1011,6 @@ function prepareLaunch(root, chemin, opts) {
   const systemPrompt = buildSystemPrompt(root, cfg, bootstrap);
   const detail = buildUserPromptDetail(root, chemin, meta, Object.assign({}, params, { budget_usd_par_session: budget, max_tours_par_session: maxTours }), bootstrap, cfg, { dryRun: !!opts.dryRun });
   const prompt = detail.prompt;
-  const settingsFile = path.join(root, 'framework', 'claude', 'instance-settings.json');
   // Motifs RELATIFS à la racine du projet (constat D2, session n°7 de concepteur — sondé en conditions
   // réelles) : les règles de permission de Claude Code s'évaluent en relatif, jamais en absolu. Un motif
   // `Edit(${root}/framework/**)` est donc syntaxiquement valide mais inerte — il ne matche jamais rien,
@@ -918,36 +1021,21 @@ function prepareLaunch(root, chemin, opts) {
     `Edit(mission/OBJECTIVE.md)`, `Write(mission/OBJECTIVE.md)`,
   ];
   const addDirs = (opts.addDir || []).map((d) => path.resolve(d));
-  // `-p` sans valeur : le prompt est transmis par stdin (voir runOnce), pas comme argument de
-  // ligne de commande. Motif D41 (2026-09-09, session de maintenance) : Linux limite un argument
-  // individuel de execve() à MAX_ARG_STRLEN (128 Ko), indépendamment de la limite globale ARG_MAX
-  // (2 Mo) — un prompt utilisateur qui grossit avec la mission (INBOX.md, MEMORY.md) finit par la
-  // dépasser et spawnSync échoue en E2BIG, silencieusement (voir la remontée d'erreur dans
-  // `summarize`). stdin n'a pas cette limite.
-  const args = [
-    '-p',
-    '--model', meta.modele,
-    '--effort', meta.effort,
-    '--permission-mode', permissionMode,
-    '--output-format', 'json',
-    '--max-turns', String(maxTours),
-    '--max-budget-usd', String(budget),
-    '--append-system-prompt-file', '<SYSTEM_PROMPT_FILE>',
-    '--exclude-dynamic-system-prompt-sections',
-    '--settings', settingsFile,
-    '--tools', params.outils_cli,
-    '--disable-slash-commands',
-    '--strict-mcp-config',
-    '--autocompact', String(params.autocompact_tokens),
-    '--disallowedTools', denied.join(','),
-    '-n', `holarch:${chemin}`,
-  ];
-  if (params.modele_repli) args.push('--fallback-model', params.modele_repli);
-  if (moduleActive(cfg, 'extensions', 'delegation-intra-session')) {
-    const agentsOption = buildAgentsOption(root, params);
-    if (agentsOption) args.push('--agents', agentsOption);
+  // Exécuteur de ce lancement (chantier 9, volet 1) : la traduction de cette intention en invocation
+  // concrète — binaire, arguments, fichier temporaire de prompt système — lui appartient entièrement.
+  // Le lanceur n'assemble plus aucune ligne de commande. `fournisseur` vient du catalogue (volet 2)
+  // quand l'instance en a un, sinon null.
+  const fournisseur = opts.fournisseur || fournisseurPour(cat, meta, process.env);
+  if (fournisseur && fournisseur.url_var && !fournisseur.url) {
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ fournisseur « ${fournisseur.nom} » : variable ${fournisseur.url_var} absente de l'environnement — l'exécuteur partira sur son URL par défaut\n`);
   }
-  for (const d of addDirs) args.push('--add-dir', d);
+  const executeur = executeurs.resoudre(opts.executeur || executeurs.nomPour({ env: process.env, fournisseur, params }));
+  // Sous-agents (module delegation-intra-session) : l'option n'est construite que si l'exécuteur sait
+  // les porter — un exécuteur sans cette capacité dégrade proprement au lieu de recevoir une option
+  // qu'il ignore.
+  const agents = moduleActive(cfg, 'extensions', 'delegation-intra-session') && executeur.capacites.sous_agents
+    ? buildAgentsOption(root, params)
+    : null;
   // Identité Git des commits de mission : posée ici, dans l'environnement de la session, jamais dans la
   // configuration Git du dépôt (BOOTSTRAP §0, point 3 : les commits humains restent attribués à l'humain).
   // Une valeur déjà exportée par l'utilisateur est respectée.
@@ -969,19 +1057,20 @@ function prepareLaunch(root, chemin, opts) {
     // pour ne pas rater une ligne ON_ORIENT écrite avant toute écriture hors de l'arbre propre de l'instance.
     HOLARCH_PROGRESS_BASELINE: String((readIf(path.join(workspace.cwd, 'mission', 'registry', 'PROGRESS.md')) || '').length),
   });
-  return { root, chemin, bootstrap, cfg, params, meta, permissionMode, budget, maxTours, args, env, systemPrompt, prompt, blocs: detail.blocs, settingsFile, cwd: workspace.cwd, branche: workspace.branche };
+  // Intention de session : tout exécuteur lit `meta`, `permissionMode`, `budget`, `maxTours`,
+  // `denied`, `addDirs`, `agents`, `env`, `systemPrompt`, `prompt`, `cwd` — aucun de
+  // ces champs ne nomme un fournisseur. Le reste (`cfg`, `blocs`, `branche`, `bootstrap`) est au lanceur.
+  return { root, chemin, bootstrap, cfg, catalogue: cat, params, meta, permissionMode, budget, maxTours, env, systemPrompt, prompt, blocs: detail.blocs, cwd: workspace.cwd, branche: workspace.branche, denied, addDirs, agents, executeur: executeur.nom, fournisseur };
 }
 
 // ---------------------------------------------------------------------------
 // Exécution
 // ---------------------------------------------------------------------------
+/** Compatibilité : lire la sortie d'un fournisseur appartient désormais à son exécuteur
+ *  (`normaliser`). Conservée et exportée pour les outils et tests qui l'appellent encore, elle
+ *  délègue à l'exécuteur par défaut. */
 function parseResultJson(stdout) {
-  for (const line of String(stdout || '').split('\n')) {
-    const t = line.trim();
-    if (!t.startsWith('{')) continue;
-    try { const d = JSON.parse(t); if (d && d.type === 'result') return d; } catch (_) { /* ligne suivante */ }
-  }
-  return null;
+  return executeurs.resoudre(executeurs.DEFAUT).parseResultJson(stdout);
 }
 
 function ensureSessionsFile(root, missionName) {
@@ -992,11 +1081,14 @@ function ensureSessionsFile(root, missionName) {
       `# Sessions — mission ${missionName || '(sans nom)'}`,
       '',
       '<!-- Append-only, écrit par framework/bin/holarch-spawn.js après chaque session (aucune instance n\'écrit ici).',
-      'Coût = estimation locale au tarif liste (--output-format json, total_cost_usd). Tokens : entrée fraîche / lus en cache / écrits en cache / sortie.',
-      'Colonne Modèle/effort : un modèle par délégation à un sous-agent Agent le fait apparaître ici avec son coût (res.modelUsage, tarif liste), ex. "claude-opus-5 1.2900+claude-sonnet-5 0.2700/high" ; modèles haiku filtrés (bruit d\'appels internes). -->',
+      'Coût = celui rapporté par l\'exécuteur (tarif liste), ou « ≈ » s\'il est calculé par le catalogue de modèles. Tokens : entrée fraîche / lus en cache / écrits en cache / sortie.',
+      'Colonne Modèle/effort : un modèle par délégation à un sous-agent Agent le fait apparaître ici avec son coût, ex. "opus-5 1.2900+sonnet-5 0.2700/high" (identifiants réels rapportés par l\'exécuteur). -->',
       '',
-      '| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens (entrée / cache lu / cache écrit / sortie) | Coût USD | Durée | Fin | STATUS | Réveil (car. système / utilisateur) | Contexte (départ / max) |',
-      '|---|---|---|---|---|---|---|---|---|---|---|---|',
+      // La colonne « Fournisseur / modèle réel » (1.14, chantier 9) est ajoutée **en fin de ligne**, comme
+      // l'a été « Contexte » avant elle : une ligne écrite par une version antérieure garde ainsi son
+      // alignement sous cet en-tête, et seule la cellule nouvelle lui manque.
+      '| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens (entrée / cache lu / cache écrit / sortie) | Coût USD | Durée | Fin | STATUS | Réveil (car. système / utilisateur) | Contexte (départ / max) | Fournisseur / modèle réel |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
       '',
     ].join('\n'));
   }
@@ -1005,17 +1097,31 @@ function ensureSessionsFile(root, missionName) {
 
 function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, status, promptChars) {
   const p = ensureSessionsFile(root, missionName);
-  const u = (res && res.usage) || {};
-  const modelEntries = res && res.modelUsage
-    ? Object.entries(res.modelUsage).filter(([m]) => !/haiku/i.test(m))
-    : [];
+  // `res` est le **Resultat normalisé** rendu par l'exécuteur (volet 1), jamais la sortie brute d'un
+  // fournisseur : cette fonction ne connaît plus aucun nom de champ propre à un CLI.
+  const u = (res && res.tokens) || {};
+  const modelEntries = (res && res.modeles) || [];
   // Le coût par modèle n'est accolé au nom que si la session en a utilisé plusieurs (repli, changement
   // de régime) : avec un seul modèle il dupliquerait la colonne « Coût USD ».
   const models = modelEntries
-    .map(([m, mu]) => (modelEntries.length > 1 && typeof mu.costUSD === 'number' ? `${m} ${mu.costUSD.toFixed(4)}` : m))
+    .map((m) => (modelEntries.length > 1 && typeof m.cout_usd === 'number' ? `${m.id} ${m.cout_usd.toFixed(4)}` : m.id))
     .join('+');
-  const cost = res && typeof res.total_cost_usd === 'number' ? res.total_cost_usd.toFixed(4) : '?';
-  const fin = res ? `${res.subtype || '?'}${res.is_error ? ' (erreur)' : ''}${res.permission_denials && res.permission_denials.length ? ` · ${res.permission_denials.length} refus` : ''}` : 'sans résultat JSON';
+  // Coût : celui rapporté par l'exécuteur, sinon celui que le catalogue permet de calculer à partir des
+  // tokens (volet 2), marqué « ≈ » — jamais un 0 inventé : sans tarif ni tokens, la cellule reste « ? ».
+  let cost = '?';
+  if (res && typeof res.cout_usd === 'number') cost = res.cout_usd.toFixed(4);
+  else {
+    const estime = catalogue.coutEstime(meta && meta.tarif, res && res.tokens);
+    if (estime !== null && estime !== undefined) cost = `≈ ${estime.toFixed(4)}`;
+  }
+  const fournisseur = meta && meta.fournisseur ? `${meta.fournisseur} / ${meta.modele_reel || meta.modele}` : '—';
+  const fin = [
+    !res || res.fin === 'sans_resultat'
+      ? 'sans résultat JSON'
+      : `${res.sous_type || '?'}${res.fin === 'erreur' || res.fin === 'limite' ? ' (erreur)' : ''}${res.refus ? ` · ${res.refus} refus` : ''}`,
+    // Session de repli (volet 3) : la trace du fournisseur quitté vit ici, pas dans un fichier d'état.
+    meta && meta.repli_depuis ? `repli depuis ${meta.repli_depuis}` : '',
+  ].filter(Boolean).join(' · ');
   // Mesure instantanée (module context-budget, volet 8.1) : le fichier live n'est repris que s'il porte
   // encore le session_id de CETTE session — sinon une session suivante déjà relancée l'aurait déjà réécrit.
   let contexte = '— / —';
@@ -1031,44 +1137,54 @@ function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, stat
       }
     } catch (_) { /* pas de mesure disponible : — / — */ }
   }
-  const line = `| ${nowIso()} | ${chemin} | ${res && res.session_id ? res.session_id : '—'} | ${models || meta.modele}/${meta.effort} | ${res ? res.num_turns : '?'} | ${u.input_tokens ?? '?'} / ${u.cache_read_input_tokens ?? '?'} / ${u.cache_creation_input_tokens ?? '?'} / ${u.output_tokens ?? '?'} | ${cost} | ${fmtDuration(elapsedMs)} | ${fin} | ${status || '?'} | ${promptChars ? `${promptChars.systeme} / ${promptChars.utilisateur}` : '—'} | ${contexte} |\n`;
+  const line = `| ${nowIso()} | ${chemin} | ${res && res.session_id ? res.session_id : '—'} | ${models || meta.modele}/${meta.effort} | ${res && res.tours !== null && res.tours !== undefined ? res.tours : '?'} | ${u.entree ?? '?'} / ${u.cache_lu ?? '?'} / ${u.cache_ecrit ?? '?'} / ${u.sortie ?? '?'} | ${cost} | ${fmtDuration(elapsedMs)} | ${fin} | ${status || '?'} | ${promptChars ? `${promptChars.systeme} / ${promptChars.utilisateur}` : '—'} | ${contexte} | ${fournisseur} |\n`;
   fs.appendFileSync(p, line);
   return line;
 }
 
+/** Exécuteur résolu pour un lancement donné (même ordre de précédence qu'à `prepareLaunch`). */
+function executeurDe(launch) {
+  return executeurs.resoudre(launch.executeur || executeurs.nomPour({ env: process.env, fournisseur: launch.fournisseur, params: launch.params }));
+}
+
+/** Prévisualisation de l'invocation, sans rien exécuter (`--dry-run`, tests) : `{executeur, bin,
+ *  args}`. Le fichier temporaire éventuellement créé par `preparer` est nettoyé aussitôt — cette
+ *  fonction ne laisse rien derrière elle. */
+function apercuCommande(launch) {
+  const executeur = executeurDe(launch);
+  const prep = executeur.preparer(launch, launch.params);
+  try {
+    return { executeur: executeur.nom, bin: prep.bin, args: prep.args.slice() };
+  } finally {
+    if (prep.nettoyer) { try { prep.nettoyer(); } catch (_) { /* ignore */ } }
+  }
+}
+
+/** Une tentative : `preparer → executer → normaliser` par l'exécuteur du lancement. Le lanceur garde
+ *  ce qui ne dépend d'aucun fournisseur — verrou de vivacité, dossier et noms des journaux bruts,
+ *  archivage de la sortie telle quelle. `res` est le **Resultat normalisé** (jamais la sortie brute). */
 function runOnce(launch, attempt) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-spawn-'));
-  const sysFile = path.join(tmp, 'system-prompt.md');
-  fs.writeFileSync(sysFile, launch.systemPrompt);
-  const args = launch.args.map((a) => (a === '<SYSTEM_PROMPT_FILE>' ? sysFile : a));
+  const executeur = executeurDe(launch);
+  const prep = executeur.preparer(launch, launch.params);
   const logDir = path.join(launch.root, 'mission', '.holarch', 'sessions');
   fs.mkdirSync(logDir, { recursive: true });
   const ignore = path.join(launch.root, 'mission', '.holarch', '.gitignore');
   if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '*\n'); // journaux bruts hors Git
   const stamp = nowIso().replace(/[:]/g, '').replace('T', '-').replace('Z', '');
   const logBase = path.join(logDir, `${launch.chemin.replace(/\//g, '-')}-${stamp}-${attempt}`);
-  const t0 = Date.now();
   fs.mkdirSync(liveDir(launch.root), { recursive: true });
   fs.writeFileSync(liveLockPath(launch.root, launch.chemin), JSON.stringify({ pid: process.pid, startedAt: nowIso(), attempt }));
-  const bin = process.env.HOLARCH_FAKE_CLAUDE ? process.execPath : 'claude';
-  const realArgs = process.env.HOLARCH_FAKE_CLAUDE ? [process.env.HOLARCH_FAKE_CLAUDE, ...args] : args;
-  const r = spawnSync(bin, realArgs, {
-    cwd: launch.cwd,
-    env: launch.env,
-    encoding: 'utf8',
-    input: launch.prompt,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    maxBuffer: 256 * 1024 * 1024,
-    timeout: launch.timeoutMs || undefined,
-    killSignal: 'SIGTERM',
-  });
-  try { fs.unlinkSync(liveLockPath(launch.root, launch.chemin)); } catch (_) { /* ignore */ }
-  const elapsedMs = Date.now() - t0;
-  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) { /* ignore */ }
-  if (r.stderr) fs.writeFileSync(`${logBase}.stderr.log`, r.stderr);
-  const res = parseResultJson(r.stdout);
-  if (r.stdout) fs.writeFileSync(`${logBase}.result.json`, r.stdout);
-  return { res, elapsedMs, exitCode: r.status, signal: r.signal, error: r.error, logBase, stderr: r.stderr || '' };
+  let brut;
+  try {
+    brut = executeur.executer(prep, { timeoutMs: launch.timeoutMs || undefined });
+  } finally {
+    try { fs.unlinkSync(liveLockPath(launch.root, launch.chemin)); } catch (_) { /* ignore */ }
+    if (prep.nettoyer) { try { prep.nettoyer(); } catch (_) { /* ignore */ } }
+  }
+  if (brut.stderr) fs.writeFileSync(`${logBase}.stderr.log`, brut.stderr);
+  const res = executeur.normaliser(brut);
+  if (brut.stdout) fs.writeFileSync(`${logBase}.result.json`, brut.stdout);
+  return { res, elapsedMs: brut.elapsedMs, exitCode: brut.exitCode, signal: brut.signal, error: brut.error, logBase, stderr: brut.stderr || '', executeur: executeur.nom };
 }
 
 /** STATUS.md d'une instance : son worktree s'il existe, sinon l'arbre `root`, sinon — git-branches actif, isolation ≠
@@ -1243,7 +1359,9 @@ function countSessions(root, chemin) {
 function coutCumule(root, chemin) {
   const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
   return text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin)
-    .reduce((s, l) => s + (Number((l.split('|')[7] || '').trim()) || 0), 0);
+    // Un coût calculé par le catalogue (volet 2) est marqué « ≈ » : le signe est retiré avant lecture,
+    // l'estimation compte dans le cumul comme un coût rapporté — mieux vaut un ordre de grandeur que zéro.
+    .reduce((s, l) => s + (Number((l.split('|')[7] || '').replace('≈', '').trim()) || 0), 0);
 }
 /** Contexte de départ (colonne 12, module context-budget volet 8.1) de la dernière session journalisée
  *  pour l'instance. null si aucune session, ou si la dernière ligne est antérieure à cette colonne. */
@@ -1251,12 +1369,16 @@ function lastContexteDepart(root, chemin) {
   const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
   const lignes = text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin);
   if (!lignes.length) return null;
-  const cellules = lignes[lignes.length - 1].split('|');
-  if (cellules.length < 14) return null; // ligne écrite avant l'ajout de la colonne Contexte
-  const contexte = (cellules[cellules.length - 2] || '').trim();
-  if (!contexte || contexte === '— / —') return null;
-  const depart = contexte.split('/')[0].trim();
-  return /^\d+$/.test(depart) ? depart : null;
+  const cellules = lignes[lignes.length - 1].split('|').map((c) => c.trim());
+  // La cellule est repérée par sa **forme** (`<départ> / <max>`, deux nombres) plutôt que par son rang :
+  // SESSIONS.md a gagné des colonnes au fil des versions (Contexte en 1.11, Fournisseur / modèle réel en
+  // 1.14) et une ligne ancienne en compte moins qu'une récente. Les colonnes voisines ne peuvent pas être
+  // confondues avec celle-ci : Tokens en compte quatre, Fournisseur / modèle réel n'est pas numérique.
+  for (let i = cellules.length - 1; i >= 0; i -= 1) {
+    const m = /^(\d+)\s*\/\s*(?:\d+|\?)$/.exec(cellules[i]);
+    if (m) return m[1];
+  }
+  return null;
 }
 /** ALERT du lanceur dans l'INBOX du parent (KERNEL §7, provenance `harnais`) : l'enfant ne sera plus ré-incarné
  *  tout seul, le parent décide — relance détachée, TASK correctif ou FAILED. Rien pour une racine (pas de parent). */
@@ -1271,33 +1393,77 @@ function appendAlertToParent(root, chemin, corps) {
   return id;
 }
 
-/** Limite de sessions de l'API (forfait : `api_error_status: 429`, « You've hit your session limit · resets H:MMam (UTC) »).
- *  La session n'a pas eu lieu : ni progrès, ni absence de progrès. Retourne null si ce n'est pas ce cas ; sinon
+/** Limite de sessions de l'API, telle que la reconnaît l'exécuteur employé (`executeur.limite` :
+ *  lui seul sait à quoi elle ressemble chez son fournisseur). La session n'a pas eu lieu : ni progrès,
+ *  ni absence de progrès. Retourne null si ce n'est pas ce cas ; sinon
  *  {texte, repriseIso, attenteMs} — attenteMs = délai jusqu'à l'heure de remise à zéro annoncée + 60 s, null si elle est
- *  illisible ou à plus de 6 h. `HOLARCH_ATTENTE_429_MS` force la durée (tests). Mission holarch-provenance, 2026-09-10 :
+ *  illisible ou à plus de 6 h. `HOLARCH_ATTENTE_429_MS` force la durée (tests) : commodité du harnais,
+ *  appliquée ici pour tous les exécuteurs. Mission holarch-provenance, 2026-09-10 :
  *  trois 429 d'affilée (23 s, 1 s, 1 s) comptés comme « 3 sessions sans progrès » — enfant arrêté à tort. */
-function limiteApi(res) {
-  if (!res || !res.is_error || Number(res.api_error_status) !== 429) return null;
-  const texte = String(res.result || res.error || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-  let attenteMs = null;
-  let repriseIso = '?';
-  const m = texte.match(/resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
-  if (m) {
-    let h = Number(m[1]);
-    const mn = Number(m[2] || 0);
-    const ap = (m[3] || '').toLowerCase();
-    if (ap === 'pm' && h < 12) h += 12;
-    if (ap === 'am' && h === 12) h = 0;
-    const now = new Date();
-    const cible = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, mn, 0));
-    if (cible.getTime() <= now.getTime()) cible.setUTCDate(cible.getUTCDate() + 1);
-    const ms = cible.getTime() - now.getTime() + 60000;
-    if (ms <= 6 * 3600 * 1000) { attenteMs = ms; repriseIso = cible.toISOString().replace(/\.\d{3}Z$/, 'Z'); }
+function limiteApi(res, nomExecuteur) {
+  if (!res) return null;
+  const mod = executeurs.resoudre(nomExecuteur || executeurs.DEFAUT);
+  // Compatibilité : un appelant (test, outil) peut encore passer l'objet de résultat brut d'un
+  // fournisseur ; un Resultat normalisé porte toujours `fin`, un objet brut jamais.
+  const resultat = res.fin ? res : (mod.normaliserRes ? mod.normaliserRes(res) : null);
+  const lim = mod.limite(resultat);
+  if (!lim) return null;
+  // `HOLARCH_ATTENTE_429_MS` est une commodité du harnais de test HOLARCH, valable pour tout
+  // exécuteur : elle est appliquée ici, au retour de `limite()`, jamais dans l'exécuteur.
+  if (process.env.HOLARCH_ATTENTE_429_MS !== undefined) {
+    return { texte: lim.texte, repriseIso: 'forcée (HOLARCH_ATTENTE_429_MS)', attenteMs: Number(process.env.HOLARCH_ATTENTE_429_MS) };
   }
-  if (process.env.HOLARCH_ATTENTE_429_MS !== undefined) { attenteMs = Number(process.env.HOLARCH_ATTENTE_429_MS); repriseIso = 'forcée (HOLARCH_ATTENTE_429_MS)'; }
-  return { texte, repriseIso, attenteMs };
+  return lim;
 }
 function attendre(ms) { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
+/** Sha qui borne le travail d'une instance : HEAD de **sa propre branche** sous `git-branches`, HEAD du dépôt
+ *  sinon. Les bornes `avant`/`apres` du garde (§11.4) doivent encadrer les seuls commits de l'instance : deux
+ *  points d'une branche partagée font apparaître les commits d'autrui comme des écritures hors arbre (faux
+ *  positifs de règle 1 démontrés au §4 du rapport d'équivalence, MSG-impl-garde-1). Null si la ref est absente
+ *  (branche pas encore créée, dépôt inexploitable) : le garde est alors sauté, jamais deviné. */
+function shaInstance(root, chemin, cfg) {
+  const gb = gitBranchesCtx(cfg || {});
+  const ref = gb && chemin.includes('/') ? `${gb.prefixe}${chemin.replace(/\//g, '-')}` : 'HEAD';
+  const r = spawnSync('git', ['rev-parse', '--verify', ref], { cwd: root, encoding: 'utf8' });
+  return r.status === 0 ? (r.stdout || '').trim() || null : null;
+}
+
+/**
+ * Garde a posteriori (§11.4), exécuté par le lanceur après **chaque** session, quel que soit l'exécuteur :
+ * c'est la garantie portable là où les hooks de Claude Code n'existent pas (`capacites.hooks` faux).
+ * - Règles 1 et 3 (écritures hors de l'arbre de l'instance, enfants créés hors budget) : `ALERT` du lanceur
+ *   dans l'`INBOX.md` du parent et session marquée `fin = erreur` — elle ne compte donc pas comme un progrès.
+ * - Règle 2 (transition de `STATUS.md`) : journalisée seulement. Le lanceur ne réécrit pas l'état qu'une
+ *   instance a elle-même déclaré, après sa mort et sur sa branche ; la correction reste au hook `sleep-guard`
+ *   tant que l'exécuteur a la capacité `hooks`. Écart assumé au texte de §11.4 (« corrigé … note ajoutée »),
+ *   signalé au mainteneur dans le rapport de mission.
+ * Fail-open intégral : toute anomalie du dépôt rend une liste d'écarts vide (le garde n'arrête jamais une
+ * mission par accident), la sévérité restant portée par les écarts eux-mêmes.
+ */
+function verifierApresSession(root, chemin, avant, apres, out) {
+  if (!avant || !apres) return { ecarts: [], alerte: null };
+  let ecarts = [];
+  try { ({ ecarts } = gardeGit.verifierSession(root, chemin, avant, apres)); } catch (_) { return { ecarts: [], alerte: null }; }
+  if (!ecarts.length) return { ecarts, alerte: null };
+  if (out && out.logBase) {
+    try { fs.writeFileSync(`${out.logBase}.garde.json`, `${JSON.stringify({ chemin, avant, apres, ecarts }, null, 2)}\n`); } catch (_) { /* journal best-effort */ }
+  }
+  const graves = ecarts.filter((e) => e.regle === 1 || e.regle === 3);
+  let alerte = null;
+  if (graves.length) {
+    if (out && out.res) out.res.fin = 'erreur';
+    alerte = appendAlertToParent(root, chemin, [
+      `Garde a posteriori du lanceur (§11.4) : ${graves.length} écart(s) constaté(s) sur la session de \`${chemin}\` (${avant.slice(0, 7)}..${apres.slice(0, 7)}).`,
+      ...graves.map((e) => `- règle ${e.regle} · ${e.chemin} · ${e.detail}`),
+      '',
+      'La session est marquée `fin = erreur` (elle ne compte pas comme un progrès). À toi de décider : `TASK` correctif, recadrage (KERNEL §10) ou `FAILED`.',
+    ].join('\n'));
+  }
+  const detailRegles = [1, 2, 3].map((r) => `${ecarts.filter((e) => e.regle === r).length}×règle ${r}`).filter((s) => !s.startsWith('0')).join(', ');
+  process.stderr.write(`HOLARCH ▸ ${chemin} ▸ garde : ${ecarts.length} écart(s) (${detailRegles})${graves.length ? ` — session en erreur${alerte ? `, ALERT ${alerte} au parent` : ''}` : ' — journalisés (règle 2)'}${out && out.logBase ? ` · ${out.logBase}.garde.json` : ''}\n`);
+  return { ecarts, alerte };
+}
 
 function launchWithRelaunches(root, chemin, opts, runner) {
   runner = runner || runOnce;
@@ -1306,6 +1472,13 @@ function launchWithRelaunches(root, chemin, opts, runner) {
   let relances = 0; // ré-incarnations de contexte consécutives SANS progrès (relances_max)
   let attentes429 = 0; // reprises après une limite de sessions de l'API (au plus 3 par invocation)
   let changements = 0; // ré-incarnations après un changement de régime (changements_regime_max)
+  // Repli sur limite (volet 3, §11.3) : surcharge d'options appliquée aux tentatives suivantes —
+  // `{ modele: <équivalent chez le secours>, repliDepuis: <fournisseur quitté> }`. Elle n'est écrite
+  // nulle part sur disque : un nouvel appel au lanceur repart du fournisseur principal, comme le veut
+  // §11.3 (« pas de mémoire d'état »). Elle vaut en revanche pour tout le reste de l'invocation : le
+  // fournisseur qui vient de refuser une session ne devient pas disponible parce que l'instance a
+  // hiberné volontairement entre-temps.
+  let repli = null;
   for (;;) {
     attempt += 1;
     // Reconstruit le lancement à chaque tentative : après une hibernation volontaire, MEMORY/STATUS/INBOX/JOURNAL
@@ -1315,14 +1488,18 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     // Après un --bootstrap, la racine existe (fichiers d'instance, fiche registre) : toute ré-incarnation repart
     // comme instance ordinaire, sans BOOTSTRAP.md — sinon la session ré-incarnée refuse « mission déjà en cours »
     // sans rien faire (dogfooding du chantier 3, 2026-09-10 : trois sessions perdues avant l'arrêt sans progrès).
-    const tentativeOpts = attempt > 1 ? Object.assign({}, opts, { bootstrap: false, relance: true }) : opts;
+    const optsCourantes = repli ? Object.assign({}, opts, repli) : opts;
+    const tentativeOpts = attempt > 1 ? Object.assign({}, optsCourantes, { bootstrap: false, relance: true }) : optsCourantes;
     const launch = prepareLaunch(root, chemin, tentativeOpts);
     if (opts.timeoutMin > 0) launch.timeoutMs = opts.timeoutMin * 60 * 1000;
     const avant = progressSnapshot(root, chemin);
+    const shaAvant = shaInstance(root, chemin, launch.cfg);
     const out = runner(launch, attempt);
     const status = readStatusOf(root, chemin);
+    // Garde a posteriori (§11.4) : avant la ligne de session, qui doit porter le `fin = erreur` d'un écart grave.
+    const garde = verifierApresSession(root, chemin, shaAvant, shaInstance(root, chemin, launch.cfg), out);
     const line = appendSessionLine(root, launch.cfg.nom, chemin, launch.meta, out.res, out.elapsedMs, status.etat || '(absent)', { systeme: launch.systemPrompt.length, utilisateur: launch.prompt.length });
-    sessions.push(Object.assign({ status, line, launch }, out));
+    sessions.push(Object.assign({ status, line, launch, garde }, out));
     // 1.9.0 (maintenance, mission holarch-contexte) : un parent qui attend un message (CLARIFICATION, PROPOSAL, BLOCKER,
     // ALERT) ne doit pas attendre la fin de toute la boucle de ré-incarnation de son enfant — les guetteurs sont évalués
     // après chaque session. Idempotent : un parent vivant ou déjà réveillé est ignoré (isLive), et « récent » signifie
@@ -1331,8 +1508,22 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     const reveillesSession = wakeWaiters(root, chemin);
     if (reveillesSession.length) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ réveil après la session n° ${attempt} : ${reveillesSession.map((r) => `${r.chemin} (${r.condition})`).join(' ; ')}
 `);
-    const limite = limiteApi(out.res);
+    const limite = limiteApi(out.res, out.executeur || launch.executeur);
     if (limite) {
+      // Repli sur limite (volet 3, §11.3), avant toute attente : le fournisseur courant déclare-t-il un
+      // `Secours` au catalogue, et le modèle demandé a-t-il un `Équivalent` chez ce secours ? Si oui, la
+      // session est relancée immédiatement là-bas (même prompt, même fiche, modèle équivalent) — elle n'a
+      // pas eu lieu, elle ne compte donc ni comme progrès ni comme relance sans progrès, exactement comme
+      // l'attente qu'elle remplace. Un seul repli par invocation : si le secours refuse à son tour, on
+      // retombe sur le comportement d'attente ci-dessous plutôt que d'errer de fournisseur en fournisseur.
+      const quitte = launch.meta.fournisseur;
+      const secours = quitte && !repli ? catalogue.secoursDe(launch.catalogue, quitte) : null;
+      const equivalent = secours ? catalogue.equivalentChez(launch.catalogue, launch.meta.modele, secours) : null;
+      if (equivalent) {
+        repli = { modele: equivalent, repliDepuis: quitte };
+        process.stderr.write(`HOLARCH ▸ ${chemin} ▸ limite de sessions de l'API (429) chez « ${quitte} » — repli immédiat sur « ${secours} » (modèle ${launch.meta.modele} → ${equivalent}), sans attente\n`);
+        continue;
+      }
       attentes429 += 1;
       if (limite.attenteMs !== null && attentes429 <= 3) {
         process.stderr.write(`HOLARCH ▸ ${chemin} ▸ limite de sessions de l'API (429) — la session n'a pas eu lieu ; reprise à ${limite.repriseIso} (attente ${fmtDuration(limite.attenteMs)}, ${attentes429}/3)\n`);
@@ -1359,11 +1550,14 @@ function launchWithRelaunches(root, chemin, opts, runner) {
       process.stderr.write(`HOLARCH ▸ ${chemin} ▸ arrêt demandé (--arret) reçu pendant la fin de la session n° ${attempt} — pas de ré-incarnation\n`);
       return sessions;
     }
-    // Changement de régime (direct-spawn, ON_PLAN) : l'instance a modifié la ligne Profil ou Effort de sa fiche
+    // Changement de régime (direct-spawn, ON_PLAN) : l'instance a modifié la ligne Profil, Effort ou Modèle de sa fiche
     // registre avant d'hiberner. La fiche est relue ici comme prepareLaunch la relira au tour suivant ; un régime
     // différent est ré-incarné sur le nouveau modèle/effort, décompté à part des ré-incarnations de contexte.
     const regime = (m) => `${m.modele}/${m.effort}`;
-    const next = resolveMetaFromDisk(root, chemin, Object.assign({}, opts, { bootstrap: false }));
+    // `optsCourantes` et non `opts` : sous un repli en cours (volet 3), le modèle de la tentative
+    // courante est l'équivalent chez le secours — comparer au modèle de la politique ferait voir un
+    // changement de régime là où il n'y a qu'un changement de fournisseur décidé par le lanceur.
+    const next = resolveMetaFromDisk(root, chemin, Object.assign({}, optsCourantes, { bootstrap: false }));
     if (regime(next) !== regime(launch.meta)) {
       if (changements >= maxChangements) {
         process.stderr.write(`HOLARCH ▸ ${chemin} ▸ changement de régime demandé (${regime(launch.meta)} → ${regime(next)}) mais changements_regime_max (${maxChangements}) atteint — pas de ré-incarnation automatique\n`);
@@ -1400,8 +1594,9 @@ function launchWithRelaunches(root, chemin, opts, runner) {
 function summarize(launch, sessions) {
   const last = sessions[sessions.length - 1];
   const status = last.status;
-  const cost = sessions.reduce((a, s) => a + ((s.res && s.res.total_cost_usd) || 0), 0);
-  const turns = sessions.reduce((a, s) => a + ((s.res && s.res.num_turns) || 0), 0);
+  // `s.res` est le Resultat normalisé de la tentative (volet 1) : aucun champ de fournisseur ici.
+  const cost = sessions.reduce((a, s) => a + ((s.res && s.res.cout_usd) || 0), 0);
+  const turns = sessions.reduce((a, s) => a + ((s.res && s.res.tours) || 0), 0);
   const ms = sessions.reduce((a, s) => a + s.elapsedMs, 0);
   const ids = sessions.map((s) => (s.res && s.res.session_id ? s.res.session_id.slice(0, 8) : '—')).join(', ');
   const lines = [];
@@ -1416,12 +1611,12 @@ function summarize(launch, sessions) {
   let code = 0;
   const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '') || !!last.arretDemande;
   const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !isArret;
-  if (!last.res) {
+  if (!last.res || last.res.fin === 'sans_resultat') {
     const causeExacte = last.error ? ` — cause : ${last.error.code || ''} ${last.error.message || ''}`.trim() : '';
-    lines.push(`⚠ aucun résultat JSON du CLI (code ${last.exitCode}, signal ${last.signal || '—'})${causeExacte} — voir ${last.logBase}.stderr.log`);
+    lines.push(`⚠ aucun résultat exploitable de l'exécuteur (code ${last.exitCode}, signal ${last.signal || '—'})${causeExacte} — voir ${last.logBase}.stderr.log`);
     code = 2;
   }
-  else if (last.res.is_error && !(last.arret && last.arret.motif === 'limite-api')) { lines.push(`⚠ fin anormale : ${last.res.subtype} — voir ${last.logBase}.result.json`); code = 2; }
+  else if ((last.res.fin === 'erreur' || last.res.fin === 'limite') && !(last.arret && last.arret.motif === 'limite-api')) { lines.push(`⚠ fin anormale : ${last.res.sous_type || last.res.fin} — voir ${last.logBase}.result.json`); code = 2; }
   if (isArret) { lines.push('ℹ arrêt propre demandé (--arret) : session terminée sans ré-incarnation.'); }
   else if (last.arret && last.arret.motif === 'limite-api') {
     lines.push(`⚠ limite de sessions de l'API (429 : ${last.arret.texte}) — la session n'a pas eu lieu, STATUS inchangé (${status.etat || '(absent)'}) ; ${last.arret.alerte ? `ALERT ${last.arret.alerte} déposé dans l'INBOX du parent` : 'relancer'} après l'heure de remise à zéro (\`node framework/bin/holarch-spawn.js ${launch.chemin} --detach\`).`);
@@ -1438,7 +1633,7 @@ function summarize(launch, sessions) {
   }
   // §3.1 : une condition de réveil invalide vaut « aucune condition » — dit ici, sinon l'instance attend sans jamais être réveillée.
   if (status.reveil && status.reveil !== '—' && !reveil.parseReveil(status.reveil)) lines.push(`⚠ ligne Réveil de STATUS.md invalide (« ${status.reveil} ») : traitée comme « aucune condition », le harnais ne réveillera pas cette instance — grammaire dans docs/IMPLEMENTATION.md §3.1.`);
-  const denials = sessions.reduce((a, s) => a + ((s.res && s.res.permission_denials && s.res.permission_denials.length) || 0), 0);
+  const denials = sessions.reduce((a, s) => a + ((s.res && s.res.refus) || 0), 0);
   if (denials) lines.push(`ℹ ${denials} appel(s) d'outil refusé(s) par les règles d'autorisation (détail : ${last.logBase}.result.json).`);
   if (status.note) lines.push(`ℹ note STATUS : ${status.note.slice(0, 300)}`);
   lines.push(`ℹ journal des sessions : mission/registry/SESSIONS.md`);
@@ -1456,6 +1651,9 @@ function parseArgs(argv) {
     if (a === '--bootstrap') o.bootstrap = true;
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--json') o.json = true;
+    // `--model` et `--max-turns` : alias humains historiques des options **du lanceur**, homonymes
+    // de celles de Claude Code mais sans lien avec elles — traduits en meta.modele / maxTours, à
+    // charge pour l'exécuteur de les exprimer (ou non) dans l'invocation de son fournisseur.
     else if (a === '--profil') o.profil = next();
     else if (a === '--modele' || a === '--model') o.modele = next();
     else if (a === '--effort') o.effort = next();
@@ -1646,6 +1844,7 @@ function main() {
 
   if (o.dryRun) {
     if (o.timeoutMin > 0) launch.timeoutMs = o.timeoutMin * 60 * 1000;
+    const apercu = apercuCommande(launch);
     process.stdout.write([
       `racine        : ${root}`,
       `instance      : ${launch.chemin}${launch.bootstrap ? ' (bootstrap)' : ''} · profil ${launch.meta.profil} · profondeur ${launch.meta.depth}`,
@@ -1654,27 +1853,31 @@ function main() {
       `prompt système: ${launch.systemPrompt.length} caractères (KERNEL + CONFIG + ${launch.cfg.modules.length} modules${launch.bootstrap ? ' + BOOTSTRAP + MANIFEST' : ''})`,
       `prompt        : ${launch.prompt.length} caractères (transmis par stdin, pas en argument — voir D41)`,
       `blocs         : ${launch.blocs.map((b) => `${b.nom} ${b.chars}${b.note ? ` (${b.note})` : ''}`).join(' · ')}`,
-      `commande      : claude ${launch.args.map((a) => (/\s/.test(a) && !a.startsWith('"') ? `'${a}'` : a)).join(' ')} < <prompt sur stdin>`,
+      `exécuteur     : ${apercu.executeur}${launch.fournisseur && launch.fournisseur.nom ? ` · fournisseur ${launch.fournisseur.nom}` : ''}`,
+      `commande      : ${apercu.bin} ${apercu.args.map((a) => (/\s/.test(a) && !a.startsWith('"') ? `'${a}'` : a)).join(' ')} < <prompt sur stdin>`,
       '',
     ].join('\n'));
-    if (o.json) process.stdout.write(`${JSON.stringify({ root, chemin: launch.chemin, meta: launch.meta, params: launch.params, args: launch.args }, null, 2)}\n`);
+    if (o.json) process.stdout.write(`${JSON.stringify({ root, chemin: launch.chemin, meta: launch.meta, params: launch.params, executeur: apercu.executeur, bin: apercu.bin, args: apercu.args }, null, 2)}\n`);
     return;
   }
   const sessions = launchWithRelaunches(root, o.chemin, o);
   const { text, code } = summarize(sessions[sessions.length - 1].launch, sessions);
   process.stdout.write(`${text}\n`);
-  if (o.json) process.stdout.write(`${JSON.stringify(sessions.map((s) => ({ session_id: s.res && s.res.session_id, cost: s.res && s.res.total_cost_usd, turns: s.res && s.res.num_turns, subtype: s.res && s.res.subtype, status: s.status })), null, 2)}\n`);
+  if (o.json) process.stdout.write(`${JSON.stringify(sessions.map((s) => ({ session_id: s.res && s.res.session_id, cost: s.res && s.res.cout_usd, turns: s.res && s.res.tours, sous_type: s.res && s.res.sous_type, fin: s.res && s.res.fin, executeur: s.executeur, status: s.status })), null, 2)}\n`);
   finishLaunch(root, o.chemin, code, sessions);
   process.exit(code);
 }
 
 module.exports = {
   parseConfig, parseFiche, parseStatus, resolveParams, resolveProfile, resolveMetaFromDisk,
-  buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize, buildAgentsOption, extraireEnTeteEtReglesInjectees,
+  buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize, buildAgentsOption, extraireEnTeteEtReglesInjectees, elaguerSectionsLanceur,
+  executeurs, executeurDe, apercuCommande, runOnce,
+  catalogue, enrichirMeta, fournisseurPour,
   findRoot, launchWithRelaunches, DEFAULTS, DEFAULT_POLICY, tailInboxMessages, INBOX_TAIL_MESSAGES,
   buildUserPromptDetail, tailBounded, tailInboxBounded, moduleActive, parseUniteHeader,
   buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason, readInboxOf, annoterOrigines,
   isLive, demanderArret, descendants, wakeWaiters, detachLaunch, finishLaunch, reprendreTaches, coutCumule, countSessions, commitJournalLanceur, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
+  verifierSession: gardeGit.verifierSession, verifierApresSession, shaInstance,
   progressSnapshot, hasProgressed, countSessions, appendAlertToParent,
   worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree, relayInboxFromParent,
   ensureSessionsFile, lastContexteDepart, contexteLivePath,

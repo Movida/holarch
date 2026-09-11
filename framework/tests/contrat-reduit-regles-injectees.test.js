@@ -48,7 +48,7 @@ test('extraireEnTeteEtReglesInjectees : repli fail-open (texte entier) si Règle
   assert.equal(LANCEUR.extraireEnTeteEtReglesInjectees(source), source);
 });
 
-test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livraison du chantier 7', () => {
+test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livraison du chantier 7', (t) => {
   // Découplé du CONFIG.md vivant du dépôt (2026-09-11 : la mission suivante y a ajouté un 13e module et le test
   // rougissait, bloquant la publication du modèle) : la cible de 55 000 caractères vaut pour les 12 modules mesurés
   // à la livraison ; les modules réels sont lus sur disque, seule la liste est figée.
@@ -64,6 +64,8 @@ test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livrai
   ].join('\n');
   const cfg = LANCEUR.parseConfig(config12);
   const prompt = LANCEUR.buildSystemPrompt(ROOT_REEL, cfg, false);
+  // P3 (rapport holarch-fournisseurs) : la marge se lit même au vert — le prochain module qui grossit ferait rougir ce test.
+  t.diagnostic(`contrat réduit : ${prompt.length} / 55000 caractères, marge ${55000 - prompt.length}`);
   assert.ok(prompt.length <= 55000, `prompt système ${prompt.length} caractères, attendu ≤ 55000`);
   assert.equal(prompt.includes('## Constat'), false);
   assert.equal(prompt.includes('## Ce que ce module ne fait pas'), false);

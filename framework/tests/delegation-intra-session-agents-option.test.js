@@ -97,14 +97,15 @@ function valeurApres(args, flag) {
 test('prepareLaunch : --agents absent si delegation-intra-session inactif', () => {
   const root = makeRoot({ avecDelegation: false });
   const l = LANCEUR.prepareLaunch(root, 'concepteur/enfant', {});
-  assert.equal(l.args.includes('--agents'), false);
+  assert.equal(LANCEUR.apercuCommande(l).args.includes('--agents'), false);
 });
 
 test('prepareLaunch : --agents présent avec la définition holarch-unite si le module est actif', () => {
   const root = makeRoot({ avecDelegation: true });
   const l = LANCEUR.prepareLaunch(root, 'concepteur/enfant', {});
-  assert.ok(l.args.includes('--agents'));
-  const json = valeurApres(l.args, '--agents');
+  const args = LANCEUR.apercuCommande(l).args;
+  assert.ok(args.includes('--agents'));
+  const json = valeurApres(args, '--agents');
   const def = JSON.parse(json);
   assert.ok(def['holarch-unite']);
   const a = def['holarch-unite'];
@@ -124,7 +125,7 @@ test('prepareLaunch : sous_agent_modele de CONFIG.md se répercute dans --agents
   cfg = cfg.replace('| changements_regime_max | 1 |', '| changements_regime_max | 1 |\n| sous_agent_modele | opus |');
   fs.writeFileSync(cfgPath, cfg);
   const l = LANCEUR.prepareLaunch(root, 'concepteur/enfant', {});
-  const def = JSON.parse(valeurApres(l.args, '--agents'));
+  const def = JSON.parse(valeurApres(LANCEUR.apercuCommande(l).args, '--agents'));
   assert.equal(def['holarch-unite'].model, 'opus');
 });
 
@@ -137,5 +138,5 @@ test('buildAgentsOption : null (fail-open) si le gabarit SOUS-AGENT.template.md 
 test('prepareLaunch : --tools garde Agent même quand delegation-intra-session est actif', () => {
   const root = makeRoot({ avecDelegation: true });
   const l = LANCEUR.prepareLaunch(root, 'concepteur/enfant', {});
-  assert.match(valeurApres(l.args, '--tools'), /Agent/);
+  assert.match(valeurApres(LANCEUR.apercuCommande(l).args, '--tools'), /Agent/);
 });

@@ -10,6 +10,48 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.16.0 — 2026-09-11
+
+Mineure (harnais, contrat) — indépendance du fournisseur de modèles (chantier 9, `IMPLEMENTATION.md` §11) :
+- **Exécuteurs** (`bin/executeurs/`) : tout ce qui est propre à une manière de faire tourner une session
+  — binaire, options, forme du JSON de résultat, reconnaissance d'une limite 429 — quitte le lanceur pour
+  un module au contrat `{nom, capacites, preparer, executer, normaliser, limite}`. Trois implémentations :
+  `claude-code` (l'existant, extrait sans changement de comportement), `fake` (l'ancien `HOLARCH_FAKE_CLAUDE`),
+  `passerelle` (le même CLI pointé sur l'URL et le jeton d'un fournisseur compatible API Messages).
+  `capacites` conditionne le reste du harnais : sans `sous_agents`, `--agents` n'est pas passé et
+  `delegation-intra-session` dégrade proprement ; sans `hooks` ni `transcription`, `context-watch` n'a
+  rien à lire. Un nom d'exécuteur inconnu jette, jamais de repli silencieux.
+- **Catalogue de modèles** (`bin/catalogue.js`, tables `## Fournisseurs` et `## Catalogue de modèles` de
+  `CONFIG.md` et du preset, validées par `config-lint`) : la politique de modèle et `sous_agent_modele`
+  s'expriment sur des identifiants (`opus`, `sonnet`, `fable`…), traduits en modèle réel et en
+  fournisseur au lancement. Ligne `| Modèle |` facultative de fiche registre ; précédence **option CLI >
+  fiche > politique > défauts**. Coût calculé depuis les tokens et le tarif quand l'exécuteur n'en
+  rapporte pas (marqué `≈`) ; tarif à deux ou quatre valeurs (la forme longue, cache explicite, prime sur
+  la dérivation) ; **un modèle sans tarif est journalisé sans coût, jamais `0,00`**. Treizième colonne
+  `Fournisseur / modèle réel` de `SESSIONS.md`.
+- **Repli sur limite (429)** : si le fournisseur quitté déclare un `Secours` chez qui le modèle a un
+  `Équivalent`, relance immédiate sur le secours, sans attente, ligne de session marquée
+  `repli depuis <fournisseur>` ; un seul repli par invocation. Sans équivalent au catalogue, l'attente
+  d'avant est inchangée.
+- **Banc** (`tools/holarch-bench/ --calibrer`) : statistiques ventilées par fournisseur et par type
+  d'unité, et lecture des coûts estimés (`≈`), jusque-là ignorés — toute session au coût calculé par le
+  catalogue disparaissait des statistiques.
+- Les deux tables sont **facultatives** : un `CONFIG.md` antérieur (1.11, sans elles) passe `config-lint` et reste
+  exécutable, sur le seul fournisseur `anthropic`. `direct-spawn` passe en 1.7.0 (choix du modèle au
+  spawn par identifiant de catalogue ; 1.6.0 = réveil par livraison, 1.15.0).
+- **Interface « garde »** (volet 4, `bin/gardes/git.js`, `verifierSession(root, chemin, avant, apres)`) : vérification a posteriori
+  d'une session par le seul dépôt Git, portable à tout exécuteur (les hooks supposent `capacites.hooks`). Trois règles :
+  écritures hors de l'arbre autorisé, transition de `STATUS.md`, enfants hors budget. Module pur, fail-open règle par
+  règle, câblé par le lanceur après chaque session (règles 1 et 3 : `ALERT` au parent et `fin = erreur` ; règle 2 :
+  journalisée — écart assumé au texte de §11.4, décision 40 de `holarch.md` §15). Câblage prouvé par mutation
+  (`garde-cablage.test.js`). Rapport d'équivalence sur `holarch-outillage` : 0 écart résiduel, 55 refus de hooks
+  invisibles au garde par construction.
+- Promotion : mission `holarch-fournisseurs` (15 sessions, 86,31 USD, 38 unités, coût par unité 2,27 USD ; contexte
+  maximal observé 172 796 tokens, le seuil de 240 000 n'a jamais déclenché), paquet de 31 cibles appliqué par
+  `promote.js`, banc 507/507 sur clone frais. `docs/holarch.md` §16 (table, précédence, point 13, gardes a posteriori,
+  limites), `ENVIRONNEMENT.md` §6, `IMPLEMENTATION.md` §11 et annexe C. Vérification réelle par la passerelle
+  (clé de fournisseur) reportée au chantier suivant.
+
 ## 1.15.1 — 2026-09-11
 
 Patch (hooks, tests) — `git-guard` :

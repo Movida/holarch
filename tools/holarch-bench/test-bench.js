@@ -300,3 +300,88 @@ test('CLI sans argument reconnu : code 1, usage imprimé', () => {
   assert.equal(res.status, 1);
   assert.match(res.stderr, /Usage/);
 });
+
+// ------------------------------------------------ chantier 9 §11.2 : ventilation du calibrage
+
+// Deux fournisseurs, un coût estimé « ≈ », une ligne sans colonne renseignée (« — »).
+const SESSIONS_VENTILEES = `# Sessions
+
+| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens (entrée / cache lu / cache écrit / sortie) | Coût USD | Durée | Fin | STATUS | Réveil (car. système / utilisateur) | Contexte (départ / max) | Fournisseur / modèle réel |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-09-11T10:00:00Z | a | s1 | opus/high | 40 | 1000 / 2000 / 500 / 300 | 3.00 | 5m | success | DELIVERED | 100 / 200 | 40000 / 90000 | anthropic / claude-opus-5 |
+| 2026-09-11T11:00:00Z | a | s2 | opus/high | 60 | 1200 / 2200 / 600 / 400 | 5.00 | 6m | success | DELIVERED | 100 / 200 | 45000 / 120000 | anthropic / claude-opus-5 |
+| 2026-09-11T12:00:00Z | b | s3 | sonnet/medium | 20 | 500 / 800 / 100 / 200 | ≈ 0.4000 | 2m | success | DELIVERED | 90 / 150 | 20000 / 30000 | passerelle / gpt-oss-120b |
+| 2026-09-11T13:00:00Z | c | s4 | sonnet/medium | 10 | 400 / 700 / 100 / 100 | 0.20 | 1m | success | DELIVERED | 90 / 150 | 18000 / 25000 | — |
+`;
+
+test('ventilation par fournisseur : coût, contexte et modèles réels, « ≈ » compté à part', () => {
+  const r = bench.calibrer(SESSIONS_VENTILEES);
+  const v = r.ventilation.parFournisseur;
+  assert.equal(v.length, 3);
+  const anthropic = v.find((g) => g.fournisseur === 'anthropic');
+  assert.equal(anthropic.nSessions, 2);
+  assert.equal(anthropic.coutTotal, 8);
+  assert.equal(anthropic.coutMediane, 4);
+  assert.equal(anthropic.contexteMaxP90, 120000);
+  assert.deepEqual(anthropic.modeles, [{ modele: 'claude-opus-5', nSessions: 2 }]);
+  const passerelle = v.find((g) => g.fournisseur === 'passerelle');
+  assert.equal(passerelle.nEstimes, 1, 'un coût « ≈ » reste lu, mais compté comme estimé');
+  assert.equal(passerelle.coutTotal, 0.4);
+  assert.ok(v.find((g) => g.fournisseur === 'non renseigné'), 'une ligne sans fournisseur reste visible');
+  // Le coût « ≈ » entre aussi dans les statistiques globales, qui l'ignoraient avant le chantier 9.
+  assert.equal(r.stats.coutUSD.n, 4);
+});
+
+test('ventilation par fournisseur : absente (null) sur un SESSIONS.md sans la colonne', () => {
+  const sansColonne = SESSIONS_VENTILEES
+    .split('\n')
+    .map((l) => (l.startsWith('|') ? `${l.replace(/\|[^|]*\|\s*$/, '|')}` : l))
+    .join('\n');
+  assert.equal(bench.calibrer(sansColonne).ventilation.parFournisseur, null);
+});
+
+test('ventilation par type d\'unité : `type:` prioritaire, repli sur `mode:`, sinon « non renseigné »', () => {
+  const racine = fs.mkdtempSync(path.join(require('os').tmpdir(), 'bench-unites-'));
+  const memoire = path.join(racine, 'inst', 'memoire');
+  fs.mkdirSync(memoire, { recursive: true });
+  const fiche = (nom, entete) => fs.writeFileSync(path.join(memoire, nom), `---\n${entete}\n---\n## Ce qui a été fait\n`);
+  fiche('U1-a.md', 'id: U1\nresultat: PASS\nmode: directe\ncontexte: 40000 → 60000');
+  fiche('U2-b.md', 'id: U2\nresultat: PARTIEL\nmode: déléguée');
+  fiche('U3-c.md', 'id: U3\nresultat: PASS\ntype: refactor\nmode: directe'); // `type:` gagne sur `mode:`
+  fiche('U4-d.md', 'id: U4\nresultat: FAIL');                                 // ni l'un ni l'autre
+  fs.writeFileSync(path.join(memoire, 'INDEX.md'), '| U1 |\n'); // jamais compté comme une fiche
+
+  const v = bench.calibrer(SESSIONS_VENTILEES, { racineUnites: racine }).ventilation;
+  assert.equal(v.nFichesUnites, 4);
+  const par = Object.fromEntries(v.parTypeUnite.map((g) => [g.type, g]));
+  assert.deepEqual(Object.keys(par).sort(), ['directe', 'déléguée', 'non renseigné', 'refactor']);
+  assert.equal(par.directe.n, 1);
+  assert.equal(par.directe.resultats.PASS, 1);
+  assert.equal(par.directe.deltaContexteMediane, 20000);
+  assert.equal(par.refactor.n, 1);
+  assert.equal(par['non renseigné'].resultats.FAIL, 1);
+  assert.equal(bench.calibrer(SESSIONS_VENTILEES).ventilation.parTypeUnite, null, 'sans racine d\'unités, aucune section');
+});
+
+test('rapport : les deux ventilations sont imprimées, coût par unité déclaré non calculable', () => {
+  const racine = fs.mkdtempSync(path.join(require('os').tmpdir(), 'bench-unites-'));
+  fs.mkdirSync(path.join(racine, 'inst', 'memoire'), { recursive: true });
+  fs.writeFileSync(path.join(racine, 'inst', 'memoire', 'U1-a.md'), '---\nid: U1\nresultat: PASS\nmode: directe\n---\n');
+  const r = bench.calibrer(SESSIONS_VENTILEES, { racineUnites: racine });
+  const txt = bench.formatCalibrerReport('SESSIONS.md', r);
+  assert.match(txt, /Ventilation par fournisseur/);
+  assert.match(txt, /anthropic — 2 session\(s\)/);
+  assert.match(txt, /estimé\(s\) « ≈ »/);
+  assert.match(txt, /Ventilation par type d'unité/);
+  assert.match(txt, /coût par unité — non calculable/);
+});
+
+test('racineMissionDepuisSessions : mission/registry/SESSIONS.md → mission/, sinon null', () => {
+  const racine = fs.mkdtempSync(path.join(require('os').tmpdir(), 'bench-racine-'));
+  const registry = path.join(racine, 'mission', 'registry');
+  fs.mkdirSync(registry, { recursive: true });
+  const f = path.join(registry, 'SESSIONS.md');
+  fs.writeFileSync(f, SESSIONS_VENTILEES);
+  assert.equal(bench.racineMissionDepuisSessions(f), path.join(racine, 'mission'));
+  assert.equal(bench.racineMissionDepuisSessions(path.join(racine, 'SESSIONS.md')), null);
+});

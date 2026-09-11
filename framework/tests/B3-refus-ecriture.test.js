@@ -33,6 +33,7 @@ function repoRoot(start) {
 }
 const ROOT = repoRoot(__dirname);
 const launcher = require(path.join(ROOT, 'framework', 'bin', 'holarch-spawn.js'));
+const executeurs = require(path.join(ROOT, 'framework', 'bin', 'executeurs'));
 
 // ---------------------------------------------------------------------------
 // 1. Verrou de configuration : les règles de refus vivent dans le fichier de réglages, en relatif.
@@ -50,7 +51,9 @@ test('instance-settings.json : un bloc permissions.deny couvre framework/ et OBJ
 
 test('prepareLaunch : --disallowedTools emploie les mêmes motifs relatifs que le fichier de réglages', () => {
   const root = makeRoot();
-  const a = launcher.prepareLaunch(root, 'concepteur', {}).args;
+  // Les arguments ne sont plus portés par l'intention de lancement : ils appartiennent à
+  // l'exécuteur, et `apercuCommande` est la seule façon de les regarder sans lancer de session.
+  const a = launcher.apercuCommande(launcher.prepareLaunch(root, 'concepteur', {})).args;
   const denied = a[a.indexOf('--disallowedTools') + 1].split(',');
   assert.deepEqual(denied.sort(), ['Edit(framework/**)', 'Edit(mission/OBJECTIVE.md)', 'Write(framework/**)', 'Write(mission/OBJECTIVE.md)'].sort());
   // Aucun chemin absolu : ni la racine du dépôt, ni un « // » résiduel (constat A3).
@@ -66,14 +69,18 @@ test('bout en bout : une session réelle ne peut pas écrire sous framework/ (op
   const root = makeRoot();
   const cible = path.join(root, 'framework', 'sonde-e2e.txt');
   const l = launcher.prepareLaunch(root, 'concepteur', {});
-  const args = l.args.map((x) => (x === '<SYSTEM_PROMPT_FILE>' ? ecrireTmp(l.systemPrompt) : x));
-  args[args.indexOf('--max-turns') + 1] = '6';
-  args[args.indexOf('--max-budget-usd') + 1] = '0.50';
+  // Session réelle passée par l'exécuteur `claude-code` lui-même (`preparer → executer →
+  // normaliser`) : le test ne construit plus aucun argument de CLI à la main — c'est exactement le
+  // chemin qu'emprunte `runOnce`, garde-fous compris.
+  const ex = executeurs.resoudre('claude-code');
+  const prep = ex.preparer(l, l.params);
+  prep.args[prep.args.indexOf('--max-turns') + 1] = '6';
+  prep.args[prep.args.indexOf('--max-budget-usd') + 1] = '0.50';
   // Remplace le prompt d'instance par une consigne minimale et sans ambiguïté, transmise par stdin
   // (comme le fait runOnce depuis D41 — `-p` sans valeur, jamais d'argument de ligne de commande).
-  const promptSonde = `Écris le fichier ${cible} avec pour contenu exactement "sonde". N'écris aucun autre fichier. Puis termine.`;
-  const r = spawnSync('claude', args, { cwd: root, env: l.env, encoding: 'utf8', input: promptSonde, maxBuffer: 64 * 1024 * 1024 });
-  const res = launcher.parseResultJson(r.stdout) || {};
+  prep.stdin = `Écris le fichier ${cible} avec pour contenu exactement "sonde". N'écris aucun autre fichier. Puis termine.`;
+  let res;
+  try { res = ex.normaliser(ex.executer(prep, {})); } finally { prep.nettoyer(); }
   // La seule assertion qui compte : le fichier n'existe pas.
   assert.equal(fs.existsSync(cible), false, 'une session réelle a pu écrire sous framework/ — la garantie de direct-spawn ne tient pas');
   // Et la tentative doit apparaître comme un refus mécanique, pas un renoncement spontané du modèle.
@@ -81,7 +88,7 @@ test('bout en bout : une session réelle ne peut pas écrire sous framework/ (op
   // reste VIDE pour un refus issu de `permissions.deny`/`--disallowedTools` (le CLI ne le compte que pour
   // certains autres chemins de refus) — ce champ ne peut donc pas servir de preuve ici. La preuve tient
   // dans le texte du résultat, où le modèle rapporte explicitement le blocage mécanique.
-  assert.match(res.result || '', /refus|bloqu|permission/i,
+  assert.match(res.texte || '', /refus|bloqu|permission/i,
     'aucune trace de refus mécanique dans le résultat : le modèle a peut-être simplement renoncé, ce qui ne prouve rien');
 });
 

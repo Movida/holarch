@@ -385,3 +385,37 @@ test('CLI : fichier introuvable → exit 1 sans trace de pile', () => {
   assert.match(err, /^config-lint : /);
   assert.doesNotMatch(err, /at Object\./);
 });
+
+// ---------------------------------------- §11.2 — colonne « Coût » du catalogue de modèles
+
+/** `config()` + les deux tables du catalogue, dont la ligne de `fable` que le test veut faire varier. */
+function avecCatalogue(ligneFable) {
+  return config()
+    + '\n## Fournisseurs\n| Nom | Exécuteur | URL (variable) | Jeton (variable) | Secours |\n|---|---|---|---|---|\n'
+    + '| anthropic | claude-code | — | — | — |\n'
+    + '\n## Catalogue de modèles\n| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent |\n|---|---|---|---|---|---|---|\n'
+    + '| opus | anthropic | claude-opus-5 | low…max | 15 / 75 | conception, relecture | — |\n'
+    + '| sonnet | anthropic | claude-sonnet-5 | low…high | 3 / 15 | execution | — |\n'
+    + `| fable | anthropic | claude-fable-5-1 | low…max | ${ligneFable} | exploration | — |\n`;
+}
+
+test('catalogue : colonne Coût vide → avertissement (session journalisée sans coût), jamais une erreur', () => {
+  const r = run(avecCatalogue('—'));
+  assert.deepStrictEqual(r.erreurs, [], r.erreurs.join(' | '));
+  assert.ok(contient(r.avertissements, 'modèle "fable" sans tarif'), r.avertissements.join(' | '));
+});
+
+test('catalogue : les quatre tarifs (cache écrit et cache lu explicites) sont une saisie valide', () => {
+  const r = run(avecCatalogue('10 / 50 / 12,50 / 0,25'));
+  assert.deepStrictEqual(r.erreurs, [], r.erreurs.join(' | '));
+  // La fixture de base produit ses propres avertissements (modules non fournis à `run`) : ce qui se
+  // mesure ici est l'absence du diagnostic de tarif, pas une liste vide.
+  assert.ok(!contient(r.avertissements, 'sans tarif'), r.avertissements.join(' | '));
+});
+
+test('catalogue : tarif écrit mais illisible → erreur, pas un simple avertissement', () => {
+  const r = run(avecCatalogue('dix / cinquante'));
+  assert.ok(contient(r.erreurs, 'coût "dix / cinquante" illisible'), r.erreurs.join(' | '));
+  const troisValeurs = run(avecCatalogue('10 / 50 / 12,50'));
+  assert.ok(contient(troisValeurs.erreurs, 'illisible'), troisValeurs.erreurs.join(' | '));
+});

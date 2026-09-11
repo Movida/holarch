@@ -266,3 +266,34 @@ test('--garder conserve la copie, son absence la supprime', () => {
     nettoyer(fixture.root, paquetDir, copieAvecGarder, copieSansGarder);
   }
 });
+
+test('P2 : refus quand le manifeste et le paquet divergent (fichier sous cible-*/ non déclaré, cible sans fichier)', () => {
+  const fixture = creerFixture();
+  const paquetDir = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-promote-paquet-'));
+  try {
+    creerPaquetFactice(paquetDir, fixture.shaBaseInitial, [
+      { depuis: 'cible-marqueur.txt', vers: 'cible-marqueur.txt', type: 'remplace' },
+    ]);
+    // un fichier livré sous cible-framework/ mais oublié dans cibles[]
+    fs.mkdirSync(path.join(paquetDir, 'cible-framework', 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(paquetDir, 'cible-framework', 'tests', 'oublie.test.js'), '// oublié\n');
+    // cible-docs/ est exclu de la réconciliation (fragments insérés à la main)
+    fs.mkdirSync(path.join(paquetDir, 'cible-docs'), { recursive: true });
+    fs.writeFileSync(path.join(paquetDir, 'cible-docs', 'fragment.md'), '# fragment\n');
+    const r = executer('node', [CHEMIN_PROMOTE, paquetDir], { cwd: fixture.root });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /désaccordé avec le paquet/);
+    assert.match(r.stderr, /cible-framework\/tests\/oublie\.test\.js/);
+    assert.doesNotMatch(r.stderr, /cible-docs/);
+    // une cible déclarée sans fichier dans le paquet
+    fs.unlinkSync(path.join(paquetDir, 'cible-framework', 'tests', 'oublie.test.js'));
+    const manifest = JSON.parse(fs.readFileSync(path.join(paquetDir, 'MANIFEST.json'), 'utf8'));
+    manifest.cibles.push({ depuis: 'cible-framework/tests/absent.test.js', vers: 'framework/tests/absent.test.js', type: 'ajoute' });
+    fs.writeFileSync(path.join(paquetDir, 'MANIFEST.json'), JSON.stringify(manifest, null, 2));
+    const r2 = executer('node', [CHEMIN_PROMOTE, paquetDir], { cwd: fixture.root });
+    assert.equal(r2.code, 1);
+    assert.match(r2.stderr, /cible\(s\) sans fichier dans le paquet \(cible-framework\/tests\/absent\.test\.js\)/);
+  } finally {
+    nettoyer(fixture.root, paquetDir);
+  }
+});
