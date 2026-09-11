@@ -1,0 +1,37 @@
+{
+  "etapes": [
+    {
+      "statusApres": "WORKING",
+      "note": "hibernation volontaire (contexte)",
+      "reveil": "—",
+      "ecrire": [
+        { "chemin": "mission/x/MEMORY.md", "contenu": "# Mémoire\nMARQUEUR-U-HIBERNATION-42\n" }
+      ],
+      "commit": false,
+      "result": {
+        "type": "result",
+        "subtype": "success",
+        "session_id": "sess-hib-1",
+        "total_cost_usd": 0.0015,
+        "num_turns": 5,
+        "usage": { "input_tokens": 200, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 80 },
+        "is_error": false
+      }
+    },
+    {
+      "statusApres": "DELIVERED",
+      "note": "",
+      "reveil": "—",
+      "commit": false,
+      "result": {
+        "type": "result",
+        "subtype": "success",
+        "session_id": "sess-hib-2",
+        "total_cost_usd": 0.0009,
+        "num_turns": 2,
+        "usage": { "input_tokens": 150, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0, "output_tokens": 30 },
+        "is_error": false
+      }
+    }
+  ]
+}

@@ -513,7 +513,7 @@ test('buildUserPrompt sur le corpus archivé (concepteur de holon-v2, état fina
   assert.ok(tailles.JOURNAL <= 8000 && tailles.PROGRESS <= 4000 && tailles.INBOX <= 12000, JSON.stringify(tailles));
 });
 
-test('appendSessionLine : colonne de réveil (caractères système / utilisateur), en-tête à onze colonnes sur fichier neuf', () => {
+test('appendSessionLine : colonne de réveil (caractères système / utilisateur), en-tête à douze colonnes sur fichier neuf', () => {
   const root = makeRoot();
   const res = launcher.parseResultJson('{"type":"result","subtype":"success","session_id":"col-11","total_cost_usd":0.1,"num_turns":1,"usage":{},"permission_denials":[],"is_error":false}\n');
   const meta = { modele: 'opus', effort: 'high' };
@@ -521,9 +521,10 @@ test('appendSessionLine : colonne de réveil (caractères système / utilisateur
   const p = path.join(root, 'mission', 'registry', 'SESSIONS.md');
   const s = fs.readFileSync(p, 'utf8');
   const entete = s.split('\n').find((l) => l.startsWith('| Date (UTC)'));
-  assert.equal(entete.split('|').length - 2, 11);
-  assert.match(entete, /\| Réveil \(car\. système \/ utilisateur\) \|$/);
-  assert.match(s.split('\n').find((l) => l.includes('col-11')), /\| DELIVERED \| 66804 \/ 4107 \|$/);
+  assert.equal(entete.split('|').length - 2, 12);
+  assert.match(entete, /\| Réveil \(car\. système \/ utilisateur\) \|/);
+  assert.match(entete, /\| Contexte \(départ \/ max\) \|$/);
+  assert.match(s.split('\n').find((l) => l.includes('col-11')), /\| DELIVERED \| 66804 \/ 4107 \| — \/ — \|$/);
   launcher.appendSessionLine(root, 'test-harnais', 'concepteur', meta, res, 10, 'DELIVERED');
-  assert.match(fs.readFileSync(p, 'utf8').trim().split('\n').pop(), /\| DELIVERED \| — \|$/);
+  assert.match(fs.readFileSync(p, 'utf8').trim().split('\n').pop(), /\| DELIVERED \| — \| — \/ — \|$/);
 });

@@ -104,3 +104,71 @@ test('racine sans parent : pas d\'ALERT, la synthèse renvoie à une relance man
   assert.match(launcher.summarize(sessions[0].launch, sessions).text, /relancer manuellement \(racine sans parent\)/);
   assert.equal(launcher.appendAlertToParent(root, 'concepteur', 'x'), null);
 });
+
+// --- 1.7.0 : une ré-incarnation après --bootstrap repart comme instance racine ordinaire ---------------------
+// Dogfooding du chantier 3 (2026-09-10) : la racine a hiberné volontairement dès sa première session, et le
+// lanceur l'a ré-incarnée trois fois EN MODE BOOTSTRAP — chaque session refusant « mission déjà en cours »
+// sans rien faire, jusqu'à l'arrêt « sans progrès ».
+test('--bootstrap : la première session reçoit BOOTSTRAP.md, les ré-incarnations suivantes repartent comme instance racine ordinaire', () => {
+  const root = makeRoot({ relances: 2, plafond: 6 });
+  fs.writeFileSync(path.join(root, 'framework/BOOTSTRAP.md'), '# BOOTSTRAP de test\nÉtape 1 : refuser si mission déjà en cours.\n');
+  const RACINE = 'concepteur';
+  const statusRacine = (etat, note) => fs.writeFileSync(path.join(root, 'mission', RACINE, 'STATUS.md'), status(etat, note));
+  let n = 0;
+  const runner = (launch) => {
+    n += 1;
+    if (n === 1) statusRacine('WORKING', 'hibernation volontaire (budget) — enfants spawnés mais non lancés');
+    else if (n === 2) statusRacine('WORKING', 'hibernation volontaire (contexte) — U2 en cours');
+    else statusRacine('WAITING_CHILDREN', '');
+    return { res: res(n), elapsedMs: 10 };
+  };
+  const sessions = launcher.launchWithRelaunches(root, RACINE, { bootstrap: true }, runner);
+  assert.equal(n, 3);
+  assert.match(sessions[0].launch.prompt, /Tu es la première session de cette mission/);
+  assert.match(sessions[0].launch.systemPrompt, /BOOTSTRAP de test/);
+  for (const s of sessions.slice(1)) {
+    assert.doesNotMatch(s.launch.prompt, /première session de cette mission/, 'une ré-incarnation ne rejoue pas BOOTSTRAP');
+    assert.doesNotMatch(s.launch.systemPrompt, /BOOTSTRAP de test/);
+    assert.match(s.launch.prompt, /ON_WAKE/);
+  }
+});
+
+// --- 1.7.2 : une limite de sessions de l'API (429) n'est pas une session « sans progrès » --------------------------
+// Mission holarch-provenance (2026-09-10) : trois 429 d'affilée (23 s, 1 s, 1 s, « session limit · resets 7:50pm (UTC) »)
+// comptés comme trois sessions sans progrès → enfant arrêté, ALERT trompeur au parent.
+test('429 : le lanceur attend la remise à zéro et retente sans décompter de relance ; sans heure lisible, arrêt avec le motif limite-api', () => {
+  const res429 = (i, texte) => ({ type: 'result', subtype: 'success', is_error: true, api_error_status: 429, result: texte, session_id: `e${i}`, total_cost_usd: 0, num_turns: 1, usage: {} });
+  // (a) heure lisible : attente (forcée à 0 ms par l'env) puis reprise, la session suivante progresse normalement.
+  process.env.HOLARCH_ATTENTE_429_MS = '0';
+  try {
+    const root = makeRoot({ relances: 1, plafond: 0 });
+    let n = 0;
+    const runner = () => { n += 1; if (n <= 2) return { res: res429(n, "You've hit your session limit · resets 7:50pm (UTC)"), elapsedMs: 5 }; fiche(root, n); fs.writeFileSync(path.join(root, 'mission', ENFANT, 'STATUS.md'), status('DELIVERED')); return { res: res(n), elapsedMs: 10 }; };
+    const sessions = launcher.launchWithRelaunches(root, ENFANT, {}, runner);
+    // deux 429 (attente forcée à 0 ms, reprise), puis une vraie session qui livre : trois appels, aucun arrêt.
+    assert.equal(n, 3, `deux 429 puis une session réelle, obtenu ${n}`);
+    assert.equal(sessions.length, 3);
+    assert.equal(sessions.filter((s) => s.arret && s.arret.motif === 'limite-api').length, 0, 'aucun arrêt limite-api quand la reprise a réussi');
+    assert.doesNotMatch(inboxParent(root), /session\(s\) consécutive\(s\) en hibernation volontaire sans progrès/, 'les 429 ne sont pas comptés comme « sans progrès »');
+    const l = launcher.limiteApi(res429(1, "You've hit your session limit · resets 7:50pm (UTC)"));
+    assert.equal(l.attenteMs, 0); assert.match(l.texte, /resets 7:50pm/);
+  } finally { delete process.env.HOLARCH_ATTENTE_429_MS; }
+  // (b) heure illisible : arrêt immédiat avec le vrai motif, ALERT explicite, aucune session « sans progrès », code 3.
+  {
+    const root = makeRoot({ relances: 1, plafond: 0 });
+    let n = 0;
+    const runner = () => { n += 1; return { res: res429(n, 'Rate limited, try again later'), elapsedMs: 5 }; };
+    const sessions = launcher.launchWithRelaunches(root, ENFANT, {}, runner);
+    assert.equal(n, 1, 'pas de nouvelle tentative sans heure de reprise');
+    assert.equal(sessions[0].arret.motif, 'limite-api');
+    assert.match(inboxParent(root), /limite de sessions de l'API \(429/);
+    assert.doesNotMatch(inboxParent(root), /sans progrès/);
+    const { text, code } = launcher.summarize(sessions[0].launch, sessions);
+    assert.equal(code, 3);
+    assert.match(text, /limite de sessions de l'API \(429 : Rate limited/);
+    assert.doesNotMatch(text, /fin anormale/);
+  }
+  // (c) une heure de reprise à plus de 6 h n'est pas attendue.
+  const loin = launcher.limiteApi(res429(1, `resets ${new Date(Date.now() + 8 * 3600 * 1000).getUTCHours()}:00 (UTC)`));
+  assert.ok(loin.attenteMs === null || loin.attenteMs <= 6 * 3600 * 1000);
+});

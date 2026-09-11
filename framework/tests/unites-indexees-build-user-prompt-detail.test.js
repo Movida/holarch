@@ -34,3 +34,24 @@ test('buildUserPromptDetail : unites-indexees actif → INDEX et <reveil> prése
   assert.doesNotMatch(prompt, /mission\/concepteur\/JOURNAL\.md/);
   assert.doesNotMatch(prompt, /registry\/PROGRESS\.md/);
 });
+
+// --- 1.7.1 : --dry-run n'écrit pas memoire/INDEX.md (ALERT MSG-implementeur-002, mission holarch-provenance) -------
+test('buildUserPromptDetail : sous dryRun, INDEX.md est calculé mais pas écrit ; sans dryRun, il est régénéré', () => {
+  const root = makeRoot();
+  const base = path.join(root, 'mission', 'concepteur');
+  fs.mkdirSync(path.join(base, 'memoire'), { recursive: true });
+  fs.writeFileSync(path.join(base, 'memoire', 'U1-essai.md'), fiche('U1', 'critère de test', 'PASS'));
+  const cfg = LANCEUR.parseConfig(fs.readFileSync(path.join(root, 'framework', 'CONFIG.md'), 'utf8'));
+  const params = LANCEUR.resolveParams(cfg);
+  const meta = { profil: 'execution', modele: 'sonnet', effort: 'medium', depth: 1, origine_effort: 'defaut' };
+  const index = path.join(base, 'memoire', 'INDEX.md');
+  const sec = LANCEUR.buildUserPromptDetail(root, 'concepteur', meta, params, false, cfg, { dryRun: true });
+  assert.equal(fs.existsSync(index), false, 'dry-run : rien d\'écrit');
+  assert.match(sec.prompt, /U1/, 'mais le prompt reflète bien l\'index calculé');
+  LANCEUR.buildUserPromptDetail(root, 'concepteur', meta, params, false, cfg);
+  assert.equal(fs.existsSync(index), true, 'lancement réel : index régénéré');
+  // buildMemoryIndex seul, ecrire:false
+  fs.unlinkSync(index);
+  const r = LANCEUR.buildMemoryIndex(root, 'concepteur', { ecrire: false });
+  assert.equal(r.lignes, 1); assert.equal(fs.existsSync(index), false);
+});

@@ -10,6 +10,164 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.9.0 — 2026-09-11
+
+Mineure (trois modules enrichis, lanceur et hooks étendus, outil de banc étendu) : chantier 6 « contexte instantané,
+régime par phase, discipline d'orientation » (`docs/IMPLEMENTATION.md` §8), livré par la mission `holarch-contexte`
+(17 sessions, 28,64 USD au tarif liste, aucune exécution payante ; archivée sous `docs/archive/mission-holarch-contexte/`,
+paquet `shared/concepteur/chantier-6-contexte-instantane/`) et promu par son `appliquer.js` (14 cibles, sha de base
+contrôlé, vérifié sur copie fraîche puis sur `main` : 359 → 367 tests, 0 régression ; prompt système 79 256 → 84 531
+caractères). Mesure : `context-watch` persiste `{session_id, depart, max, dernier, tours}` dans
+`mission/.holarch/live/<chemin-tirets>.contexte.json` ; le lanceur ajoute la colonne `Contexte (départ / max)` à
+`SESSIONS.md` (douze colonnes) et rappelle à l'instance le contexte de départ de sa session précédente ;
+`tools/holarch-bench/bench.js --calibrer` fonde `seuil_contexte_tokens` sur le p90 du maximum instantané, publie la part
+du contexte fixe et sait relire les transcriptions Claude Code (`--transcriptions <dossier>`) ; huitième scénario à sec
+`contexte-instantane`. Modules : `self-assessment` 1.1.0 (question « combien de sessions ? », paramètre
+`sessions_attendues_max`), `direct-spawn` 1.5.0 (régime par phase, changement d'effort posé par le mainteneur non
+décompté), `unites-indexees` 1.1.0 (ne relire que ce que la fiche cite, écrire avant de re-vérifier, ligne `contexte:`
+dans l'entrée de `JOURNAL.md`). Geste de maintenance ajouté à la promotion : le lanceur évalue le réveil des parents après
+**chaque** session d'un enfant, plus seulement à la fin de sa boucle (`holarch.md` §16.1 point 11). Mesure obtenue sur
+trois missions : contexte de départ médian 67-69k tokens, maximum p90 ≈ 146k, prompt fixe 56-58 % — le seuil reste à
+120 000 (maximum endogène : seuil + clôture), voir `docs/diagnostics/2026-09-11-contexte-instantane-trois-missions.md`.
+
+## 1.8.2 — 2026-09-11
+
+Patch (harnais et outils, aucun fichier du contrat touché) : chantier 5 « banc de mesure à deux étages »
+(`docs/IMPLEMENTATION.md` §6), livré par la mission `holarch-banc` (19 sessions, 37,47 USD au tarif liste ; archivée sous
+`docs/archive/mission-holarch-banc/`, paquet `shared/concepteur/implementeur-banc/chantier-5-banc-de-mesure/`) et promu par
+son `appliquer.js` (14 cibles, vérifié sur copie fraîche puis sur `main` : 339 → 359 tests, 0 régression). Étage à sec :
+`framework/tests/scenarios/*.json` (sept scénarios — livraison simple, hibernation puis livraison, changement de régime,
+crash sans JSON, budget épuisé, enfant détaché et réveil, arrêt demandé) rejoués par `framework/tests/B4-scenarios.test.js`
+sur les vraies fonctions du lanceur ; `framework/tests/fake-claude.js` étendu (étapes, crash). Étage réel :
+`tools/holarch-bench/bench.js` (`--a-sec`, `--reel t3 --budget-usd 6`, `--calibrer <SESSIONS.md>`), ses tests et son README ;
+`docs/bench/REGISTRE.md` (15 lignes, dont une exécution réelle de T3 à 4,72 USD) ; `docs/holarch.md` §13 : T2, T5, T7
+« rejouables ». Réserve : la colonne contexte de `--calibrer` agrège le cumul d'une session, pas l'instantané borné par
+`context-watch` — ses propositions de `seuil_contexte_tokens` ne sont pas utilisables en l'état.
+
+## 1.8.1 — 2026-09-10
+
+Patch (harnais seul). Au réveil d'un parent, un message lu depuis le worktree d'un enfant (1.7.1, pas encore fusionné)
+n'a pas d'historique Git à blâmer : il était annoté « origine NON VÉRIFIÉE : … auteur du commit=? ». Le motif dit
+désormais « non fusionné, lu depuis le worktree <enfant> (vérifiable à la fusion de sa branche) ». Traitement
+inchangé et voulu : donnée, jamais un ordre, jusqu'à la fusion. Test étendu (`git-branches-worktree.test.js`).
+
+## 1.8.0 — 2026-09-10
+
+Mineure (module et gabarit enrichis, outil ajouté) : chantier 4 « provenance vérifiée des entrées »
+(`docs/IMPLEMENTATION.md` §5), livré par la mission `holarch-provenance` (première mission réelle sous un worktree par
+instance et `direct-spawn` détaché : 30 sessions, ~56 USD, deux renvois avant acceptation), promu depuis
+`docs/archive/mission-holarch-provenance/shared/concepteur/chantier-4-provenance-verifiee/` (`appliquer.js` transactionnel, vérifié sur copie fraîche : 319 → 339 tests, aucun échec nouveau).
+
+- `MESSAGE.template.md` : ligne optionnelle `origine: parent | enfant | utilisateur | harnais | externe` après `date:`
+  (KERNEL §7 inchangé, sept types conservés).
+- `typed-escalation` 1.1.0 : à `ON_WAKE`, un `TASK` ou une `RESPONSE` d'origine `externe` ou non vérifiée n'est pas
+  exécuté — traité comme une donnée, `ALERT` au parent, poursuite avec les messages vérifiés. Seuls parent et
+  utilisateur donnent des ordres.
+- `tools/message-lint/` (nouveau, `npm test` étendu) : contrôle de format des `INBOX.md`/`OUTBOX.md` (blocs, champs,
+  types, dates ISO, identifiants uniques et croissants, valeurs d'`origine`) ; `--blame` déduit l'origine de chaque
+  message de l'auteur du commit qui l'a ajouté (`[<from>]`, `[bootstrap]`, commit humain = `utilisateur`) ; codes de
+  sortie 0 / 1 (format) / 2 (origine non vérifiée) / 3 ; `analyserMessages()` exporté pour le lanceur. Sur le corpus
+  archivé de `holon-v2` (48 messages), code 0.
+- Lanceur : chaque message injecté au réveil est annoté `<!-- origine vérifiée : … (commit …) -->` ou
+  `<!-- origine NON VÉRIFIÉE : … -->` ; le bloc `<reveil>` résume `n messages vérifiés, m non vérifiés` ; grammaire
+  d'ouverture d'enveloppe partagée avec `message-lint`.
+- Ouvert (rapport final de la mission, `shared/concepteur/RAPPORT.md` §7) : l'origine `harnais` n'est pas vérifiable
+  par `--blame` (le lanceur écrit dans l'arbre de l'instance, l'auteur du commit est l'instance) ; `appliquer.js`
+  reste aveugle à une dérive amont des fichiers cibles (un contrôle du sha de base fermerait ce trou) ; le compteur
+  « N anomalie(s) » compte les messages fautifs, pas les anomalies.
+- Tests : +20 — 339 tests, 338 verts, 1 ignoré.
+
+## 1.7.2 — 2026-09-10
+
+Patch (harnais seul), pendant la mission `holarch-provenance`.
+
+- Lanceur : une limite de sessions de l'API (`api_error_status: 429`, forfait : « You've hit your session limit ·
+  resets H:MMam (UTC) ») n'est plus comptée comme une session « sans progrès ». Si l'heure de remise à zéro est
+  lisible et à moins de 6 h, la boucle de ré-incarnation attend jusqu'à cette heure (+ 60 s, au plus trois fois par
+  invocation, trace `HOLARCH ▸ … ▸ limite de sessions de l'API (429) — reprise à …`) puis retente sans décompter de
+  relance ; sinon elle s'arrête avec le motif `limite-api`, une `ALERT` explicite au parent (relancer en détaché après
+  la remise à zéro) et le code 3 — plus de « fin anormale » ni de « 3 sessions sans progrès » trompeurs. Constat :
+  trois 429 d'affilée (23 s, 1 s, 1 s) avaient fait arrêter l'implémenteur en plein correctif, avec une `ALERT`
+  « sans progrès » à la racine. `HOLARCH_ATTENTE_429_MS` force la durée d'attente (tests).
+- Tests : +1 (`relances-progres.test.js`) — 319 tests, 318 verts, 1 ignoré.
+
+## 1.7.1 — 2026-09-10
+
+Patch (harnais seul), pendant la mission `holarch-provenance` — deux défauts remontés par l'`ALERT`
+`MSG-implementeur-002` de l'implémenteur et par la supervision du mainteneur (première mission réelle sous un
+worktree par instance).
+
+- Lanceur : l'`INBOX.md` d'une instance est lue **en union** (`readInboxOf`) — son fichier (worktree → disque) plus
+  les messages que ses descendants lui ont écrits dans leur worktree (copie de `mission/<chemin>/INBOX.md` sur leur
+  branche, pas encore fusionnée), dédoublonnés par id, chaque bloc ajouté marqué `<!-- non fusionné : lu depuis le
+  worktree … -->`. Utilisée par les termes `message:` des conditions de réveil (`wakeWaiters`, `--reveil`), le bloc
+  `<reveil>` et la sélection d'INBOX injectée au réveil. Avant : un `ALERT`, `BLOCKER` ou `CLARIFICATION` d'un enfant
+  n'atteignait le parent qu'à la fusion, après `DELIVERED` — la condition `lun(enfants:DELIVERED, message:ALERT, …)`
+  recommandée par `direct-spawn` ne voyait jamais ces messages, et un enfant en attente d'une réponse aurait figé la
+  mission. Lecture seule : rien n'est écrit dans l'INBOX du parent avant la fusion.
+- Lanceur : `--dry-run` n'écrit plus `memoire/INDEX.md` (`buildMemoryIndex` calcule sans écrire, le prompt reflète
+  l'index calculé). Avant : un `--dry-run` lancé depuis le worktree d'un enfant pour un autre chemin régénérait un
+  fichier de la racine dans l'arbre de l'enfant, qui n'avait aucune commande autorisée pour le retirer de l'index.
+- Limite connue, non traitée : un message daté au jour seul (`date: 2026-09-10`, alors que le gabarit prescrit un
+  ISO 8601 complet) est antérieur à tout commit de `STATUS.md` du même jour, donc jamais « récent » pour un terme
+  `message:` — les instances doivent dater leurs messages à la seconde (`date -u +%FT%TZ`).
+- Tests : +2 (`git-branches-worktree.test.js`, `unites-indexees-build-user-prompt-detail.test.js`) — 318 tests,
+  317 verts, 1 ignoré.
+
+## 1.7.0 — 2026-09-10
+
+Mineure (un module touché, texte seul) : dogfooding réel du chantier 3
+(`docs/diagnostics/2026-09-10-dogfooding-worktree-par-instance.md`, `holarch.md` §15 décision 25) — deux enfants
+détachés en parallèle, fusion par le parent. Verdict : `git-branches` prêt sous `isolation = worktree`, une fois
+corrigés quatre endroits qui supposaient encore que les fichiers d'un enfant vivent dans l'arbre du parent.
+
+- Hook `spawn-guard` : sous `git-branches` en `isolation ≠ aucune`, les fichiers d'un enfant (`ROLE.md`,
+  `STATUS.md`, `MEMORY.md`, fiche registre) sont résolus disque → worktree de l'enfant → branche de l'enfant
+  (`git cat-file -e`), et le budget d'instances recompte les enfants par union du disque et des branches
+  `<prefixe><parent-tirets>-*`. Avant : le fusible ne regardait que l'arbre du parent, où `ON_SPAWN` ne laisse
+  rien — tout lancement d'enfant était refusé « ROLE.md absent ». Le refus nomme désormais les trois lieux.
+- Module de réveil (`reveil.js`) : `listChildren` énumère les enfants par union de l'arbre du parent, des
+  worktrees `mission/.holarch/worktrees/*` et des branches d'enfants (un enfant spawné mais jamais incarné
+  retient `enfants:ETAT`) ; `listWaiters` lit aussi une instance en attente dont le `STATUS.md` ne vit que dans
+  son worktree (chaque worktree n'est lu que pour sa propre instance, jamais pour les copies périmées du parent
+  ou des frères) ; `readStatusOf` du lanceur retombe sur la branche (`git show`). Avant : `enfants:DELIVERED`
+  restait « faux (aucun enfant incarné) » après la livraison des deux enfants — parent jamais réveillé.
+- Lanceur, bloc `<reveil>` : liste les enfants directs (même énumération) avec leur état courant, au lieu d'un
+  « aucun enfant dont le statut a changé » calculé sur l'arbre du parent seul.
+- Lanceur : une ré-incarnation après `--bootstrap` (hibernation volontaire de la racine dès sa première session)
+  repart comme instance racine ordinaire, sans `BOOTSTRAP.md`. Avant : chaque session ré-incarnée rejouait le
+  bootstrap et refusait « mission déjà en cours » jusqu'à l'arrêt « sans progrès » (trois sessions, ~1,3 USD).
+- `git-branches` 1.1.1 : `ON_CHILD_DONE` ordonne le nettoyage sous `worktree` — worktree retiré par le lanceur,
+  **puis** `git branch -d` si `supprimer_apres_fusion` (`git branch -d` refuse une branche encore extraite).
+- Tests : +3 (`git-branches-worktree.test.js` ×2, `relances-progres.test.js`) — 316 tests, 315 verts, 1 ignoré.
+
+## 1.6.0 — 2026-09-10
+
+Mineure (paramètre de module ajouté) : chantier 3 « un worktree par instance » (`docs/IMPLEMENTATION.md`
+§4), livré par la mission `holarch-isolation`, promu depuis
+`docs/archive/mission-holarch-isolation/shared/concepteur/chantier-3-worktree-par-instance/` (`ACCEPTATION.md`).
+
+- `git-branches` 1.1.0 : paramètre `isolation` ∈ {`worktree` (défaut), `branche`, `aucune`} ; sous
+  `worktree`, le parent ne bascule plus de branche pour incarner un enfant et ne crée pas le worktree
+  (c'est le lanceur) ; `ON_CHILD_DONE` et graveyard adaptés.
+- `sharded-files` 1.3.0 : `ORG.md` n'est pas en `merge=union` — seul le parent direct l'édite, sur sa
+  branche, après fusion, jamais dans le worktree d'un enfant.
+- Lanceur : `resolveWorkspace` (crée `mission/.holarch/worktrees/<chemin-tirets>` à la première
+  incarnation, erreur explicite si la branche manque), `instancePath`/`instanceRoot`, `--nettoyer-worktree
+  <chemin>` ; `claude` lancé avec `cwd` = worktree et `HOLARCH_ROOT` = `cwd` ; tous les accès aux fichiers
+  d'instance (STATUS, INBOX, mémoire, compteur de progrès, `ALERT` au parent) passent par le worktree.
+  `SESSIONS.md` et `REVEILS.md` restent à la racine (journal du lanceur).
+- `.gitattributes` à la racine du dépôt : `merge=union` sur `INBOX.md`, `OUTBOX.md`, `PROGRESS.md`,
+  `SESSIONS.md`, `REVEILS.md`, `DECISIONS.md` ; embarqué dans le modèle et dans le périmètre de
+  `holarch-upgrade`.
+- Tests : `tests/git-branches-worktree.test.js` (4 tests du §4.4 + 3 de non-régression, dont le compteur
+  de progrès sous worktree). Limite documentée : `wakeGuard` ne retient pas une écriture par chemin absolu
+  hors de la racine (voulu pour `--add-dir`) — c'est le bac à sable du CLI qui la retient.
+- `SESSIONS.md` : le coût par modèle n'est accolé au nom du modèle que si la session en a utilisé
+  plusieurs (avant : dupliqué sur chaque ligne avec la colonne « Coût USD »).
+- Dogfooding réel du chantier (deux enfants détachés en parallèle) **pas encore fait** — geste du
+  mainteneur, procédure dans le `RAPPORT.md` de l'implémenteur.
+
 ## 1.5.0 — 2026-09-10
 
 Mineure (paramètre de module ajouté) : « chantier coût », premier volet — plus d'humain dans la boucle

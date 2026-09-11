@@ -1,6 +1,6 @@
 # Module : unites-indexees
 > Catégorie : memoire
-> Version : 1.0.0
+> Version : 1.1.0
 > Requiert : —
 > Incompatible avec : monolithic, journal-synthesis
 > Complète bien : heartbeat-log, context-budget, direct-spawn
@@ -29,6 +29,12 @@ Le plan de session est une liste de 1 à 3 unités de travail, chacune avec un i
 (n = 1 + le plus grand n existant dans `memoire/`), un critère de fin vérifiable en une ligne et une
 preuve attendue. Consigne ce plan dans `JOURNAL.md`, en une entrée ≤ `journal_entree_max_lignes`.
 
+Ne relis que ce que ce plan cite explicitement (fiche d'unité en cours, fichier à modifier, lignes
+déjà pointées par une fiche antérieure) — jamais un fichier entier par anticipation ni une relecture
+de confirmation d'un plan déjà écrit : écris d'abord, ne re-vérifie qu'après coup si le résultat
+observé diverge de ce qui était prévu. C'est la discipline que mesure `context-budget` (contexte
+instantané au réveil) : la respecter n'est pas optionnel, c'est ce qui évite le déclenchement.
+
 ### ⚓ ON_SUPERVISE
 À l'achèvement de chaque unité (réussie, échouée ou partielle), écris la fiche
 `mission/<ton chemin>/memoire/U<n>-<slug>.md` depuis `framework/templates/UNITE.template.md`, corps
@@ -46,8 +52,15 @@ tout ≤ `memoire_max_lignes` :
   unité prévue (`U<n>`) ;
 - « Points de vigilance ».
 
-Ajoute une entrée de `JOURNAL.md` ≤ `journal_entree_max_lignes`. Le lanceur régénère
-`memoire/INDEX.md` à partir des fiches présentes : ne l'écris jamais toi-même.
+Ajoute une entrée de `JOURNAL.md` ≤ `journal_entree_max_lignes`. Si le fichier de contexte instantané
+de la session (`mission/.holarch/live/<chemin-tirets>.contexte.json`, `context-watch`) existe encore
+au moment de l'hibernation, ajoute à cette même entrée une ligne `contexte: <départ>/<max>` (valeurs
+`depart`/`max` du fichier) — ce chiffre ne coûte rien à produire ici, il est déjà mesuré par le hook,
+et documente dans le journal ce que la session a réellement consommé, au-delà de ce que la colonne 12
+de `SESSIONS.md` (posée par le lanceur, pas par toi) résume pour la mission entière. Absence du
+fichier live (session non lancée par `holarch-spawn.js`, ou hook inactif) : n'ajoute rien, ne devine
+pas la valeur. Le lanceur régénère `memoire/INDEX.md` à partir des fiches présentes : ne l'écris
+jamais toi-même.
 
 ### ⚓ ON_WAKE
 Le prompt injecté par le lanceur contient déjà `MEMORY.md`, `memoire/INDEX.md` et le bloc `<reveil>`.

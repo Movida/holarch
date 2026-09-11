@@ -1,0 +1,37 @@
+{
+  "etapes": [
+    {
+      "statusApres": "WORKING",
+      "note": "hibernation volontaire (changement de régime : execution/sonnet/medium → exploration/fable/xhigh)",
+      "reveil": "—",
+      "ecrire": [
+        { "chemin": "mission/registry/instances/x.md", "contenu": "# x\n| Champ | Valeur |\n|---|---|\n| Rôle | test |\n| Parent | x |\n| Statut | READY |\n| Budget alloué / consommé | 3 / 0 |\n| Dépend de | — |\n| Profil | exploration |\n| Effort | xhigh |\n| Livrables | — |\n| Créée / Archivée | 2026-09-10T00:00:00Z / — |\n" }
+      ],
+      "commit": false,
+      "result": {
+        "type": "result",
+        "subtype": "success",
+        "session_id": "sess-regime-1",
+        "total_cost_usd": 0.002,
+        "num_turns": 4,
+        "usage": { "input_tokens": 180, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 60 },
+        "is_error": false
+      }
+    },
+    {
+      "statusApres": "DELIVERED",
+      "note": "",
+      "reveil": "—",
+      "commit": false,
+      "result": {
+        "type": "result",
+        "subtype": "success",
+        "session_id": "sess-regime-2",
+        "total_cost_usd": 0.05,
+        "num_turns": 10,
+        "usage": { "input_tokens": 500, "cache_read_input_tokens": 200, "cache_creation_input_tokens": 0, "output_tokens": 300 },
+        "is_error": false
+      }
+    }
+  ]
+}

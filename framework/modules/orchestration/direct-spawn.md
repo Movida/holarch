@@ -1,6 +1,6 @@
 # Module : direct-spawn
 > Catégorie : orchestration
-> Version : 1.4.0
+> Version : 1.5.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : fork-join, dependency-graph, instance-budget, max-depth, context-budget
@@ -19,7 +19,7 @@
 | outils_cli | Read,Write,Edit,Bash,Glob,Grep,Agent,TodoWrite | Outils Claude Code disponibles (`--tools`) ; les autres n'entrent pas dans le contexte. |
 | relances_max | 2 | Sessions consécutives **sans progrès** (aucune nouvelle fiche `memoire/U<n>-*.md`, aucun commit `[<chemin>]`) que le lanceur tolère après une hibernation volontaire de contexte avant d'arrêter de ré-incarner ; une session qui progresse remet le compte à zéro. Arrêt ⇒ `ALERT` du lanceur dans l'INBOX du parent (provenance `harnais`), qui décide : relance détachée, `TASK`, `FAILED`. |
 | sessions_max_par_instance | 24 | Plafond absolu de sessions d'une instance, toutes invocations du lanceur confondues (compté dans `registry/SESSIONS.md`) ; atteint ⇒ même `ALERT` au parent. `0` : sans plafond. |
-| changements_regime_max | 1 | Ré-incarnations automatiques par le lanceur après un changement de régime décidé par l'instance (ligne `Profil` ou `Effort` de sa fiche registre modifiée, puis hibernation volontaire — règle `ON_PLAN`), décomptées à part de `relances_max`. |
+| changements_regime_max | 1 | Ré-incarnations automatiques par le lanceur après un changement de régime décidé par l'instance (ligne `Profil` ou `Effort` de sa fiche registre modifiée, puis hibernation volontaire — règle `ON_PLAN`), décomptées à part de `relances_max`. Ne compte que les changements posés par l'instance elle-même (ligne `Régime posé par` absente ou `soi`) — un changement posé par le mainteneur (`Régime posé par | mainteneur |`) ne décompte rien : voir « Changement de régime » ci-dessous. |
 | mode_attente | synchrone | `synchrone` : `ON_SUPERVISE` attend la fin complète du processus de chaque enfant avant de passer au suivant (comportement historique de ce module, inchangé). `detache` : chaque enfant `READY` est lancé avec `--detach` (§ « Réveil par condition » ci-dessous) — aucune session parent ne reste vivante à l'attendre. |
 
 ## Politique de modèle par profil
@@ -44,6 +44,10 @@ Règles : (a) en cas de doute, `execution` avec des critères d'acceptation plus
 | max | L'exactitude prime sur le coût : livrable irréversible, promu sans relecture, ou dont l'erreur coûterait plus qu'une session entière |
 
 Un effort plus élevé allonge chaque tour et consomme davantage de budget de session pour le même nombre de tours ; au tarif liste, `fable` coûte deux fois `opus`, donc `budget_usd_par_session` tombe deux fois plus vite sur une instance `exploration` — sous forfait, ce montant mesure l'usage, pas une facture (`docs/holarch.md` §16.4).
+
+**Régime par phase, à l'intérieur d'une même instance `execution`.** Une instance dont la mission comporte une phase de conception ouverte (produire un plan détaillé, fichier par fichier, avant de coder) suivie d'une phase d'exécution cadrée (le plan écrit) peut porter les deux effort successivement, sans que ce soit un changement de régime au sens ci-dessous : `xhigh` pour la seule unité de conception (le plan), puis `high` pour la transcription et les tests une fois ce plan committé — la bascule descendante `xhigh → high` est alors **prévue au `ROLE.md` par le parent**, pas décidée en cours de route par l'instance ; elle suit la même mécanique (`ON_PLAN`, ligne `Effort` de la fiche, hibernation, ré-incarnation) mais ne compte pas comme le changement de régime discrétionnaire décrit plus bas, car elle est déjà écrite dans le contrat de l'instance avant sa première session.
+
+**Changement de régime posé par le mainteneur.** En dehors de toute instance, une session de maintenance humaine peut aussi modifier la ligne `Profil` ou `Effort` d'une fiche registre — par exemple pour corriger un régime mal calibré au spawn sans attendre que l'instance elle-même le constate. Un tel changement s'identifie par son commit : sujet `[<chemin-instance>] <résumé>` (l'instance elle-même) contre un sujet de commit humain (voir `CONTRIBUTING.md`) ; à défaut de pouvoir trancher par le seul sujet du commit, la fiche registre porte une ligne `| Régime posé par | mainteneur |` (omise ou `soi` : posé par l'instance). Un changement posé par le mainteneur n'est jamais décompté de `changements_regime_max` — ce plafond ne borne que l'auto-évaluation discrétionnaire d'une instance, pas une correction externe.
 
 **Changement de régime.** Le modèle et l'effort d'une session sont fixés à son lancement ; une instance ne peut en changer qu'**entre deux sessions**, en modifiant sa propre fiche registre — le lanceur la relit à chaque ré-incarnation. Un changement est légitime quand la session constate que la tâche excède son régime : critères d'acceptation atteignables mais chemin inconnu, deux sessions sans progrès mesurable sur la même unité de travail, incertitude que le parent n'avait pas au moment du spawn. Il est illégitime pour compenser un `ROLE.md` flou (règle (a) : `QUESTION` ou `BLOCKER` au parent) ou un contexte mal géré (hiberne, ne monte pas). Le mouvement inverse — revenir à un régime plus économique une fois la partie difficile derrière soi — suit la même procédure : c'est le devoir d'économie (KERNEL §5.8). Ce terme est distinct de l'« escalade » du KERNEL §8, qui désigne la remontée d'un conflit vers un ancêtre.
 
@@ -86,13 +90,15 @@ ligne de synthèse du lanceur ; le hook `sleep-guard` refuse l'hibernation d'une
 ## Règles injectées
 
 ### ⚓ ON_SPAWN
-Pour chaque enfant que tu décides de créer, applique d'abord la mécanique structurelle invariante (KERNEL §9 : création des répertoires et fichiers, fiche registre, `ORG.md`, commit). Ajoute dans sa fiche registre la ligne `| Profil | conception |`, `| Profil | execution |`, `| Profil | relecture |` ou `| Profil | exploration |` selon la politique ci-dessus et, si l'effort par défaut du profil ne convient pas à la tâche, la ligne `| Effort | low |` (ou `medium`, `high`, `xhigh`, `max`) ; justifie ces deux choix en une ligne dans ton `JOURNAL.md`. Ce module ne modifie pas la mécanique de spawn — il ne régit que ce qui se passe *après*, à `ON_SUPERVISE`.
+Pour chaque enfant que tu décides de créer, applique d'abord la mécanique structurelle invariante (KERNEL §9 : création des répertoires et fichiers, fiche registre, `ORG.md`, commit). Ajoute dans sa fiche registre la ligne `| Profil | conception |`, `| Profil | execution |`, `| Profil | relecture |` ou `| Profil | exploration |` selon la politique ci-dessus et, si l'effort par défaut du profil ne convient pas à la tâche, la ligne `| Effort | low |` (ou `medium`, `high`, `xhigh`, `max`) ; justifie ces deux choix en une ligne dans ton `JOURNAL.md`. Si la mission de l'enfant comporte une phase de conception ouverte suivie d'une exécution cadrée (voir « Régime par phase » ci-dessus), écris-le explicitement dans son `ROLE.md` (effort initial, condition de bascule, effort cible) plutôt que de laisser l'enfant le découvrir seul. Ce module ne modifie pas la mécanique de spawn — il ne régit que ce qui se passe *après*, à `ON_SUPERVISE`.
 
 ### ⚓ ON_PLAN
 Avant de décider entre faire seul et décomposer, demande-toi si ton régime (profil, modèle et effort de cette session, rappelés par le harnais dans ton prompt) suffit à la tâche. S'il ne suffit pas selon les critères de « Changement de régime » ci-dessus, et si ta fiche ne porte pas déjà un changement de ta main :
 1. Mets à jour ta fiche registre : ligne `Profil` (vers `exploration`, ou `conception` depuis `execution`) et/ou ligne `Effort`. Un seul changement de régime par instance ; jamais vers `haiku`.
 2. Justifie-le par une entrée de `JOURNAL.md` (ce qui a été tenté, pourquoi le régime courant ne suffit pas, ce que la session suivante devra faire en premier) et par une ligne de `PROGRESS.md` — `<ISO 8601> · <ton chemin> · ON_PLAN · changement de régime <ancien> → <nouveau> : <motif en cinq mots>` — pour que ton parent le voie pendant que tu travailles.
 3. Termine la session par `ON_SLEEP`, `STATUS.md` laissé à `WORKING` avec la note « hibernation volontaire (changement de régime : <ancien> → <nouveau>) », `MEMORY.md` complet, commit. Le lanceur te ré-incarne sur le nouveau régime avec un contexte neuf (`changements_regime_max` fois au plus, décompté à part des ré-incarnations de contexte) ; la ligne de `registry/SESSIONS.md` de chaque session en porte la trace mécanique (colonne modèle/effort).
+
+Si la bascule « régime par phase » (xhigh conception → high exécution) est déjà écrite dans ton `ROLE.md` par ton parent, applique-la à la fin de l'unité de conception sans repasser par le questionnement de légitimité ci-dessus : elle a déjà été jugée légitime au spawn, tu n'as qu'à l'exécuter (même mécanique aux étapes 2-3).
 
 ### ⚓ ON_SUPERVISE
 Pour chaque enfant à l'état `READY`, dans l'ordre où tu les as créés :
@@ -137,3 +143,11 @@ Si la ligne de synthèse du lanceur (`opus/high → fable/xhigh`) ou `registry/S
 la version cible au moment de la rédaction de la spec ; le fichier réel avait entretemps déjà atteint
 1.2.0 pour une raison indépendante (chantier 2 sans lien). Bump vers 1.3.0 pour rester monotone —
 décision de rédaction autonome (`ROLE.md`, Autorité), signalée ici plutôt que par `PROPOSAL` séparée.
+
+1.4.0 → 1.5.0 (chantier 6, `docs/IMPLEMENTATION.md` §8.2 — régime par phase) : ajoute le paragraphe
+« Régime par phase, à l'intérieur d'une même instance `execution` » (bascule `xhigh → high` écrite au
+`ROLE.md` par le parent, distincte du changement de régime discrétionnaire) et le paragraphe
+« Changement de régime posé par le mainteneur » (ligne `Régime posé par` optionnelle de fiche,
+non décomptée de `changements_regime_max`). `ON_SPAWN` et `ON_PLAN` référencent ces deux ajouts.
+Rétrocompatible : une fiche sans ligne `Régime posé par` et un `ROLE.md` sans clause de phase se
+comportent exactement comme en 1.4.0.

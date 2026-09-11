@@ -55,6 +55,10 @@ const DEFAULTS = {
   sessions_max_par_instance: '24',
   changements_regime_max: '1',
   commit_par_session: 'oui',
+  // Chantier 3 : isolation d'une instance non-racine — worktree (défaut) crée mission/.holarch/worktrees/
+  // <chemin-tirets> à la première incarnation ; branche : reste sur la branche sans worktree séparé ;
+  // aucune : comportement historique (pas d'isolation Git). Voir resolveWorkspace.
+  isolation: 'worktree',
   // Bornes du prompt de réveil (chantier 0, diagnostic 2026-09-09 : les bornes en lignes ne bornaient rien,
   // une ligne de JOURNAL.md ou de PROGRESS.md pouvant faire plusieurs milliers de caractères).
   reveil_journal_lignes: '40',
@@ -122,15 +126,30 @@ function tailBounded(text, maxLines, maxChars) {
   return { content: kept.join('\n'), droppedLines, truncatedLine };
 }
 /**
+ * Offsets des ouvertures d'enveloppe (KERNEL §7) d'un texte INBOX/OUTBOX, mêmes règles que
+ * `message-lint` (`trouverOuvertures`, toutes les ouvertures — valides ou non, §5.1 B2) : ne jamais
+ * dupliquer ici une seconde grammaire qui verrait des blocs différents de l'outil de lint. `require`
+ * local (jamais en tête de fichier) avec repli fail-open sur l'ancien regex (`id:` avec espace
+ * obligatoire) si `message-lint` est indisponible — conventions §0.2, hooks fail-open.
+ */
+function ouverturesMessages(t) {
+  try {
+    return require('../../tools/message-lint/message-lint').trouverOuvertures(t).map((o) => o.offset);
+  } catch (_) {
+    const re = /^---\nid: /gm;
+    const idx = [];
+    let m;
+    while ((m = re.exec(t))) idx.push(m.index);
+    return idx;
+  }
+}
+/**
  * Comme tailInboxMessages, puis retire les messages les plus anciens tant que le total dépasse `maxChars`,
  * en gardant toujours le dernier message entier. Jamais de coupe à l'intérieur d'un bloc (KERNEL §7).
  */
 function tailInboxBounded(text, maxMessages, maxChars) {
   const t = String(text || '');
-  const re = /^---\nid: /gm;
-  const idx = [];
-  let m;
-  while ((m = re.exec(t))) idx.push(m.index);
+  const idx = ouverturesMessages(t);
   if (!idx.length) return { content: t, hidden: 0 };
   const header = t.slice(0, idx[0]);
   let start = Math.max(0, idx.length - maxMessages);
@@ -144,10 +163,7 @@ function tailInboxBounded(text, maxMessages, maxChars) {
  */
 function parseMessageBlocks(text) {
   const t = String(text || '');
-  const re = /^---\nid: /gm;
-  const idx = [];
-  let m;
-  while ((m = re.exec(t))) idx.push(m.index);
+  const idx = ouverturesMessages(t);
   const header = idx.length ? t.slice(0, idx[0]) : t;
   const msgs = [];
   for (let i = 0; i < idx.length; i++) {
@@ -164,9 +180,56 @@ function fmtDuration(ms) {
   return s >= 60 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` : `${s}s`;
 }
 function fichePath(root, chemin) {
-  return path.join(root, 'mission', 'registry', 'instances', `${chemin.replace(/\//g, '-')}.md`);
+  return path.join(instanceRoot(root, chemin), 'mission', 'registry', 'instances', `${chemin.replace(/\//g, '-')}.md`);
 }
 function nowIso() { return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'); }
+
+// ---------------------------------------------------------------------------
+// Chantier 3 : un worktree par instance (git-branches v1.1.0, isolation=worktree)
+// ---------------------------------------------------------------------------
+function worktreeDir(root, chemin) {
+  return path.join(root, 'mission', '.holarch', 'worktrees', chemin.replace(/\//g, '-'));
+}
+function hasWorktree(root, chemin) {
+  return fs.existsSync(worktreeDir(root, chemin));
+}
+/** Racine réelle des fichiers d'une instance : son worktree s'il existe, sinon la racine du dépôt. */
+function instanceRoot(root, chemin) {
+  return hasWorktree(root, chemin) ? worktreeDir(root, chemin) : root;
+}
+/** Chemin réel d'un fichier d'instance : dans le worktree de l'instance s'il existe, sinon dans root. */
+function instancePath(root, chemin, rel) {
+  return path.join(instanceRoot(root, chemin), 'mission', chemin, rel);
+}
+/** Si git-branches est actif avec isolation=worktree et que l'instance n'est pas la racine :
+ *  dir = mission/.holarch/worktrees/<chemin-tirets> ; s'il n'existe pas : `git worktree add <dir> holarch/<chemin-tirets>`
+ *  (la branche doit exister : sinon erreur explicite « spawn incomplet : branche absente »).
+ *  Retourne {cwd: dir, branche} ; sinon {cwd: root, branche: null}. */
+function resolveWorkspace(root, chemin, cfg) {
+  if (!chemin.includes('/') || !moduleActive(cfg, 'extensions', 'git-branches')) return { cwd: root, branche: null };
+  const params = resolveParams(cfg);
+  const prefixe = params.prefixe_branche || 'holarch/';
+  const branche = `${prefixe}${chemin.replace(/\//g, '-')}`;
+  if (params.isolation !== 'worktree') return { cwd: root, branche };
+  const dir = worktreeDir(root, chemin);
+  if (!fs.existsSync(dir)) {
+    const check = spawnSync('git', ['rev-parse', '--verify', branche], { cwd: root, encoding: 'utf8' });
+    if (check.status !== 0) throw new Error(`spawn incomplet : branche absente (${branche})`);
+    const add = spawnSync('git', ['worktree', 'add', dir, branche], { cwd: root, encoding: 'utf8' });
+    if (add.status !== 0) throw new Error(`git worktree add a échoué pour ${chemin} : ${(add.stderr || '').trim()}`);
+  }
+  return { cwd: dir, branche };
+}
+/** `--nettoyer-worktree <chemin>` : git worktree remove (refuse si des changements non committés subsistent). */
+function removeWorktree(root, chemin) {
+  const dir = worktreeDir(root, chemin);
+  if (!fs.existsSync(dir)) return { removed: false, reason: 'absent' };
+  const status = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
+  if (status.status === 0 && status.stdout.trim()) return { removed: false, reason: 'changements non committés' };
+  const rm = spawnSync('git', ['worktree', 'remove', dir], { cwd: root, encoding: 'utf8' });
+  if (rm.status !== 0) return { removed: false, reason: (rm.stderr || '').trim() || 'échec git worktree remove' };
+  return { removed: true };
+}
 
 /** Remonte depuis `start` jusqu'au répertoire contenant framework/KERNEL.md et mission/. */
 function findRoot(start) {
@@ -314,8 +377,10 @@ function uniteNumero(id) {
  * de table et d'un commentaire « régénéré par le lanceur, ne pas éditer ». Ne crée rien si
  * `memoire/` n'existe pas. Idempotente : rappelée sans changement, produit le même contenu.
  */
-function buildMemoryIndex(root, chemin) {
-  const dir = path.join(root, 'mission', chemin, 'memoire');
+/** `opts.ecrire === false` (--dry-run) : calcule l'index sans l'écrire — un --dry-run ne doit rien laisser sur disque,
+ *  a fortiori dans les fichiers d'une autre instance (ALERT MSG-implementeur-002, mission holarch-provenance, 2026-09-10). */
+function buildMemoryIndex(root, chemin, opts) {
+  const dir = instancePath(root, chemin, 'memoire');
   if (!fs.existsSync(dir)) return { lignes: 0, contenu: '' };
   const files = fs.readdirSync(dir).filter((f) => f !== 'INDEX.md' && /^U\d+[a-zA-Z]*-.*\.md$/.test(f));
   const entries = [];
@@ -335,7 +400,7 @@ function buildMemoryIndex(root, chemin) {
     return `| ${e.h.id || '?'} | ${e.h.date || '—'} | ${e.h.resultat || '—'} | ${critere} | ${e.file} |`;
   });
   const contenu = `${header.concat(rows).join('\n')}\n`;
-  fs.writeFileSync(path.join(dir, 'INDEX.md'), contenu);
+  if (!opts || opts.ecrire !== false) fs.writeFileSync(path.join(dir, 'INDEX.md'), contenu);
   return { lignes: rows.length, contenu };
 }
 
@@ -344,7 +409,7 @@ function buildMemoryIndex(root, chemin) {
 function lastHibernationCommit(root, chemin) {
   const rel = path.join('mission', chemin, 'MEMORY.md').split(path.sep).join('/');
   let r;
-  try { r = spawnSync('git', ['log', '-1', '--format=%H%n%cI', '--', rel], { cwd: root, encoding: 'utf8' }); }
+  try { r = spawnSync('git', ['log', '-1', '--format=%H%n%cI', '--', rel], { cwd: instanceRoot(root, chemin), encoding: 'utf8' }); }
   catch (_) { return null; }
   if (!r || r.error || r.status !== 0 || !r.stdout || !r.stdout.trim()) return null;
   const lines = r.stdout.trim().split('\n');
@@ -359,18 +424,48 @@ function lastHibernationCommit(root, chemin) {
  * puis borné par tailInboxBounded(reveil_inbox_messages, reveil_inbox_chars). Sans dépôt Git (git
  * absent, en échec, ou MEMORY.md jamais committé) : repli sur tailInboxBounded seul.
  */
+/** INBOX.md d'une instance telle que le harnais doit la voir : son fichier (worktree → disque) PLUS, sous un worktree
+ *  par instance (chantier 3), les messages que ses descendants lui ont écrits dans LEUR worktree — copie de
+ *  mission/<chemin>/INBOX.md sur leur branche, pas encore fusionnée. Sans cela, un ALERT/BLOCKER/CLARIFICATION d'un
+ *  enfant n'atteint le parent qu'à la fusion : les termes `message:` de sa condition de réveil ne le voient jamais
+ *  (mission holarch-provenance, 2026-09-10). Dédoublonné par id ; chaque bloc ajouté porte un commentaire de provenance
+ *  en fin de bloc. Retourne null si aucun fichier n'existe nulle part. */
+function readInboxOf(root, chemin) {
+  const own = readIf(instancePath(root, chemin, 'INBOX.md'));
+  let text = own === null ? '' : own;
+  const ids = new Set(parseMessageBlocks(text).msgs.map((m) => m.id).filter(Boolean));
+  const wdir = path.join(root, 'mission', '.holarch', 'worktrees');
+  const prefix = `${chemin.replace(/\//g, '-')}-`;
+  let wts = [];
+  try { wts = fs.readdirSync(wdir, { withFileTypes: true }); } catch (_) { /* aucun worktree */ }
+  let trouve = own !== null;
+  for (const w of wts) {
+    if (!w.isDirectory() || !w.name.startsWith(prefix)) continue; // descendants seulement
+    const copy = readIf(path.join(wdir, w.name, 'mission', chemin, 'INBOX.md'));
+    if (copy === null) continue;
+    trouve = true;
+    for (const m of parseMessageBlocks(copy).msgs) {
+      if (!m.id || ids.has(m.id)) continue;
+      ids.add(m.id);
+      const bloc = m.block.replace(/\s*$/, '');
+      text += `${text && !text.endsWith('\n') ? '\n' : ''}${bloc}\n<!-- non fusionné : lu depuis le worktree ${w.name} -->\n`;
+    }
+  }
+  return trouve ? text : null;
+}
+
 function selectInboxMessages(root, chemin, params) {
-  const inboxText = readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '';
+  const inboxText = readInboxOf(root, chemin) || '';
   const nMsg = Number(params.reveil_inbox_messages) || Number(DEFAULTS.reveil_inbox_messages);
   const nChars = Number(params.reveil_inbox_chars) || Number(DEFAULTS.reveil_inbox_chars);
   const hib = lastHibernationCommit(root, chemin);
   if (!hib) {
     const b = tailInboxBounded(inboxText, nMsg, nChars);
-    return { content: b.content, hidden: b.hidden, criteres: 'repli sans git : tailInboxBounded seul' };
+    return { content: b.content, hidden: b.hidden, criteres: 'repli sans git : tailInboxBounded seul', verifies: 0, nonVerifies: 0 };
   }
   const { header, msgs } = parseMessageBlocks(inboxText);
-  if (!msgs.length) return { content: inboxText, hidden: 0, criteres: 'aucun message' };
-  const outboxText = readIf(path.join(root, 'mission', chemin, 'OUTBOX.md')) || '';
+  if (!msgs.length) return { content: inboxText, hidden: 0, criteres: 'aucun message', verifies: 0, nonVerifies: 0 };
+  const outboxText = readIf(instancePath(root, chemin, 'OUTBOX.md')) || '';
   const refs = new Set();
   for (const m of outboxText.matchAll(/^ref:\s*(.*)$/gm)) { const v = m[1].trim(); if (v && v !== '—') refs.add(v); }
   const selected = new Set();
@@ -381,11 +476,64 @@ function selectInboxMessages(root, chemin, params) {
   const rawContent = header + ordered.map((m) => m.block).join('');
   const hiddenParUnion = msgs.length - ordered.length;
   const b = tailInboxBounded(rawContent, nMsg, nChars);
+  const annotated = annoterOrigines(root, chemin, inboxText, b.content);
   return {
-    content: b.content,
+    content: annotated.content,
     hidden: hiddenParUnion + b.hidden,
     criteres: 'postérieurs au dernier commit MEMORY ; 2 derniers ; TASK/RESPONSE sans ref dans OUTBOX',
+    verifies: annotated.verifies,
+    nonVerifies: annotated.nonVerifies,
   };
+}
+
+/**
+ * Annote chaque message de `content` (sous-ensemble déjà borné de inboxText, KERNEL §7 : jamais de
+ * coupe à l'intérieur d'un bloc) d'un commentaire HTML de provenance, déduite par
+ * tools/message-lint/message-lint.js --blame contre le fichier réel INBOX.md de l'instance (chantier 4,
+ * docs/IMPLEMENTATION.md §5.3). Le blame tourne sur `inboxText` (texte complet non tronqué) pour que
+ * les numéros de ligne restent valides contre le fichier sur disque ; le résultat est ensuite reporté
+ * sur `content` par id. Sans message-lint disponible (chemin rompu, pas de dépôt Git) : contenu
+ * inchangé, 0 vérifié / 0 non vérifié — fail-open, jamais bloquant.
+ */
+function annoterOrigines(root, chemin, inboxText, content) {
+  let analyserMessages;
+  try {
+    ({ analyserMessages } = require('../../tools/message-lint/message-lint'));
+  } catch (_) {
+    return { content, verifies: 0, nonVerifies: 0 };
+  }
+  const cwd = instanceRoot(root, chemin);
+  const fichier = path.join('mission', chemin, 'INBOX.md').split(path.sep).join('/');
+  let analyses;
+  try {
+    analyses = analyserMessages(inboxText, { root: cwd, fichier, blame: true });
+  } catch (_) {
+    return { content, verifies: 0, nonVerifies: 0 };
+  }
+  const parId = new Map();
+  for (const a of analyses) if (a.id) parId.set(a.id, a);
+  const { header, msgs } = parseMessageBlocks(content);
+  let verifies = 0;
+  let nonVerifies = 0;
+  let out = header;
+  for (const m of msgs) {
+    const a = m.id ? parId.get(m.id) : undefined;
+    if (a && a.verifiee === true) {
+      verifies += 1;
+      out += `<!-- origine vérifiée : ${a.origine}${a.sha ? ` (commit ${a.sha.slice(0, 8)})` : ''} -->\n`;
+    } else {
+      nonVerifies += 1;
+      const nonFusionne = m.block.match(/<!-- non fusionné : lu depuis le worktree ([^ ]+) -->/);
+      const motif = nonFusionne
+        ? `non fusionné, lu depuis le worktree ${nonFusionne[1]} (vérifiable à la fusion de sa branche)`
+        : a
+          ? `from=${a.from || '?'} auteur du commit=${a.origine || '?'}`
+          : 'bloc non apparié par message-lint (id absent ou enveloppe invalide)';
+      out += `<!-- origine NON VÉRIFIÉE : ${motif} -->\n`;
+    }
+    out += m.block;
+  }
+  return { content: out, verifies, nonVerifies };
 }
 
 /**
@@ -395,31 +543,35 @@ function selectInboxMessages(root, chemin, params) {
  * place. Sans Git : bloc réduit à l'état de STATUS.md.
  */
 function describeWakeReason(root, chemin) {
-  const status = parseStatus(readIf(path.join(root, 'mission', chemin, 'STATUS.md')));
+  const status = parseStatus(readIf(instancePath(root, chemin, 'STATUS.md')));
   const lines = [`état : ${status.etat || '(absent)'}${status.note ? ` — ${status.note}` : ''}`];
   const hib = lastHibernationCommit(root, chemin);
   if (!hib) {
     lines.push('sans Git : bloc réduit à l\'état de STATUS.md');
     return lines.join('\n');
   }
-  const { msgs } = parseMessageBlocks(readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '');
+  const { msgs } = parseMessageBlocks(readInboxOf(root, chemin) || '');
   const nouveaux = msgs.filter((m) => m.date && m.date > hib.dateIso).map((m) => m.id || '?');
   lines.push(nouveaux.length ? `messages INBOX nouveaux depuis ${hib.sha.slice(0, 8)} : ${nouveaux.join(', ')}` : 'aucun message INBOX nouveau depuis la dernière hibernation');
+  // Enfants directs : énumérés par union arbre du parent + worktrees + branches (reveil.listChildren) et lus par
+  // readStatusOf (worktree → disque → branche) — sous isolation = worktree, leur STATUS.md n'est PAS dans l'arbre
+  // de ce parent (dogfooding du 2026-09-10 : le bloc annonçait « aucun enfant dont le statut a changé » alors que
+  // les deux enfants DELIVERED venaient de déclencher le réveil). Le « changé depuis l'hibernation » n'est connu que
+  // pour un enfant présent dans l'arbre du parent (git diff) ; les autres sont listés avec leur état courant.
   const relBase = path.join('mission', chemin).split(path.sep).join('/');
   let diff;
-  try { diff = spawnSync('git', ['diff', '--name-only', hib.sha, '--', `${relBase}/*/STATUS.md`], { cwd: root, encoding: 'utf8' }); }
+  try { diff = spawnSync('git', ['diff', '--name-only', hib.sha, '--', `${relBase}/*/STATUS.md`], { cwd: instanceRoot(root, chemin), encoding: 'utf8' }); }
   catch (_) { diff = null; }
-  const children = [];
+  const changes = new Set();
   if (diff && !diff.error && diff.status === 0 && diff.stdout) {
     for (const f of diff.stdout.trim().split('\n').filter(Boolean)) {
-      const relToChild = path.relative(relBase, f).split(path.sep).join('/');
-      const childName = relToChild.split('/')[0];
-      if (!childName || children.some((c) => c.startsWith(`${childName} `))) continue;
-      const st = parseStatus(readIf(path.join(root, relBase, childName, 'STATUS.md')));
-      children.push(`${childName} → ${st.etat || '(absent)'}`);
+      const childName = path.relative(relBase, f).split(path.sep).join('/').split('/')[0];
+      if (childName) changes.add(childName);
     }
   }
-  lines.push(children.length ? `enfants dont le statut a changé : ${children.join(', ')}` : 'aucun enfant dont le statut a changé');
+  const gb = gitBranchesCtx(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))));
+  const children = reveil.listChildren(root, chemin, gb).map((n) => `${n} → ${readStatusOf(root, `${chemin}/${n}`).etat || '(absent)'}${changes.has(n) ? ' (changé depuis l\'hibernation)' : ''}`);
+  lines.push(children.length ? `enfants directs : ${children.join(', ')}` : 'aucun enfant direct');
   return lines.join('\n');
 }
 
@@ -456,12 +608,13 @@ function buildSystemPrompt(root, cfg, bootstrap) {
   return parts.join('\n');
 }
 
-function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg) {
+function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg, extra) {
   const p = [];
   const blocs = [];
   const num = (k, d) => { const v = Number(params[k]); return Number.isFinite(v) && v > 0 ? v : d; };
+  const departPrecedent = bootstrap ? null : lastContexteDepart(root, chemin);
   const harnais = [
-    `Harnais de cette session : profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}${meta.origine_effort === 'fiche' ? ' (posé dans ta fiche registre)' : ''}, au plus ${params.max_tours_par_session} tours et ${params.budget_usd_par_session} USD (tarif liste) ; un hook te préviendra si ton contexte dépasse ${Math.round(Number(params.seuil_contexte_tokens) / 1000)}k tokens — tu devras alors hiberner volontairement (KERNEL §5.8 : MEMORY.md complet, STATUS.md laissé à son état réel avec la note « hibernation volontaire (contexte) », commit, fin de session ; le lanceur te ré-incarne avec un contexte neuf tant que chaque session laisse une trace de progrès — une fiche d'unité ou un commit [${chemin}] — au plus ${params.relances_max} session(s) consécutive(s) sans progrès et ${params.sessions_max_par_instance} sessions en tout, après quoi il alerte ton parent).`,
+    `Harnais de cette session : profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}${meta.origine_effort === 'fiche' ? ' (posé dans ta fiche registre)' : ''}, au plus ${params.max_tours_par_session} tours et ${params.budget_usd_par_session} USD (tarif liste) ; un hook te préviendra si ton contexte dépasse ${Math.round(Number(params.seuil_contexte_tokens) / 1000)}k tokens — tu devras alors hiberner volontairement (KERNEL §5.8 : MEMORY.md complet, STATUS.md laissé à son état réel avec la note « hibernation volontaire (contexte) », commit, fin de session ; le lanceur te ré-incarne avec un contexte neuf tant que chaque session laisse une trace de progrès — une fiche d'unité ou un commit [${chemin}] — au plus ${params.relances_max} session(s) consécutive(s) sans progrès et ${params.sessions_max_par_instance} sessions en tout, après quoi il alerte ton parent).${departPrecedent ? ` Ta session précédente avait démarré avec un contexte de ${departPrecedent} tokens (colonne « Contexte (départ / max) » de registry/SESSIONS.md).` : ''}`,
     `Ton modèle et ton effort sont fixés pour toute cette session ; changer de régime n'est possible qu'entre deux sessions (module d'orchestration, ON_PLAN) : ligne \`Profil\` ou \`Effort\` de ta propre fiche registre, justification dans JOURNAL.md et PROGRESS.md, puis hibernation volontaire avec la note « hibernation volontaire (changement de régime : <ancien> → <nouveau>) » — le lanceur te ré-incarne sur le nouveau régime (au plus ${params.changements_regime_max} fois, décompté à part des ré-incarnations de contexte).`,
     "Commandes Bash exécutables sans approbation : git add/commit/mv/status/log/diff/show/branch/switch/merge (toujours depuis la racine, jamais `git -C`), mkdir, ls, wc, head, tail, grep, find, diff, date, echo, printf, pwd, python3, pytest, node, npm test, npm run, et `node framework/bin/holarch-spawn.js <chemin-enfant>` pour incarner un enfant. Une commande composée (`;`, `&&`, `|`) n'est acceptée que si chacun de ses segments l'est. Toute autre commande est refusée immédiatement (pas de blocage) : adapte-toi au lieu de réessayer. Toute écriture sous framework/ ou dans mission/OBJECTIVE.md est refusée mécaniquement (KERNEL §4).",
     "Un garde-fou empêche la fin de session tant que STATUS.md indique WORKING sans note d'hibernation volontaire, ou tant que des modifications de mission/ ne sont pas committées : passe toujours par ON_SLEEP.",
@@ -476,10 +629,10 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg) {
   }
   const uniteMode = moduleActive(cfg || {}, 'memoire', 'unites-indexees');
   p.push(`Tu incarnes l'instance \`${chemin}\` (profondeur ${meta.depth}, profil ${meta.profil}). Le KERNEL, CONFIG.md et les modules actifs sont dans ton prompt système. Voici l'état exact de tes fichiers d'instance au réveil — ne les relis pas, ils sont identiques sur disque :`);
-  const base = path.join(root, 'mission', chemin);
+  const base = path.join(instanceRoot(root, chemin), 'mission', chemin);
   // Dans les deux cas (unites-indexees actif ou non), l'index est régénéré avant assemblage du prompt
   // s'il existe un répertoire memoire/ (spec §2.3) — écriture du lanceur, pas de l'instance (KERNEL §4).
-  buildMemoryIndex(root, chemin);
+  const idxCalcule = buildMemoryIndex(root, chemin, { ecrire: !(extra && extra.dryRun) });
   const rappel = "relis le fichier complet si ON_ORIENT l'exige";
   const introuvable = (name) => `<fichier chemin="mission/${chemin}/${name}" note="INTROUVABLE"></fichier>`;
   const role = readIf(path.join(base, 'ROLE.md'));
@@ -505,17 +658,24 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg) {
   const st = readIf(path.join(base, 'STATUS.md'));
   p.push(st === null ? introuvable('STATUS.md') : fileBlock(`mission/${chemin}/STATUS.md`, st));
   blocs.push({ nom: 'STATUS', chars: st === null ? 0 : st.length, note: '' });
+  const inbox = readInboxOf(root, chemin);
+  const sel = (uniteMode && inbox !== null) ? selectInboxMessages(root, chemin, params) : null;
   if (uniteMode) {
-    const reveil = describeWakeReason(root, chemin);
+    let reveil = describeWakeReason(root, chemin);
+    // Affiché dès qu'au moins un message est injecté (pas seulement si verifies+nonVerifies > 0) :
+    // le cas verifies=0 ET nonVerifies=0 avec des messages présents est précisément le repli
+    // fail-open (Git absent, message-lint introuvable) où l'instance a le plus besoin de savoir
+    // que rien n'a été vérifié (M5, TASK correctif MSG-concepteur-002).
+    if (sel && parseMessageBlocks(sel.content).msgs.length > 0) {
+      reveil += `\n${sel.verifies} messages vérifiés, ${sel.nonVerifies} non vérifiés`;
+    }
     p.push(`<reveil>\n${reveil}\n</reveil>`);
     blocs.push({ nom: 'REVEIL', chars: reveil.length, note: '' });
   }
-  const inbox = readIf(path.join(base, 'INBOX.md'));
   if (inbox === null) {
     p.push(introuvable('INBOX.md'));
     blocs.push({ nom: 'INBOX', chars: 0, note: '' });
   } else if (uniteMode) {
-    const sel = selectInboxMessages(root, chemin, params);
     const note = sel.hidden
       ? `${sel.hidden} message(s) non sélectionné(s) (critères : ${sel.criteres}) — ${rappel}`
       : `critères : ${sel.criteres}`;
@@ -554,7 +714,7 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg) {
   } else {
     // unites-indexees : ni JOURNAL.md ni PROGRESS.md (spec §2.3) — memoire/INDEX.md à la place,
     // au plus 60 lignes, les plus récentes.
-    const idx = readIf(path.join(base, 'memoire', 'INDEX.md'));
+    const idx = idxCalcule.contenu ? idxCalcule.contenu : readIf(path.join(base, 'memoire', 'INDEX.md'));
     if (idx !== null) {
       const capped = tailBounded(idx, 60, Number.MAX_SAFE_INTEGER);
       p.push(fileBlock(`mission/${chemin}/memoire/INDEX.md`, capped.content, capped.droppedLines ? `60 dernières lignes (${capped.droppedLines} retirée(s))` : undefined));
@@ -578,10 +738,11 @@ function prepareLaunch(root, chemin, opts) {
   try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* rien à supprimer */ }
   const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
   const params = resolveParams(cfg);
+  const workspace = bootstrap ? { cwd: root, branche: null } : resolveWorkspace(root, chemin, cfg);
   const fiche = bootstrap ? parseFiche(null) : parseFiche(readIf(fichePath(root, chemin)));
   const meta = resolveProfile(cfg, fiche, chemin, opts);
   if (!bootstrap) {
-    const base = path.join(root, 'mission', chemin);
+    const base = path.join(workspace.cwd, 'mission', chemin);
     for (const name of ['ROLE.md', 'STATUS.md']) {
       if (!fs.existsSync(path.join(base, name))) throw new Error(`instance ${chemin} : ${name} introuvable (mécanique de spawn KERNEL §9 non faite ?)`);
     }
@@ -591,7 +752,7 @@ function prepareLaunch(root, chemin, opts) {
   const budget = opts.budget || params.budget_usd_par_session;
   const maxTours = opts.maxTours || params.max_tours_par_session;
   const systemPrompt = buildSystemPrompt(root, cfg, bootstrap);
-  const detail = buildUserPromptDetail(root, chemin, meta, Object.assign({}, params, { budget_usd_par_session: budget, max_tours_par_session: maxTours }), bootstrap, cfg);
+  const detail = buildUserPromptDetail(root, chemin, meta, Object.assign({}, params, { budget_usd_par_session: budget, max_tours_par_session: maxTours }), bootstrap, cfg, { dryRun: !!opts.dryRun });
   const prompt = detail.prompt;
   const settingsFile = path.join(root, 'framework', 'claude', 'instance-settings.json');
   // Motifs RELATIFS à la racine du projet (constat D2, session n°7 de concepteur — sondé en conditions
@@ -640,17 +801,18 @@ function prepareLaunch(root, chemin, opts) {
     GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || 'holarch@localhost',
   };
   const env = Object.assign({}, process.env, identite, {
-    HOLARCH_ROOT: root,
+    HOLARCH_ROOT: workspace.cwd,
     HOLARCH_INSTANCE: chemin,
     HOLARCH_CONTEXT_LIMIT: String(params.seuil_contexte_tokens),
     HOLARCH_COMMIT: params.commit_par_session,
     HOLARCH_BOOTSTRAP: bootstrap ? '1' : '0',
-    // Taille de registry/PROGRESS.md avant ce lancement : baseline de wake-guard (garde-fou ON_ORIENT). Calculée ici,
-    // pas au premier appel du hook côté session, pour ne pas rater une ligne ON_ORIENT écrite avant toute écriture
-    // hors de l'arbre propre de l'instance — cf. holarch-hooks.js, wakeGuard.
-    HOLARCH_PROGRESS_BASELINE: String((readIf(path.join(root, 'mission', 'registry', 'PROGRESS.md')) || '').length),
+    // Taille de registry/PROGRESS.md avant ce lancement : baseline de wake-guard (garde-fou ON_ORIENT). Calculée dans
+    // le worktree de l'instance (workspace.cwd) : c'est ce fichier-là, relatif à HOLARCH_ROOT, que le hook mesurera
+    // pendant la session — cf. holarch-hooks.js, wakeGuard. Calculée ici, pas au premier appel du hook côté session,
+    // pour ne pas rater une ligne ON_ORIENT écrite avant toute écriture hors de l'arbre propre de l'instance.
+    HOLARCH_PROGRESS_BASELINE: String((readIf(path.join(workspace.cwd, 'mission', 'registry', 'PROGRESS.md')) || '').length),
   });
-  return { root, chemin, bootstrap, cfg, params, meta, permissionMode, budget, maxTours, args, env, systemPrompt, prompt, blocs: detail.blocs, settingsFile };
+  return { root, chemin, bootstrap, cfg, params, meta, permissionMode, budget, maxTours, args, env, systemPrompt, prompt, blocs: detail.blocs, settingsFile, cwd: workspace.cwd, branche: workspace.branche };
 }
 
 // ---------------------------------------------------------------------------
@@ -676,8 +838,8 @@ function ensureSessionsFile(root, missionName) {
       'Coût = estimation locale au tarif liste (--output-format json, total_cost_usd). Tokens : entrée fraîche / lus en cache / écrits en cache / sortie.',
       'Colonne Modèle/effort : un modèle par délégation à un sous-agent Agent le fait apparaître ici avec son coût (res.modelUsage, tarif liste), ex. "claude-opus-5 1.2900+claude-sonnet-5 0.2700/high" ; modèles haiku filtrés (bruit d\'appels internes). -->',
       '',
-      '| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens (entrée / cache lu / cache écrit / sortie) | Coût USD | Durée | Fin | STATUS | Réveil (car. système / utilisateur) |',
-      '|---|---|---|---|---|---|---|---|---|---|---|',
+      '| Date (UTC) | Instance | Session | Modèle / effort | Tours | Tokens (entrée / cache lu / cache écrit / sortie) | Coût USD | Durée | Fin | STATUS | Réveil (car. système / utilisateur) | Contexte (départ / max) |',
+      '|---|---|---|---|---|---|---|---|---|---|---|---|',
       '',
     ].join('\n'));
   }
@@ -690,12 +852,27 @@ function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, stat
   const modelEntries = res && res.modelUsage
     ? Object.entries(res.modelUsage).filter(([m]) => !/haiku/i.test(m))
     : [];
+  // Le coût par modèle n'est accolé au nom que si la session en a utilisé plusieurs (repli, changement
+  // de régime) : avec un seul modèle il dupliquerait la colonne « Coût USD ».
   const models = modelEntries
-    .map(([m, mu]) => (typeof mu.costUSD === 'number' ? `${m} ${mu.costUSD.toFixed(4)}` : m))
+    .map(([m, mu]) => (modelEntries.length > 1 && typeof mu.costUSD === 'number' ? `${m} ${mu.costUSD.toFixed(4)}` : m))
     .join('+');
   const cost = res && typeof res.total_cost_usd === 'number' ? res.total_cost_usd.toFixed(4) : '?';
   const fin = res ? `${res.subtype || '?'}${res.is_error ? ' (erreur)' : ''}${res.permission_denials && res.permission_denials.length ? ` · ${res.permission_denials.length} refus` : ''}` : 'sans résultat JSON';
-  const line = `| ${nowIso()} | ${chemin} | ${res && res.session_id ? res.session_id : '—'} | ${models || meta.modele}/${meta.effort} | ${res ? res.num_turns : '?'} | ${u.input_tokens ?? '?'} / ${u.cache_read_input_tokens ?? '?'} / ${u.cache_creation_input_tokens ?? '?'} / ${u.output_tokens ?? '?'} | ${cost} | ${fmtDuration(elapsedMs)} | ${fin} | ${status || '?'} | ${promptChars ? `${promptChars.systeme} / ${promptChars.utilisateur}` : '—'} |\n`;
+  // Mesure instantanée (module context-budget, volet 8.1) : le fichier live n'est repris que s'il porte
+  // encore le session_id de CETTE session — sinon une session suivante déjà relancée l'aurait déjà réécrit.
+  let contexte = '— / —';
+  if (res && res.session_id) {
+    const cfile = contexteLivePath(root, chemin);
+    try {
+      const data = JSON.parse(fs.readFileSync(cfile, 'utf8'));
+      if (data.session_id === res.session_id) {
+        contexte = `${data.depart ?? '?'} / ${data.max ?? '?'}`;
+        fs.unlinkSync(cfile);
+      }
+    } catch (_) { /* pas de mesure disponible : — / — */ }
+  }
+  const line = `| ${nowIso()} | ${chemin} | ${res && res.session_id ? res.session_id : '—'} | ${models || meta.modele}/${meta.effort} | ${res ? res.num_turns : '?'} | ${u.input_tokens ?? '?'} / ${u.cache_read_input_tokens ?? '?'} / ${u.cache_creation_input_tokens ?? '?'} / ${u.output_tokens ?? '?'} | ${cost} | ${fmtDuration(elapsedMs)} | ${fin} | ${status || '?'} | ${promptChars ? `${promptChars.systeme} / ${promptChars.utilisateur}` : '—'} | ${contexte} |\n`;
   fs.appendFileSync(p, line);
   return line;
 }
@@ -717,7 +894,7 @@ function runOnce(launch, attempt) {
   const bin = process.env.HOLARCH_FAKE_CLAUDE ? process.execPath : 'claude';
   const realArgs = process.env.HOLARCH_FAKE_CLAUDE ? [process.env.HOLARCH_FAKE_CLAUDE, ...args] : args;
   const r = spawnSync(bin, realArgs, {
-    cwd: launch.root,
+    cwd: launch.cwd,
     env: launch.env,
     encoding: 'utf8',
     input: launch.prompt,
@@ -735,8 +912,17 @@ function runOnce(launch, attempt) {
   return { res, elapsedMs, exitCode: r.status, signal: r.signal, error: r.error, logBase, stderr: r.stderr || '' };
 }
 
+/** STATUS.md d'une instance : son worktree s'il existe, sinon l'arbre `root`, sinon — git-branches actif, isolation ≠
+ *  aucune — sa branche (`git show <branche>:mission/<chemin>/STATUS.md`) : cas d'un enfant spawné (ON_SPAWN a
+ *  committé ses fichiers sur sa branche) mais jamais incarné, que le parent revenu sur sa propre branche ne voit
+ *  plus sur disque (chantier 3, dogfooding du 2026-09-10). */
 function readStatusOf(root, chemin) {
-  return parseStatus(readIf(path.join(root, 'mission', chemin, 'STATUS.md')));
+  const texte = readIf(instancePath(root, chemin, 'STATUS.md'));
+  if (texte !== null || !chemin.includes('/')) return parseStatus(texte);
+  const gb = gitBranchesCtx(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))));
+  if (!gb) return parseStatus(null);
+  const r = spawnSync('git', ['-C', root, 'show', `${gb.prefixe}${chemin.replace(/\//g, '-')}:mission/${chemin}/STATUS.md`], { encoding: 'utf8' });
+  return parseStatus(r.status === 0 ? r.stdout : null);
 }
 
 /** Relit CONFIG.md et la fiche registre sur disque et en résout le régime (profil, modèle, effort) — même
@@ -749,6 +935,9 @@ function resolveMetaFromDisk(root, chemin, opts) {
 
 function liveDir(root) { return path.join(root, 'mission', '.holarch', 'live'); }
 function liveLockPath(root, chemin) { return path.join(liveDir(root), `${chemin.replace(/\//g, '-')}.json`); }
+// Mesure instantanée (module context-budget, volet 8.1) : fichier écrit par contextWatch (holarch-hooks.js),
+// à côté du verrou de vivacité — même convention de nom, suffixe différent.
+function contexteLivePath(root, chemin) { return path.join(liveDir(root), `${chemin.replace(/\//g, '-')}.contexte.json`); }
 function isLive(root, chemin) {
   let data;
   try { data = JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')); } catch (_) { return false; }
@@ -763,7 +952,7 @@ function stopPath(root, chemin) { return path.join(root, 'mission', '.holarch', 
 function lastStatusCommitIso(root, chemin) {
   const rel = path.join('mission', chemin, 'STATUS.md').split(path.sep).join('/');
   let r;
-  try { r = spawnSync('git', ['log', '-1', '--format=%cI', '--', rel], { cwd: root, encoding: 'utf8' }); }
+  try { r = spawnSync('git', ['log', '-1', '--format=%cI', '--', rel], { cwd: instanceRoot(root, chemin), encoding: 'utf8' }); }
   catch (_) { return null; }
   if (!r || r.error || r.status !== 0 || !r.stdout || !r.stdout.trim()) return null;
   return r.stdout.trim().split('\n')[0];
@@ -783,18 +972,28 @@ function appendReveilsLine(root, chemin, declencheur, condition, tacheId) {
   fs.appendFileSync(p, `| ${nowIso()} | ${chemin} | ${declencheur} | ${condition} | ${tacheId} |\n`);
 }
 
+/** Contexte git-branches pour l'énumération des enfants par le module de réveil (branches d'enfants) — null si le
+ *  module est inactif ou en `isolation = aucune`. */
+function gitBranchesCtx(cfg) {
+  if (!moduleActive(cfg, 'extensions', 'git-branches')) return null;
+  const params = resolveParams(cfg);
+  if (params.isolation === 'aucune') return null;
+  return { prefixe: params.prefixe_branche || 'holarch/' };
+}
+
 function wakeWaiters(root, declencheur) {
   const waiters = reveil.listWaiters(root);
+  const gitBranches = gitBranchesCtx(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))));
   const reveilles = [];
   const now = new Date();
   const readStatus = (chemin) => readStatusOf(root, chemin);
-  const readInbox = (chemin) => readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '';
+  const readInbox = (chemin) => readInboxOf(root, chemin) || '';
   for (const w of waiters) {
     if (w.chemin === declencheur) continue;
     if (!['WAITING_CHILDREN', 'BLOCKED', 'READY'].includes(w.etat)) continue;
     if (isLive(root, w.chemin)) continue;
     const sinceIso = lastStatusCommitIso(root, w.chemin);
-    const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox });
+    const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox, gitBranches });
     if (!evalRes.satisfied) continue;
     const condition = reveil.formatReveil(w.ast);
     const { id } = detachLaunch(root, w.chemin, {});
@@ -844,10 +1043,10 @@ function finishLaunch(root, chemin, code, sessions) {
  *  distingue une hibernation utile d'une boucle qui relit et hiberne sans rien produire. */
 function progressSnapshot(root, chemin) {
   let fiches = 0;
-  try { fiches = fs.readdirSync(path.join(root, 'mission', chemin, 'memoire')).filter((f) => /^U\d+-.*\.md$/.test(f)).length; } catch (_) { /* pas de mémoire adressée */ }
+  try { fiches = fs.readdirSync(instancePath(root, chemin, 'memoire')).filter((f) => /^U\d+-.*\.md$/.test(f)).length; } catch (_) { /* pas de mémoire adressée */ }
   let commits = null;
   try {
-    const r = spawnSync('git', ['log', '--format=%s', '-500'], { cwd: root, encoding: 'utf8' });
+    const r = spawnSync('git', ['log', '--format=%s', '-500'], { cwd: instanceRoot(root, chemin), encoding: 'utf8' });
     if (r.status === 0) commits = r.stdout.split('\n').filter((s) => s.startsWith(`[${chemin}]`)).length;
   } catch (_) { /* pas un dépôt git */ }
   return { fiches, commits };
@@ -861,12 +1060,25 @@ function countSessions(root, chemin) {
   const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
   return text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin).length;
 }
+/** Contexte de départ (colonne 12, module context-budget volet 8.1) de la dernière session journalisée
+ *  pour l'instance. null si aucune session, ou si la dernière ligne est antérieure à cette colonne. */
+function lastContexteDepart(root, chemin) {
+  const text = readIf(path.join(root, 'mission', 'registry', 'SESSIONS.md')) || '';
+  const lignes = text.split('\n').filter((l) => /^\| \d{4}-/.test(l) && (l.split('|')[2] || '').trim() === chemin);
+  if (!lignes.length) return null;
+  const cellules = lignes[lignes.length - 1].split('|');
+  if (cellules.length < 14) return null; // ligne écrite avant l'ajout de la colonne Contexte
+  const contexte = (cellules[cellules.length - 2] || '').trim();
+  if (!contexte || contexte === '— / —') return null;
+  const depart = contexte.split('/')[0].trim();
+  return /^\d+$/.test(depart) ? depart : null;
+}
 /** ALERT du lanceur dans l'INBOX du parent (KERNEL §7, provenance `harnais`) : l'enfant ne sera plus ré-incarné
  *  tout seul, le parent décide — relance détachée, TASK correctif ou FAILED. Rien pour une racine (pas de parent). */
 function appendAlertToParent(root, chemin, corps) {
   if (!chemin.includes('/')) return null;
   const parent = chemin.slice(0, chemin.lastIndexOf('/'));
-  const p = path.join(root, 'mission', parent, 'INBOX.md');
+  const p = instancePath(root, parent, 'INBOX.md');
   if (!fs.existsSync(p)) return null;
   const date = nowIso();
   const id = `MSG-harnais-${chemin.replace(/\//g, '-')}-${date.replace(/[^0-9]/g, '').slice(0, 14)}`;
@@ -874,11 +1086,40 @@ function appendAlertToParent(root, chemin, corps) {
   return id;
 }
 
+/** Limite de sessions de l'API (forfait : `api_error_status: 429`, « You've hit your session limit · resets H:MMam (UTC) »).
+ *  La session n'a pas eu lieu : ni progrès, ni absence de progrès. Retourne null si ce n'est pas ce cas ; sinon
+ *  {texte, repriseIso, attenteMs} — attenteMs = délai jusqu'à l'heure de remise à zéro annoncée + 60 s, null si elle est
+ *  illisible ou à plus de 6 h. `HOLARCH_ATTENTE_429_MS` force la durée (tests). Mission holarch-provenance, 2026-09-10 :
+ *  trois 429 d'affilée (23 s, 1 s, 1 s) comptés comme « 3 sessions sans progrès » — enfant arrêté à tort. */
+function limiteApi(res) {
+  if (!res || !res.is_error || Number(res.api_error_status) !== 429) return null;
+  const texte = String(res.result || res.error || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  let attenteMs = null;
+  let repriseIso = '?';
+  const m = texte.match(/resets?\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (m) {
+    let h = Number(m[1]);
+    const mn = Number(m[2] || 0);
+    const ap = (m[3] || '').toLowerCase();
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    const now = new Date();
+    const cible = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, mn, 0));
+    if (cible.getTime() <= now.getTime()) cible.setUTCDate(cible.getUTCDate() + 1);
+    const ms = cible.getTime() - now.getTime() + 60000;
+    if (ms <= 6 * 3600 * 1000) { attenteMs = ms; repriseIso = cible.toISOString().replace(/\.\d{3}Z$/, 'Z'); }
+  }
+  if (process.env.HOLARCH_ATTENTE_429_MS !== undefined) { attenteMs = Number(process.env.HOLARCH_ATTENTE_429_MS); repriseIso = 'forcée (HOLARCH_ATTENTE_429_MS)'; }
+  return { texte, repriseIso, attenteMs };
+}
+function attendre(ms) { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+
 function launchWithRelaunches(root, chemin, opts, runner) {
   runner = runner || runOnce;
   const sessions = [];
   let attempt = 0;
   let relances = 0; // ré-incarnations de contexte consécutives SANS progrès (relances_max)
+  let attentes429 = 0; // reprises après une limite de sessions de l'API (au plus 3 par invocation)
   let changements = 0; // ré-incarnations après un changement de régime (changements_regime_max)
   for (;;) {
     attempt += 1;
@@ -886,13 +1127,39 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     // ont changé sur disque (écrits par la session qui vient de se terminer) — les relire ici est ce qui évite
     // d'injecter dans le prompt de la ré-incarnation l'état d'avant cette session (bug constaté en pratique,
     // T4 réel session n°4→5 : la ré-incarnation recevait l'état de la session n°3).
-    const launch = prepareLaunch(root, chemin, opts);
+    // Après un --bootstrap, la racine existe (fichiers d'instance, fiche registre) : toute ré-incarnation repart
+    // comme instance ordinaire, sans BOOTSTRAP.md — sinon la session ré-incarnée refuse « mission déjà en cours »
+    // sans rien faire (dogfooding du chantier 3, 2026-09-10 : trois sessions perdues avant l'arrêt sans progrès).
+    const tentativeOpts = attempt > 1 && opts.bootstrap ? Object.assign({}, opts, { bootstrap: false }) : opts;
+    const launch = prepareLaunch(root, chemin, tentativeOpts);
     if (opts.timeoutMin > 0) launch.timeoutMs = opts.timeoutMin * 60 * 1000;
     const avant = progressSnapshot(root, chemin);
     const out = runner(launch, attempt);
     const status = readStatusOf(root, chemin);
     const line = appendSessionLine(root, launch.cfg.nom, chemin, launch.meta, out.res, out.elapsedMs, status.etat || '(absent)', { systeme: launch.systemPrompt.length, utilisateur: launch.prompt.length });
     sessions.push(Object.assign({ status, line, launch }, out));
+    // 1.9.0 (maintenance, mission holarch-contexte) : un parent qui attend un message (CLARIFICATION, PROPOSAL, BLOCKER,
+    // ALERT) ne doit pas attendre la fin de toute la boucle de ré-incarnation de son enfant — les guetteurs sont évalués
+    // après chaque session. Idempotent : un parent vivant ou déjà réveillé est ignoré (isLive), et « récent » signifie
+    // postérieur à son dernier commit de STATUS, donc aucun re-réveil en boucle sur le même message. finishLaunch
+    // réévalue une dernière fois à la sortie de la boucle (état final de l'enfant : DELIVERED, FAILED…).
+    const reveillesSession = wakeWaiters(root, chemin);
+    if (reveillesSession.length) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ réveil après la session n° ${attempt} : ${reveillesSession.map((r) => `${r.chemin} (${r.condition})`).join(' ; ')}
+`);
+    const limite = limiteApi(out.res);
+    if (limite) {
+      attentes429 += 1;
+      if (limite.attenteMs !== null && attentes429 <= 3) {
+        process.stderr.write(`HOLARCH ▸ ${chemin} ▸ limite de sessions de l'API (429) — la session n'a pas eu lieu ; reprise à ${limite.repriseIso} (attente ${fmtDuration(limite.attenteMs)}, ${attentes429}/3)\n`);
+        attendre(limite.attenteMs);
+        continue;
+      }
+      const arret = { motif: 'limite-api', texte: limite.texte };
+      arret.alerte = appendAlertToParent(root, chemin, `**Enfant \`${chemin}\` arrêté par le lanceur** : limite de sessions de l'API (429 — « ${limite.texte} »), la session n'a pas eu lieu (ni progrès ni absence de progrès). Relance-le en tâche détachée (\`node framework/bin/holarch-spawn.js ${chemin} --detach\`) après l'heure de remise à zéro.`);
+      sessions[sessions.length - 1].arret = arret;
+      process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ré-incarnations arrêtées (limite de sessions de l'API 429 : ${limite.texte})${arret.alerte ? ` — ALERT ${arret.alerte} au parent` : ''}\n`);
+      return sessions;
+    }
     const maxRelances = Number(launch.params.relances_max) || 0;
     const maxChangements = Number(launch.params.changements_regime_max) || 0;
     const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
@@ -902,7 +1169,7 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     // registre avant d'hiberner. La fiche est relue ici comme prepareLaunch la relira au tour suivant ; un régime
     // différent est ré-incarné sur le nouveau modèle/effort, décompté à part des ré-incarnations de contexte.
     const regime = (m) => `${m.modele}/${m.effort}`;
-    const next = resolveMetaFromDisk(root, chemin, opts);
+    const next = resolveMetaFromDisk(root, chemin, Object.assign({}, opts, { bootstrap: false }));
     if (regime(next) !== regime(launch.meta)) {
       if (changements >= maxChangements) {
         process.stderr.write(`HOLARCH ▸ ${chemin} ▸ changement de régime demandé (${regime(launch.meta)} → ${regime(next)}) mais changements_regime_max (${maxChangements}) atteint — pas de ré-incarnation automatique\n`);
@@ -960,8 +1227,12 @@ function summarize(launch, sessions) {
     lines.push(`⚠ aucun résultat JSON du CLI (code ${last.exitCode}, signal ${last.signal || '—'})${causeExacte} — voir ${last.logBase}.stderr.log`);
     code = 2;
   }
-  else if (last.res.is_error) { lines.push(`⚠ fin anormale : ${last.res.subtype} — voir ${last.logBase}.result.json`); code = 2; }
+  else if (last.res.is_error && !(last.arret && last.arret.motif === 'limite-api')) { lines.push(`⚠ fin anormale : ${last.res.subtype} — voir ${last.logBase}.result.json`); code = 2; }
   if (isArret) { lines.push('ℹ arrêt propre demandé (--arret) : session terminée sans ré-incarnation.'); }
+  else if (last.arret && last.arret.motif === 'limite-api') {
+    lines.push(`⚠ limite de sessions de l'API (429 : ${last.arret.texte}) — la session n'a pas eu lieu, STATUS inchangé (${status.etat || '(absent)'}) ; ${last.arret.alerte ? `ALERT ${last.arret.alerte} déposé dans l'INBOX du parent` : 'relancer'} après l'heure de remise à zéro (\`node framework/bin/holarch-spawn.js ${launch.chemin} --detach\`).`);
+    code = 3;
+  }
   else if (status.etat === 'WORKING' && !voluntary) { lines.push('⚠ STATUS.md est resté à WORKING : session plantée ou ON_SLEEP non exécuté (direct-spawn : relancer une fois, puis FAILED + recadrage).'); code = 2; }
   else if (voluntary) {
     const a = last.arret || {};
@@ -984,7 +1255,7 @@ function summarize(launch, sessions) {
 // CLI
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '' };
+  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -1004,6 +1275,7 @@ function parseArgs(argv) {
     else if (a === '--reveil') o.reveil = true;
     else if (a === '--taches') o.taches = true;
     else if (a === '--arret') o.arret = next();
+    else if (a === '--nettoyer-worktree') o.nettoyerWorktree = next();
     else if (a === '-h' || a === '--help') { o.help = true; }
     else if (a.startsWith('-')) throw new Error(`option inconnue : ${a}`);
     else if (!o.chemin) o.chemin = a.replace(/^mission\//, '').replace(/\/+$/, '');
@@ -1021,6 +1293,7 @@ function usage() {
     '          --budget-usd <n> --max-tours <n> --permission-mode <mode> --timeout-min <n> --root <dir>',
     '          --add-dir <dir> (répétable — dépôt externe accessible en plus de la racine) --dry-run --json',
     '          --detach --reveil --taches --arret <chemin> (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
+    '          --nettoyer-worktree <chemin> (supprime le worktree d\'une instance déjà fusionnée ; refuse si des changements non committés subsistent)',
   ].join('\n');
 }
 
@@ -1057,16 +1330,23 @@ function main() {
     process.stdout.write(`HOLARCH ▸ ${chemin} ▸ arrêt demandé (${p})\n`);
     return;
   }
+  if (o.nettoyerWorktree) {
+    const chemin = o.nettoyerWorktree.replace(/^mission\//, '').replace(/\/+$/, '');
+    const res = removeWorktree(root, chemin);
+    if (res.removed) { process.stdout.write(`HOLARCH ▸ ${chemin} ▸ worktree supprimé\n`); }
+    else { process.stderr.write(`HOLARCH ▸ ${chemin} ▸ worktree non supprimé (${res.reason})\n`); process.exit(1); }
+    return;
+  }
   if (o.reveil) {
     const now = new Date();
     const readStatus = (chemin) => readStatusOf(root, chemin);
-    const readInbox = (chemin) => readIf(path.join(root, 'mission', chemin, 'INBOX.md')) || '';
+    const readInbox = (chemin) => readInboxOf(root, chemin) || '';
     const waiters = reveil.listWaiters(root);
     if (o.dryRun) {
       if (!waiters.length) process.stdout.write('aucune instance en attente (ligne Réveil non vide).\n');
       for (const w of waiters) {
         const sinceIso = lastStatusCommitIso(root, w.chemin);
-        const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox });
+        const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox, gitBranches: gitBranchesCtx(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')))) });
         process.stdout.write(`${w.chemin} · ${reveil.formatReveil(w.ast)} · ${evalRes.satisfied ? 'satisfaite' : 'non satisfaite'}${isLive(root, w.chemin) ? ' · live' : ''}\n`);
         for (const d of evalRes.details) process.stdout.write(`  - ${d.terme} : ${d.vrai ? 'vrai' : 'faux'} (${d.pourquoi})\n`);
       }
@@ -1123,9 +1403,11 @@ module.exports = {
   buildSystemPrompt, buildUserPrompt, prepareLaunch, parseResultJson, appendSessionLine, summarize,
   findRoot, launchWithRelaunches, DEFAULTS, DEFAULT_POLICY, tailInboxMessages, INBOX_TAIL_MESSAGES,
   buildUserPromptDetail, tailBounded, tailInboxBounded, moduleActive, parseUniteHeader,
-  buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason,
-  isLive, wakeWaiters, detachLaunch, finishLaunch, lastStatusCommitIso, stopPath, liveLockPath,
+  buildMemoryIndex, lastHibernationCommit, selectInboxMessages, describeWakeReason, readInboxOf, annoterOrigines,
+  isLive, wakeWaiters, detachLaunch, finishLaunch, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
   progressSnapshot, hasProgressed, countSessions, appendAlertToParent,
+  worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree,
+  ensureSessionsFile, lastContexteDepart, contexteLivePath,
 };
 
 if (require.main === module) main();

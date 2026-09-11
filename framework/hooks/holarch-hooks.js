@@ -91,6 +91,25 @@ function stateFile(sessionId) {
 function loadState(sessionId) { try { return JSON.parse(fs.readFileSync(stateFile(sessionId), 'utf8')); } catch (_) { return {}; } }
 function saveState(sessionId, st) { try { fs.writeFileSync(stateFile(sessionId), JSON.stringify(st)); } catch (_) { /* ignore */ } }
 
+// Mesure instantanée (module context-budget, volet 8.1) : contexte réel de la session en cours,
+// à côté du verrou de vivacité du lanceur (mission/.holarch/live/<chemin-tirets>.json).
+function contexteLivePath(root, instance) {
+  return path.join(root, 'mission', '.holarch', 'live', `${instance.replace(/\//g, '-')}.contexte.json`);
+}
+function updateContexteLive(root, instance, sessionId, tokens) {
+  const file = contexteLivePath(root, instance);
+  let data = {};
+  try { data = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { data = {}; }
+  if (data.session_id !== sessionId) data = { session_id: sessionId, depart: tokens, max: tokens, dernier: tokens, tours: 0 };
+  data.tours = (data.tours || 0) + 1;
+  data.dernier = tokens;
+  if (tokens > data.max) data.max = tokens;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(data));
+  } catch (_) { /* fail-open */ }
+}
+
 function gitDirtyCount(root, paths, exclure) {
   const r = spawnSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all', '--', ...paths], { encoding: 'utf8' });
   if (r.status !== 0) return 0; // pas un dépôt git : rien à exiger
@@ -183,11 +202,50 @@ function sleepGuard(ctx) {
 // portent leur propre STATUS.md. Recompté depuis le disque plutôt que lu sur la fiche du parent (colonne « Budget
 // alloué / consommé », auto-déclarée et jamais recalculée) — constat A2, audit indépendant du 2026-09-03 : cette
 // fiche peut être fausse (sous-évaluée) sans que rien ne le détecte.
-function countChildren(root, instance) {
+// Chantier 3 (git-branches 1.1.0, dogfooding du 2026-09-10) : sous `isolation = worktree`, les fichiers d'un enfant
+// n'existent PAS sur disque dans l'arbre du parent — ON_SPAWN les commit sur la branche de l'enfant puis le parent
+// revient sur sa propre branche ; à la ré-incarnation ils vivent dans le worktree de l'enfant. Le fusible résout
+// donc chaque fichier d'enfant dans cet ordre : disque (aucune/branche, ou parent encore sur la branche de
+// l'enfant) → worktree de l'enfant → branche de l'enfant (`git cat-file -e`), exactement ce que git-branches
+// prescrit au parent en ON_CHILD_DONE (`git show <branche>:…`).
+function gitBranches(root) {
+  if (!activeModules(root).includes('git-branches')) return null;
+  const isolation = configParam(root, 'isolation') || 'worktree';
+  if (isolation === 'aucune') return null;
+  return { isolation, prefixe: configParam(root, 'prefixe_branche') || 'holarch/' };
+}
+function brancheDe(gb, chemin) { return `${gb.prefixe}${chemin.replace(/\//g, '-')}`; }
+function worktreeDe(root, chemin) { return path.join(root, 'mission', '.holarch', 'worktrees', chemin.replace(/\//g, '-')); }
+function surBranche(root, branche, rel) {
+  const r = spawnSync('git', ['-C', root, 'cat-file', '-e', `${branche}:${rel}`], { encoding: 'utf8' });
+  return r.status === 0;
+}
+/** `rel` est relatif à la racine du dépôt (ex. mission/<enfant>/ROLE.md, mission/registry/instances/<tirets>.md). */
+function childFileExists(root, chemin, rel, gb) {
+  if (exists(path.join(root, rel))) return true;
+  if (!gb) return false;
+  if (gb.isolation === 'worktree' && exists(path.join(worktreeDe(root, chemin), rel))) return true;
+  return surBranche(root, brancheDe(gb, chemin), rel);
+}
+function countChildren(root, instance, gb) {
   const dir = path.join(root, 'mission', instance);
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return 0; }
-  return entries.filter((e) => e.isDirectory() && e.name !== 'workspace' && exists(path.join(dir, e.name, 'STATUS.md'))).length;
+  const noms = new Set();
+  let entries = [];
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { /* pas de sous-arbre sur disque */ }
+  for (const e of entries) if (e.isDirectory() && e.name !== 'workspace' && exists(path.join(dir, e.name, 'STATUS.md'))) noms.add(e.name);
+  if (gb) {
+    // Union avec les enfants dont la branche existe : `git ls-tree` de chaque branche `<prefixe><instance-tirets>-*`,
+    // en ne retenant que les STATUS.md d'un enfant DIRECT de `instance` (le nommage en tirets est ambigu, le
+    // contenu de la branche ne l'est pas).
+    const motif = `${brancheDe(gb, instance)}-*`;
+    const list = spawnSync('git', ['-C', root, 'branch', '--list', '--format=%(refname:short)', motif], { encoding: 'utf8' });
+    const re = new RegExp(`^mission/${instance.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/([^/]+)/STATUS\.md$`);
+    for (const b of (list.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)) {
+      const tree = spawnSync('git', ['-C', root, 'ls-tree', '-r', '--name-only', b, '--', `mission/${instance}/`], { encoding: 'utf8' });
+      for (const f of (tree.stdout || '').split('\n')) { const m = f.trim().match(re); if (m) noms.add(m[1]); }
+    }
+  }
+  return noms.size;
 }
 
 function spawnGuard(ctx) {
@@ -221,11 +279,12 @@ function spawnGuard(ctx) {
   if (/(^|\s)--dry-run(\s|$)/.test(invoke)) return ok();
   if (!target.startsWith(`${instance}/`)) return deny(`tu ne peux incarner que tes propres enfants directs (\`${instance}/<nom>\`) — cible demandée : \`${target}\` (KERNEL §4).`);
   if (target.slice(instance.length + 1).includes('/')) return deny(`\`${target}\` n'est pas un enfant direct de \`${instance}\` : chaque parent incarne ses propres enfants.`);
-  const base = path.join(root, 'mission', target);
+  const gb = gitBranches(root);
+  const ou = gb ? ` (ni sur disque, ni dans son worktree, ni sur sa branche \`${brancheDe(gb, target)}\`)` : '';
   for (const f of ['ROLE.md', 'STATUS.md', 'MEMORY.md']) {
-    if (!exists(path.join(base, f))) return deny(`mission/${target}/${f} absent — applique d'abord la mécanique structurelle du spawn (KERNEL §9).`);
+    if (!childFileExists(root, target, `mission/${target}/${f}`, gb)) return deny(`mission/${target}/${f} absent${ou} — applique d'abord la mécanique structurelle du spawn (KERNEL §9).`);
   }
-  if (!exists(fichePath(root, target))) return deny(`fiche registre \`registry/instances/${target.replace(/\//g, '-')}.md\` absente (module registre, ON_SPAWN).`);
+  if (!childFileExists(root, target, path.relative(root, fichePath(root, target)), gb)) return deny(`fiche registre \`registry/instances/${target.replace(/\//g, '-')}.md\` absente${ou} (module registre, ON_SPAWN).`);
   const pmax = Number(configParam(root, 'profondeur_max'));
   const depth = target.split('/').length;
   if (pmax && depth > pmax) return deny(`profondeur ${depth} > profondeur_max ${pmax} (module max-depth) : fais le travail toi-même ou émets un BLOCKER.`);
@@ -236,8 +295,8 @@ function spawnGuard(ctx) {
     // haut) : `countChildren` le compte donc lui-même, qu'il s'agisse de sa toute première incarnation ou d'une
     // ré-incarnation. `>=` refusait à tort le N-ième enfant d'un budget N (il se compte lui-même en atteignant
     // N) ; seul un compte qui DÉPASSE alloué signale un vrai dépassement (RAPPORT-iteration-9 §8, D32).
-    const consumed = countChildren(root, instance);
-    if (consumed > parent.alloue) return deny(`budget d'instances dépassé : ${consumed} enfant(s) déjà incarné(s) (celui-ci compris) > alloué ${parent.alloue} (module instance-budget, recompté depuis mission/${instance}/ — pas depuis ta fiche registre).`);
+    const consumed = countChildren(root, instance, gb);
+    if (consumed > parent.alloue) return deny(`budget d'instances dépassé : ${consumed} enfant(s) déjà incarné(s) (celui-ci compris) > alloué ${parent.alloue} (module instance-budget, recompté depuis mission/${instance}/${gb ? ' et depuis les branches d\'enfants' : ''} — pas depuis ta fiche registre).`);
   }
   return ok();
 }
@@ -320,6 +379,7 @@ function contextWatch(ctx) {
   const usage = lastAssistantUsage(input.transcript_path);
   if (!usage) return ok();
   const tokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
+  updateContexteLive(root, instance, input.session_id, tokens);
   if (tokens < limit) return ok();
   const state = loadState(input.session_id);
   if (tokens < (state.lastWarnAt || 0) + WARN_STEP) return ok();
@@ -356,5 +416,5 @@ function main() {
   }
 }
 
-module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES };
+module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive };
 if (require.main === module) main();

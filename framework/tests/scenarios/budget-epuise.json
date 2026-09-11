@@ -1,0 +1,15 @@
+{
+  "statusApres": "WORKING",
+  "note": "",
+  "reveil": "—",
+  "commit": false,
+  "result": {
+    "type": "result",
+    "subtype": "error_max_budget_usd",
+    "session_id": "sess-budget-epuise",
+    "total_cost_usd": 6.0,
+    "num_turns": 40,
+    "usage": { "input_tokens": 5000, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 0, "output_tokens": 2000 },
+    "is_error": true
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "statusApres": "WORKING",
+  "note": "hibernation volontaire (arrêt demandé)",
+  "reveil": "—",
+  "commit": false,
+  "result": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "sess-arret-demande",
+    "total_cost_usd": 0.0005,
+    "num_turns": 1,
+    "usage": { "input_tokens": 50, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 10 },
+    "is_error": false
+  }
+}

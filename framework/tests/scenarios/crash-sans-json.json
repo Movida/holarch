@@ -1,0 +1,6 @@
+{
+  "crash": {
+    "stderr": "fake-claude: plantage simulé (scénario crash-sans-json)\n",
+    "exitCode": 1
+  }
+}

@@ -26,7 +26,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const PERIMETRE = ['framework', 'tools', '.claude', 'docs/holarch.md'];
+const PERIMETRE = ['framework', 'tools', '.claude', 'docs/holarch.md', '.gitattributes'];
 const PRESERVES = new Set(['framework/CONFIG.md']);
 const A_RECONCILIER = new Set(['framework/claude/instance-settings.json']);
 const IGNORES = new Set(['node_modules', '__pycache__', '.venv', '.DS_Store', 'settings.local.json']);

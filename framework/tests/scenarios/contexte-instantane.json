@@ -1,0 +1,16 @@
+{
+  "statusApres": "DELIVERED",
+  "note": "",
+  "reveil": "—",
+  "ecrire": [
+    { "chemin": "mission/.holarch/live/x.contexte.json",
+      "contenu": "{\"session_id\":\"sess-contexte-1\",\"depart\":45000,\"max\":98000,\"dernier\":90000,\"tours\":6}" }
+  ],
+  "commit": false,
+  "result": {
+    "type": "result", "subtype": "success", "session_id": "sess-contexte-1",
+    "total_cost_usd": 0.002, "num_turns": 6,
+    "usage": { "input_tokens": 300, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 0, "output_tokens": 60 },
+    "is_error": false
+  }
+}

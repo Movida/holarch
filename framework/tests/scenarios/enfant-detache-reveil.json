@@ -1,0 +1,15 @@
+{
+  "statusApres": "DELIVERED",
+  "note": "",
+  "reveil": "—",
+  "commit": false,
+  "result": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "sess-detache-reveil",
+    "total_cost_usd": 0.001,
+    "num_turns": 2,
+    "usage": { "input_tokens": 90, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 20 },
+    "is_error": false
+  }
+}

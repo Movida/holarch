@@ -248,8 +248,8 @@ test('launchWithRelaunches : journalise le STATUS réel de chaque tentative dans
   const sessions = launcher.launchWithRelaunches(root, 'concepteur/enfant', {}, runner);
   assert.equal(sessions.length, 2);
   const lignes = sessionsLines(root);
-  assert.match(lignes[0], /\| WORKING \| \d+ \/ \d+ \|$/);
-  assert.match(lignes[1], /\| DELIVERED \| \d+ \/ \d+ \|$/);
+  assert.match(lignes[0], /\| WORKING \| \d+ \/ \d+ \| — \/ — \|$/);
+  assert.match(lignes[1], /\| DELIVERED \| \d+ \/ \d+ \| — \/ — \|$/);
   assert.equal(launcher.summarize(sessions[1].launch, sessions).code, 0);
 });
 
@@ -257,6 +257,6 @@ test('launchWithRelaunches : STATUS.md illisible → « (absent) » journalisé,
   const root = makeRoot(0);
   const runner = () => { fs.rmSync(path.join(root, 'mission/concepteur/enfant/STATUS.md')); return { res: res(), elapsedMs: 10 }; };
   const sessions = launcher.launchWithRelaunches(root, 'concepteur/enfant', {}, runner);
-  assert.match(sessionsLines(root)[0], /\| \(absent\) \| \d+ \/ \d+ \|$/);
+  assert.match(sessionsLines(root)[0], /\| \(absent\) \| \d+ \/ \d+ \| — \/ — \|$/);
   assert.match(launcher.summarize(sessions[0].launch, sessions).text, /STATUS=\(absent\)/);
 });

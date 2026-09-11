@@ -3,6 +3,7 @@
 // Module Node autonome, sans dépendance, require-able par le lanceur et par les tests.
 const fs = require('fs');
 const path = require('path');
+const { spawnSync } = require('child_process');
 
 const TYPES = ['TASK', 'DELIVERABLE', 'BLOCKER', 'CLARIFICATION', 'PROPOSAL', 'ALERT', 'RESPONSE'];
 const ETATS = ['INIT', 'READY', 'WORKING', 'WAITING_CHILDREN', 'BLOCKED', 'DELIVERED', 'FAILED', 'ARCHIVED'];
@@ -99,16 +100,36 @@ function parseMessages(texte) {
   return msgs;
 }
 
-/** Sous-répertoires directs de `chemin` (relatif à mission/) qui sont des instances incarnées (STATUS.md présent, hors workspace/). */
-function listChildren(root, chemin) {
-  const dir = path.join(root, 'mission', chemin);
+function worktreesDir(root) { return path.join(root, 'mission', '.holarch', 'worktrees'); }
+function enfantsSurDisque(base, chemin, into) {
+  const dir = path.join(base, 'mission', chemin);
   let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
-  return entries
-    .filter((e) => e.isDirectory() && e.name !== 'workspace')
-    .filter((e) => fs.existsSync(path.join(dir, e.name, 'STATUS.md')))
-    .map((e) => e.name)
-    .sort();
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) if (e.isDirectory() && e.name !== 'workspace' && fs.existsSync(path.join(dir, e.name, 'STATUS.md'))) into.add(e.name);
+}
+/** Enfants directs de `chemin` (relatif à mission/) : instances incarnées ou spawnées.
+ *  Union de trois sources — l'arbre `root` (isolation aucune/branche), les worktrees `mission/.holarch/worktrees/*`
+ *  (chantier 3 : sous `isolation = worktree`, l'arbre du parent ne contient PAS ses enfants), et, si
+ *  `gb = {prefixe}` est fourni (git-branches actif), les branches `<prefixe><chemin-tirets>-*` (enfant spawné mais
+ *  jamais incarné : STATUS.md READY sur sa branche seulement — il compte, sinon `enfants:DELIVERED` serait vrai
+ *  avant même son lancement). Dogfooding du 2026-09-10 : « aucun enfant incarné » alors que deux enfants
+ *  détachés avaient livré dans leurs worktrees. */
+function listChildren(root, chemin, gb) {
+  const noms = new Set();
+  enfantsSurDisque(root, chemin, noms);
+  let wts = [];
+  try { wts = fs.readdirSync(worktreesDir(root), { withFileTypes: true }); } catch { /* aucun worktree */ }
+  for (const w of wts) if (w.isDirectory()) enfantsSurDisque(path.join(worktreesDir(root), w.name), chemin, noms);
+  if (gb && gb.prefixe !== undefined) {
+    const motif = `${gb.prefixe}${chemin.replace(/\//g, '-')}-*`;
+    const list = spawnSync('git', ['-C', root, 'branch', '--list', '--format=%(refname:short)', motif], { encoding: 'utf8' });
+    const re = new RegExp(`^mission/${chemin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/([^/]+)/STATUS\.md$`);
+    for (const b of (list.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean)) {
+      const tree = spawnSync('git', ['-C', root, 'ls-tree', '-r', '--name-only', b, '--', `mission/${chemin}/`], { encoding: 'utf8' });
+      for (const f of (tree.stdout || '').split('\n')) { const m = f.trim().match(re); if (m) noms.add(m[1]); }
+    }
+  }
+  return [...noms].sort();
 }
 
 function evalTerm(t, ctx) {
@@ -127,7 +148,7 @@ function evalTerm(t, ctx) {
     return { terme, vrai, pourquoi: `enfant ${chemin} à l'état ${st.etat || '(absent)'} (attendu ${t.arg2})` };
   }
   if (t.kind === 'enfants') {
-    const enfants = listChildren(ctx.root, ctx.chemin);
+    const enfants = listChildren(ctx.root, ctx.chemin, ctx.gitBranches);
     if (!enfants.length) return { terme, vrai: false, pourquoi: 'aucun enfant incarné' };
     const etats = enfants.map((n) => ((ctx.readStatus ? ctx.readStatus(`${ctx.chemin}/${n}`) : null) || {}).etat || '(absent)');
     const vrai = etats.every((e) => e === t.arg);
@@ -148,7 +169,8 @@ function evalTerm(t, ctx) {
 }
 
 /**
- * ctx = {root, chemin, sinceIso, now: Date, readStatus(cheminInstance) → {etat,note}, readInbox(chemin) → texte}
+ * ctx = {root, chemin, sinceIso, now: Date, readStatus(cheminInstance) → {etat,note}, readInbox(chemin) → texte,
+ *        gitBranches?: {prefixe} (git-branches actif, isolation ≠ aucune — enfants énumérés aussi depuis les branches)}
  * @returns {{satisfied: boolean, details: Array<{terme: string, vrai: boolean, pourquoi: string}>}}
  */
 function evalReveil(ast, ctx) {
@@ -162,38 +184,47 @@ function evalReveil(ast, ctx) {
   return { satisfied, details };
 }
 
-/** Toutes les instances de mission/ (hors graveyard, hors workspace) dont STATUS.md porte une ligne Réveil non vide. */
+/** Toutes les instances de mission/ (hors graveyard, hors workspace) dont STATUS.md porte une ligne Réveil non vide.
+ *  Chantier 3 : une instance incarnée dans son worktree n'a son STATUS.md à jour QUE là ; chaque worktree
+ *  `mission/.holarch/worktrees/<chemin-tirets>` n'est lu que pour SA propre instance (jamais pour les copies
+ *  périmées du parent ou des frères qu'il contient), et une entrée de worktree prime sur l'arbre principal. */
 function listWaiters(root) {
-  const out = [];
+  const byChemin = new Map();
   const skipDirs = new Set(['workspace', 'graveyard', '.holarch']);
   const skipTop = new Set(['registry', 'shared', '.holarch', 'graveyard']);
-  function walk(relChemin) {
-    const dir = path.join(root, 'mission', relChemin);
+  function walk(base, relChemin, accept) {
+    const dir = path.join(base, 'mission', relChemin);
     const statusPath = path.join(dir, 'STATUS.md');
-    if (fs.existsSync(statusPath)) {
+    if (accept(relChemin) && fs.existsSync(statusPath)) {
       const texte = fs.readFileSync(statusPath, 'utf8');
       const etat = (texte.match(/^\|\s*[ÉE]tat\s*\|\s*([A-Z_]+)/m) || [])[1] || '';
       const note = (texte.match(/^\|\s*Note\s*\|\s*(.*?)\s*\|\s*$/m) || [])[1] || '';
       const reveilTxt = (texte.match(/^\|\s*R[ée]veil\s*\|\s*(.*?)\s*\|\s*$/m) || [])[1] || '';
       if (reveilTxt && reveilTxt !== '—' && reveilTxt !== '-') {
         const ast = parseReveil(reveilTxt);
-        if (ast) out.push({ chemin: relChemin, ast, etat, note });
+        if (ast) byChemin.set(relChemin, { chemin: relChemin, ast, etat, note });
       }
     }
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (!e.isDirectory() || skipDirs.has(e.name)) continue;
-      walk(`${relChemin}/${e.name}`);
+      walk(base, `${relChemin}/${e.name}`, accept);
     }
   }
-  let top;
-  try { top = fs.readdirSync(path.join(root, 'mission'), { withFileTypes: true }); } catch { top = []; }
-  for (const e of top) {
-    if (!e.isDirectory() || skipTop.has(e.name)) continue;
-    walk(e.name);
+  function walkTop(base, accept) {
+    let top;
+    try { top = fs.readdirSync(path.join(base, 'mission'), { withFileTypes: true }); } catch { top = []; }
+    for (const e of top) {
+      if (!e.isDirectory() || skipTop.has(e.name)) continue;
+      walk(base, e.name, accept);
+    }
   }
-  return out;
+  walkTop(root, () => true);
+  let wts = [];
+  try { wts = fs.readdirSync(worktreesDir(root), { withFileTypes: true }); } catch { /* aucun worktree */ }
+  for (const w of wts) if (w.isDirectory()) walkTop(path.join(worktreesDir(root), w.name), (rel) => rel.replace(/\//g, '-') === w.name);
+  return [...byChemin.values()];
 }
 
 module.exports = { parseReveil, formatReveil, evalReveil, listWaiters, listChildren };

@@ -42,7 +42,7 @@ version — à corriger à la main avant `--apply`.
   (patch / mineure / majeure, règle en tête de `framework/CHANGELOG.md`) ; en majeure, un
   avertissement explicite : un fichier écrit sous l'ancienne version peut ne plus être valide ;
 - fichiers ajoutés / modifiés / retirés dans le périmètre `framework/`, `tools/`, `.claude/`,
-  `docs/holarch.md` (jamais `mission/`, jamais les autres `docs/`) ;
+  `docs/holarch.md`, `.gitattributes` (jamais `mission/`, jamais les autres `docs/`) ;
 - validation du `CONFIG.md` local par le `config-lint` et le `module-forge` **de la source**,
   contre son `MANIFEST.md` et ses modules ;
 - fichiers de `mission/` non committés (signe qu'une instance a écrit récemment).

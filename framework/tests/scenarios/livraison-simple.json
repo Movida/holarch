@@ -1,0 +1,15 @@
+{
+  "statusApres": "DELIVERED",
+  "note": "",
+  "reveil": "—",
+  "commit": false,
+  "result": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "sess-livraison-simple",
+    "total_cost_usd": 0.0012,
+    "num_turns": 3,
+    "usage": { "input_tokens": 120, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 45 },
+    "is_error": false
+  }
+}
