@@ -1,4 +1,5 @@
 'use strict';
+const catalogue = require('../catalogue');
 /**
  * Exécuteur `claude-code` — le CLI Claude Code, exécuteur historique et par défaut de HOLARCH.
  *
@@ -45,7 +46,7 @@ function construireArgs(launch, params, sysFile, modele) {
     '--permission-mode', launch.permissionMode,
     '--output-format', 'json',
     '--max-turns', String(launch.maxTours),
-    '--max-budget-usd', String(launch.budget),
+    '--max-budget-usd', String(budgetCli(launch, modele)),
     '--append-system-prompt-file', sysFile,
     '--exclude-dynamic-system-prompt-sections',
     // Le fichier de réglages (permissions, hooks) est au format `settings.json` de Claude Code :
@@ -153,6 +154,53 @@ function resultatVide(texte) {
 
 /** Objet de résultat du CLI → Resultat. Exporté hors contrat : le lanceur s'en sert pour sa
  *  compatibilité ascendante (`limiteApi(res)`), et les tests pour normaliser une fixture. */
+/** Prix d'entrée (USD par Mtok) auquel le CLI tarife un modèle qu'il ne connaît pas (`costBasis: "unknown"`) :
+ *  celui d'Opus 5 en tarif liste, mesuré le 2026-09-12 sur `deepseek/deepseek-v4.1-flash` par la passerelle
+ *  (1,399 M entrée + 0,538 M cache lu + 32 k sortie facturés 8,07 USD par le CLI, ≈ 0,23 USD au tarif réel) —
+ *  le fusible `--max-budget-usd` s'est déclenché sur un coût trente-cinq fois surestimé. */
+const TARIF_ENTREE_INCONNU_CLI = 5;
+
+/** Modèle réel que le CLI sait tarifer (tarif liste) : un identifiant Claude. Tout autre modèle réel envoyé par
+ *  une passerelle est tarifé « unknown » par le CLI. */
+function modeleConnuDuCli(modeleReel) {
+  return /^(anthropic\/)?claude-/i.test(String(modeleReel || '')) || /^(opus|sonnet|haiku|fable)$/i.test(String(modeleReel || ''));
+}
+
+/** Plafond de dépense transmis au CLI. Derrière une passerelle, pour un modèle que le CLI ne sait pas tarifer,
+ *  le plafond HOLARCH (au tarif réel du catalogue) est converti dans l'unité du CLI : × (tarif inconnu du CLI /
+ *  tarif d'entrée du catalogue). Sans tarif au catalogue, ou pour un modèle Claude : le plafond tel quel. */
+function budgetCli(launch, modele) {
+  const budget = Number(launch.budget);
+  const f = launch.fournisseur;
+  const tarif = launch.meta && launch.meta.tarif;
+  if (!f || !f.url_var || !tarif || !(tarif.cout_entree > 0)) return launch.budget;
+  let prixCli = TARIF_ENTREE_INCONNU_CLI;
+  if (modeleConnuDuCli(modele)) {
+    // Modèle Claude par une passerelle (1.21.0) : le CLI le tarife au prix liste Anthropic — celui de la ligne
+    // `anthropic` équivalente du catalogue ; sans équivalent connu, plafond tel quel.
+    const cat = launch.catalogue;
+    const eq = cat ? catalogue.equivalentChez(cat, launch.meta.modele, 'anthropic') : null;
+    const entree = eq ? catalogue.modele(cat, eq) : null;
+    if (!entree || !(entree.cout_entree > 0)) return launch.budget;
+    prixCli = entree.cout_entree;
+  }
+  return Math.max(0.01, Math.round(budget * (prixCli / tarif.cout_entree) * 100) / 100);
+}
+
+/** Vrai si le coût rapporté par le CLI repose sur un modèle qu'il ne sait pas tarifer (`costBasis` ≠ `list` pour
+ *  le modèle principal, celui qui a reçu le plus de tokens d'entrée) : le lanceur calcule alors « ≈ » au catalogue. */
+function coutCliFiable(res) {
+  const mu = res && res.modelUsage;
+  if (!mu || typeof mu !== 'object') return true;
+  let principal = null;
+  for (const [id, m] of Object.entries(mu)) {
+    if (/haiku/i.test(id) || !m) continue;
+    const poids = (m.inputTokens || 0) + (m.cacheReadInputTokens || 0);
+    if (!principal || poids > principal.poids) principal = { id, poids, basis: m.costBasis };
+  }
+  return !principal || !principal.basis || principal.basis === 'list';
+}
+
 function normaliserRes(res) {
   if (!res) return resultatVide('');
   const u = res.usage || {};
@@ -171,7 +219,8 @@ function normaliserRes(res) {
   return {
     session_id: res.session_id || null,
     tours: typeof res.num_turns === 'number' ? res.num_turns : null,
-    cout_usd: typeof res.total_cost_usd === 'number' ? res.total_cost_usd : null,
+    // Coût du CLI seulement s'il sait tarifer le modèle principal ; sinon null ⇒ « ≈ » au catalogue (1.19.2).
+    cout_usd: typeof res.total_cost_usd === 'number' && coutCliFiable(res) ? res.total_cost_usd : null,
     tokens: {
       entree: u.input_tokens ?? null,
       cache_lu: u.cache_read_input_tokens ?? null,
@@ -231,4 +280,5 @@ module.exports = {
   nom, capacites, preparer, executer, normaliser, limite,
   // hors contrat, réutilisés par `fake`, `passerelle`, le lanceur et les tests :
   construireArgs, fichierPromptSysteme, parseResultJson, normaliserRes, resultatVide, texteBorne,
+  budgetCli, coutCliFiable, modeleConnuDuCli, TARIF_ENTREE_INCONNU_CLI,
 };

@@ -23,6 +23,9 @@ const { spawnSync } = require('child_process');
 const reveil = require('../../framework/bin/reveil.js');
 const messageLint = require('../message-lint/message-lint.js');
 
+/** Seuils des alertes de blocage (2026-09-12) : sessions consécutives sans unité close ; durée d'une session vivante. */
+const SESSIONS_SANS_PROGRES = 4;
+const SESSION_LONGUE_S = 45 * 60;
 const BRANCHE_PRINCIPALE = 'main';
 const TYPES_A_REPONDRE = new Set(['BLOCKER', 'CLARIFICATION', 'PROPOSAL']);
 const ETATS_TERMINAUX = new Set(['DELIVERED', 'FAILED', 'ARCHIVED']);
@@ -100,7 +103,7 @@ function parseSessions(t) {
     rows.push({
       date: c[1], instance: c[2], session: c[3] === '—' ? '' : c[3], modele: c[4], tours: num(c[5]),
       tokens: { entree: tok[0], cacheLu: tok[1], cacheEcrit: tok[2], sortie: tok[3] },
-      usd: num(c[7]), duree: c[8] || '', fin: c[9] || '', status: c[10] || '', reveil: c[11] || '', contexte: c[12] || '',
+      usd: num(String(c[7] || '').replace('≈', '')), duree: c[8] || '', // « ≈ » = coût calculé au catalogue (1.16.0), compté comme les autres fin: c[9] || '', status: c[10] || '', reveil: c[11] || '', contexte: c[12] || '',
     });
   }
   return rows;
@@ -427,6 +430,11 @@ function collecter(root, depsSur) {
     if (inst.git.nonCommittes && inst.git.nonCommittes.length && !l.vivant) anomalie('info', 'worktree-non-committe', inst.chemin, `${inst.git.nonCommittes.length} fichier(s) non committé(s) dans son worktree sans session vivante (repris à sa prochaine incarnation)`);
     if (inst.contexte && !l.vivant && inst.contexte.session && !sidsJournal.has(inst.contexte.session)) anomalie('info', 'contexte-orphelin', inst.chemin, `live/${tirets(inst.chemin)}.contexte.json (session ${inst.contexte.session.slice(0, 8)}) sans session vivante ni ligne SESSIONS.md : session tuée ?`);
     if (inst.transcription) e.transcriptions.vivantes.push(Object.assign({ chemin: inst.chemin }, inst.transcription));
+    // Blocages à prévenir (2026-09-12, demande du mainteneur) : une instance qui enchaîne les sessions sans clore une
+    // unité (mesure-gpt5mini : 7 sessions, 0 unité, hibernations à 50 k tokens), ou une session anormalement longue.
+    const enCours = !['DELIVERED', 'FAILED', 'ARCHIVED', 'BLOCKED'].includes(inst.etat);
+    if (enCours && inst.sessions.n >= SESSIONS_SANS_PROGRES && inst.unitesPass === 0) anomalie('alerte', 'sans-progres', inst.chemin, `${inst.sessions.n} session(s), ${inst.sessions.usd.toFixed(2)} USD, aucune unité close : tourne sans livrer — \`node framework/bin/holarch-spawn.js --arret ${inst.chemin}\` puis recadrage (TASK) ou verdict (FAILED) par le parent`);
+    if (l.vivant && l.secondes && l.secondes >= SESSION_LONGUE_S) anomalie('alerte', 'session-longue', inst.chemin, `session vivante depuis ${Math.round(l.secondes / 60)} min (pid ${l.pidClaude || '?'}) — vérifier la transcription (\`node tools/holarch-transcript/analyse.js <session>\`) avant qu'un fusible ne parle`);
     if (l.vivant && inst.transcription && inst.transcription.contexte && e.mission.seuilContexteTokens && inst.transcription.contexte >= e.mission.seuilContexteTokens) anomalie('info', 'contexte-au-seuil', inst.chemin, `contexte ${Math.round(inst.transcription.contexte / 1000)}k ≥ seuil ${Math.round(e.mission.seuilContexteTokens / 1000)}k : hibernation imminente`);
   }
   for (const inst of e.instances) {

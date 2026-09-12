@@ -14,7 +14,7 @@ node tools/holarch-session/etat.js --bref
 
 Branche et fichiers non committés (en distinguant les fichiers d'instance, à laisser à l'instance), ligne « suivi »
 (commits non poussés vers `holon-v2`, âge de la dernière passation en mémoire, idées ouvertes de `docs/IDEES.md`),
-mission et état de la racine et de ses enfants, **paramètres clés de `CONFIG.md`** (`mode_attente`, `isolation`, budget et
+mission et état de la racine et de ses enfants, (réinjecté par `--hook-prompt`, hook `UserPromptSubmit`, seulement quand la clé stable de l'état change) **fournisseurs à variables** du catalogue avec la présence de leurs variables dans le shell (noms seulement), **paramètres clés de `CONFIG.md`** (`mode_attente`, `isolation`, budget et
 tours par session, seuil de contexte, relances — un défaut non écrit est marqué « (défaut) » : le 2026-09-11, `mode_attente =
 synchrone` implicite a laissé un parent vivant 3 h 54), processus de mission en cours, derniers commits,
 dernières sessions de `SESSIONS.md`, authentification `gh` (lue dans `hosts.yml`, sans réseau),

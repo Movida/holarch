@@ -94,6 +94,17 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/tools/holarch-session/etat.js\" --hook-prompt",
+            "timeout": 20
+          }
+        ]
+      }
     ]
   }
 }

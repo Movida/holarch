@@ -213,11 +213,14 @@ test('preset team-standard + surcharge --param', () => {
       CHEMIN_OPEN, 'autre-mission', '--chantier', '3',
       '--param', 'preset=team-standard',
       '--param', 'budget_instances_total=42',
+      '--param', 'mode_attente=detache',
     ], { cwd: root });
     assert.equal(r.code, 0, `code attendu 0, stderr : ${r.stderr}`);
 
     const config = fs.readFileSync(path.join(root, 'framework', 'CONFIG.md'), 'utf8');
     assert.match(config, /\|\s*profondeur_max\s*\|\s*3\s*\|/, 'clé propre à team-standard');
+    // Clé absente du preset : ajoutée en fin de table, collée à la ligne précédente (pas après une ligne vide).
+    assert.match(config, /\|[^\n]*\|\n\|\s*mode_attente\s*\|\s*detache\s*\|\n\n## /, 'clé nouvelle dans la table, avant la ligne vide');
     assert.match(config, /\|\s*seuil_contexte_tokens\s*\|\s*120000\s*\|/, 'valeur team-standard, pas solo-light');
     assert.match(config, /\|\s*budget_instances_total\s*\|\s*42\s*\|/, 'surcharge --param prend le dessus');
   } finally {

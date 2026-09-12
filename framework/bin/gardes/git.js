@@ -168,14 +168,31 @@ function autorise(rel, chemin) {
   return { ok: false, motif: 'hors de mission/ : rien du dépôt n’appartient à l’instance en dehors de son arbre' };
 }
 
-function regle1(root, chemin, avant, apres, ecarts) {
-  const out = git(root, ['diff', '--name-status', '--no-renames', `${avant}..${apres}`]);
+/** Commits de `avant..apres` attribuables à l'instance : sujet commençant par l'un des `prefixes`. Sans
+ *  `prefixes`, tout l'intervalle (comportement d'origine, tests). 1.19.3 : la racine travaille dans l'arbre
+ *  principal partagé — sept commits de la session de maintenance (framework 1.19.2) tombés pendant sa session
+ *  lui ont valu sept écarts de règle 1 et une session « en erreur » (holarch-modeles, 2026-09-12). */
+function commitsDeLInstance(root, avant, apres, prefixes) {
+  if (!prefixes || !prefixes.length) return null;
+  const out = git(root, ['log', '--format=%H%x1f%s', `${avant}..${apres}`]);
+  if (out === null) return null;
+  return out.split('\n').filter(Boolean).map((l) => l.split('\x1f')).filter(([, s]) => prefixes.some((p) => String(s || '').startsWith(p))).map(([h]) => h);
+}
+
+function regle1(root, chemin, avant, apres, ecarts, opts) {
+  const shas = commitsDeLInstance(root, avant, apres, opts && opts.prefixes);
+  let out;
+  if (shas === null) out = git(root, ['diff', '--name-status', '--no-renames', `${avant}..${apres}`]);
+  else out = shas.map((h) => git(root, ['show', '--name-status', '--no-renames', '--format=', h]) || '').join('\n');
   if (out === null) return;
+  const vus = new Set();
   for (const ligne of out.split('\n')) {
     if (!ligne.trim()) continue;
     const parts = ligne.split('\t');
     const etat = parts[0];
     const rel = parts[parts.length - 1];
+    if (vus.has(rel)) continue;
+    vus.add(rel);
     const verdict = autorise(rel, chemin);
     if (verdict && !verdict.ok) {
       ecarts.push({ regle: 1, chemin: rel, detail: `${etat === 'A' ? 'création' : etat === 'D' ? 'suppression' : 'modification'} hors arbre autorisé : ${verdict.motif}` });
@@ -297,7 +314,7 @@ function regle3(root, chemin, avant, apres, ecarts) {
  * @param {string} apres   sha final (état après la session)
  * @returns {{ ecarts: Array<{regle: 1|2|3, chemin: string, detail: string}> }}
  */
-function verifierSession(root, chemin, avant, apres) {
+function verifierSession(root, chemin, avant, apres, opts) {
   const ecarts = [];
   try {
     if (!root || !chemin) return { ecarts };
@@ -306,7 +323,7 @@ function verifierSession(root, chemin, avant, apres) {
     const b = resoudre(root, apres);
     if (!a || !b) return { ecarts };
     for (const regle of [regle1, regle2, regle3]) {
-      try { regle(root, chemin, a, b, ecarts); } catch (_) { /* fail-open, règle par règle */ }
+      try { regle(root, chemin, a, b, ecarts, opts); } catch (_) { /* fail-open, règle par règle */ }
     }
   } catch (_) {
     return { ecarts };

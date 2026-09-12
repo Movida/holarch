@@ -10,9 +10,28 @@ ce qui est une règle vit dans `CLAUDE.md` ou `docs/ENVIRONNEMENT.md`, ce qui es
 qui est une leçon ou un point de reprise vit dans la mémoire persistante. Une information au mauvais endroit se
 perd (mémoire jamais relue) ou coûte à chaque session (règle relue dix fois).
 
+## 0. Décider sans demander
+
+Le mainteneur délègue le cycle entier (2026-09-12 : « je n'ai pas besoin de te demander », « tu prends de bonnes
+décisions »). Une question ne se pose que si le geste est irréversible **et** que rien dans le dépôt, la feuille de route
+ou le carnet d'idées ne permet de trancher. Sinon, l'état dicte le geste, et le message dit quelle lecture a été prise :
+
+| État du dépôt (ligne injectée, `npm run etat`) | Geste par défaut, sans demander |
+|---|---|
+| Aucune mission ouverte | Ouvrir la suivante : le chantier que le mainteneur a nommé, sinon la première idée **mesurée** de `docs/IDEES.md` ou la ligne suivante de `ROADMAP.md` §5 ; spécifier (ROADMAP §3, IMPLEMENTATION), `open.js`, OBJECTIVE, catalogue, `--dry-run`, commit |
+| Mission ouverte, non démarrée | Lancer soi-même (`--bootstrap`, `--detach`) si la ligne « fournisseurs à variables » dit « présentes » ; sinon donner la commande et guetter les variables (`Monitor` sur `bash -lc env`), lancer dès qu'elles sont là — après avoir vérifié qu'aucune session ne tourne déjà |
+| Mission en cours | `holarch-supervise` ; ne réagir qu'aux gestes du mainteneur ; un `BLOCKER` sans préférence connue se tranche soi-même (`RESPONSE`, commit par le mainteneur si le classifieur refuse) |
+| Racine `DELIVERED` | Vérifier sur clone, promouvoir (`npm run promote`), archiver, fichiers transverses, `VERSION`/`CHANGELOG`, idées du rapport dans `IDEES.md`, écart principal corrigé en patch si sa mesure est faite |
+| Tests verts, commits locaux | Pousser sur `holon-v2` sans demander, puis `gh run list` ; la publication du modèle reste au mainteneur (§7 de `ENVIRONNEMENT.md`), sauf demande explicite |
+| Consigne ambiguë (« on continue », « paramètre X ») | La lecture qui fait avancer le cycle ci-dessus, annoncée en une ligne ; jamais une question à choix |
+
+Ce qui reste au mainteneur : la clé d'un fournisseur (dans son shell ou son `~/.bashrc`), la publication du modèle, une
+décision de conception qui change le contrat, et tout ce que `ENVIRONNEMENT.md` §7 lui réserve.
+
 ## 1. Au démarrage : quatre sources, dans cet ordre, rien de plus
 
-1. **La ligne d'état injectée** (`[HOLARCH · état du dépôt …]`) : branche, arbre, mission et état effectif des
+1. **La ligne d'état injectée** (`[HOLARCH · état du dépôt …]`, au démarrage puis, à chaque message, seulement si elle
+   a changé — hook `UserPromptSubmit`, 2026-09-12) : branche, arbre, mission et état effectif des
    instances, **paramètres clés** (`mode_attente`, `isolation`, budget, tours, seuil), processus vivants, coût,
    messages qui attendent le mainteneur, versions. Ne pas la reconstituer en relisant `mission/`.
 2. **La mémoire « HOLARCH current state »** (index `MEMORY.md`) : où la dernière session s'est arrêtée, ce qu'elle

@@ -38,26 +38,30 @@ const executeurs = require(path.join(ROOT, 'framework', 'bin', 'executeurs'));
 // ---------------------------------------------------------------------------
 // 1. Verrou de configuration : les règles de refus vivent dans le fichier de réglages, en relatif.
 // ---------------------------------------------------------------------------
-test('instance-settings.json : un bloc permissions.deny couvre framework/ et OBJECTIVE.md, en chemins relatifs', () => {
+test('instance-settings.json : un bloc permissions.deny couvre framework/ et OBJECTIVE.md, ancré à la racine du projet (un seul « / »)', () => {
   const settings = JSON.parse(fs.readFileSync(path.join(ROOT, 'framework', 'claude', 'instance-settings.json'), 'utf8'));
   const deny = (settings.permissions && settings.permissions.deny) || [];
-  for (const regle of ['Write(framework/**)', 'Edit(framework/**)', 'Write(mission/OBJECTIVE.md)', 'Edit(mission/OBJECTIVE.md)']) {
+  for (const regle of ['Write(/framework/**)', 'Edit(/framework/**)', 'Write(/mission/OBJECTIVE.md)', 'Edit(/mission/OBJECTIVE.md)']) {
     assert.ok(deny.includes(regle), `règle de refus manquante : ${regle}`);
   }
-  // Un chemin absolu dans une règle de permission est inerte (cf. en-tête de ce fichier et du fichier
-  // de réglages lui-même) : c'est précisément le défaut constaté le 2026-09-03.
-  for (const regle of deny) assert.doesNotMatch(regle, /\(\s*\//, `règle de refus en chemin absolu, donc inerte : ${regle}`);
+  // Sémantique des motifs (vérifiée par sonde le 2026-09-12) : sans « / », gitignore, le motif matche à toute
+  // profondeur (`tools/**` refusait `mission/shared/x/cible-tools/tools/a.txt`) ; « / » seul = racine du projet ;
+  // « // » = chemin absolu, inerte (défaut du 2026-09-03). Donc : un « / » exactement, jamais « // » ni la racine du dépôt.
+  for (const regle of deny) {
+    assert.match(regle, /\(\/[a-z]/, `règle de refus non ancrée (matcherait à toute profondeur) : ${regle}`);
+    assert.doesNotMatch(regle, /\(\s*\/\//, `règle de refus en chemin absolu, donc inerte : ${regle}`);
+  }
 });
 
-test('prepareLaunch : --disallowedTools emploie les mêmes motifs relatifs que le fichier de réglages', () => {
+test('prepareLaunch : --disallowedTools emploie les mêmes motifs ancrés que le fichier de réglages', () => {
   const root = makeRoot();
   // Les arguments ne sont plus portés par l'intention de lancement : ils appartiennent à
   // l'exécuteur, et `apercuCommande` est la seule façon de les regarder sans lancer de session.
   const a = launcher.apercuCommande(launcher.prepareLaunch(root, 'concepteur', {})).args;
   const denied = a[a.indexOf('--disallowedTools') + 1].split(',');
-  assert.deepEqual(denied.sort(), ['Edit(framework/**)', 'Edit(mission/OBJECTIVE.md)', 'Write(framework/**)', 'Write(mission/OBJECTIVE.md)'].sort());
-  // Aucun chemin absolu : ni la racine du dépôt, ni un « // » résiduel (constat A3).
-  assert.doesNotMatch(denied.join(','), /\(\s*\//);
+  assert.deepEqual(denied.sort(), ['Edit(/framework/**)', 'Edit(/mission/OBJECTIVE.md)', 'Write(/framework/**)', 'Write(/mission/OBJECTIVE.md)'].sort());
+  // Ancrés (« / » seul), jamais absolus : ni la racine du dépôt, ni un « // » résiduel (constat A3).
+  for (const d of denied) { assert.match(d, /\(\/[a-z]/); assert.doesNotMatch(d, /\(\s*\/\//); assert.ok(!d.includes(root), d); }
 });
 
 // ---------------------------------------------------------------------------

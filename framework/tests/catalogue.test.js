@@ -13,6 +13,16 @@ const cat = require(path.join(CIBLE, 'bin', 'catalogue.js'));
 
 const proche = (a, b, msg) => assert.ok(Math.abs(a - b) < 1e-9, `${msg} : ${a} ≠ ${b}`);
 
+/** Catalogue par défaut du framework : le bloc ```markdown``` du preset `solo-light`, pas le CONFIG.md
+ *  réel de la racine — celui-ci est réécrit à chaque mission (`open.js`, catalogue de mission, `Secours`
+ *  armé…) et ne mesure pas le framework mais l'état du dépôt où le banc tourne. */
+function configDuPreset() {
+  const brut = fs.readFileSync(path.join(CIBLE, 'presets', 'solo-light.md'), 'utf8');
+  const m = brut.match(/```markdown\n([\s\S]*?)\n```/);
+  assert.ok(m, 'bloc ```markdown``` du preset introuvable');
+  return m[1];
+}
+
 /** CONFIG.md version 1.11 : aucune des deux tables. Écrit ici plutôt que lu à la racine du dépôt —
  *  le banc d'essai superpose justement le CONFIG.md cible sur celui de la racine, et ce test doit
  *  mesurer la compatibilité ascendante, pas l'état du dépôt dans lequel il tourne. */
@@ -63,8 +73,8 @@ const SANS_TARIF = `# Configuration — mission : essai
 
 // -- 1. Les deux tables du CONFIG.md cible ---------------------------------------------------------
 
-test('parseCatalogue lit les deux tables de CONFIG.md', () => {
-  const c = cat.parseCatalogue(fs.readFileSync(path.join(CIBLE, 'CONFIG.md'), 'utf8'));
+test('parseCatalogue lit les deux tables du CONFIG.md par défaut (preset solo-light)', () => {
+  const c = cat.parseCatalogue(configDuPreset());
   assert.equal(c.aFournisseurs, true);
   assert.equal(c.aCatalogue, true);
   assert.deepEqual(Object.keys(c.fournisseurs), ['anthropic', 'openrouter']);
@@ -77,8 +87,8 @@ test('parseCatalogue lit les deux tables de CONFIG.md', () => {
   assert.equal(opus.fournisseur, 'anthropic');
   assert.equal(opus.modele_reel, 'claude-opus-5');
   assert.deepEqual(opus.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.equal(opus.cout_entree, 15);
-  assert.equal(opus.cout_sortie, 75);
+  assert.equal(opus.cout_entree, 5); // tarif liste réel d'Opus 5 (1.21.0 ; 15 / 75 était celui d'Opus 4)
+  assert.equal(opus.cout_sortie, 25);
   assert.deepEqual(cat.verifierCatalogue(c), []);
   assert.equal(cat.fournisseurDe(c, 'sonnet').nom, 'anthropic');
 });
@@ -176,10 +186,10 @@ test('secoursDe et equivalentChez, dans les deux sens, sans double déclaration'
   assert.equal(cat.equivalentChez(c, 'opus@openrouter', 'anthropic'), 'opus');
   assert.equal(cat.equivalentChez(c, 'opus', 'fournisseur-inexistant'), null);
   assert.equal(cat.equivalentChez(c, 'modele-inconnu', 'openrouter'), null);
-  // Catalogue de la mission : aucune équivalence déclarée ⇒ aucun repli possible, comportement d'attente.
-  const mission = cat.parseCatalogue(fs.readFileSync(path.join(CIBLE, 'CONFIG.md'), 'utf8'));
-  assert.equal(cat.secoursDe(mission, 'anthropic'), null);
-  assert.equal(cat.equivalentChez(mission, 'opus', 'openrouter'), null);
+  // Catalogue par défaut (preset) : aucune équivalence déclarée ⇒ aucun repli possible, comportement d'attente.
+  const defaut = cat.parseCatalogue(configDuPreset());
+  assert.equal(cat.secoursDe(defaut, 'anthropic'), null);
+  assert.equal(cat.equivalentChez(defaut, 'opus', 'openrouter'), null);
 });
 
 // -- 7. Cohérence interne --------------------------------------------------------------------------

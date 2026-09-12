@@ -55,12 +55,12 @@ Secours d'« anthropic » et déclarer les identifiants équivalents, soit une l
 | openrouter | passerelle | HOLARCH_FOURNISSEUR_OPENROUTER_URL | HOLARCH_FOURNISSEUR_OPENROUTER_JETON | — |
 
 ## Catalogue de modèles
-| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent |
-|---|---|---|---|---|---|---|
-| opus | anthropic | claude-opus-5 | low…max | 15 / 75 | conception, relecture | — |
-| sonnet | anthropic | claude-sonnet-5 | low…high | 3 / 15 | execution | — |
-| haiku | anthropic | claude-haiku-4-5-20251001 | — | 1 / 5 | — | — |
-| fable | anthropic | claude-fable-5-1 | low…max | 10 / 50 / 12,50 / 0,25 | exploration | — |
+| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent | Fenêtre (tokens) |
+|---|---|---|---|---|---|---|---|
+| opus | anthropic | claude-opus-5 | low…max | 5 / 25 / 6,25 / 0,5 | conception, relecture | — | — |
+| sonnet | anthropic | claude-sonnet-5 | low…high | 2 / 10 / 2,5 / 0,2 | execution | — | — |
+| haiku | anthropic | claude-haiku-4-5-20251001 | — | 1 / 5 | — | — | — |
+| fable | anthropic | claude-fable-5-1 | low…max | 10 / 50 / 12,50 / 0,25 | exploration | — | — |
 
 ## Valeurs organisationnelles
 - Préfère une organisation plate : ne décompose que si le questionnaire `self-assessment` le justifie clairement (spec §15, décision 1 : ce preset sert de socle au test T3).

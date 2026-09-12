@@ -248,3 +248,23 @@ test('observe --mainteneur : ne garde d\'un résumé que ce qui appelle un geste
   assert.deepEqual(pourMainteneur(r), ['concepteur/c FAILED U1/4 c1', 'tâche x-2 failed', 'tâche x-3 done (exit 2)', 'tâche x-4 done ARRÊT',
     'mainteneur CLARIFICATION MSG-concepteur-2', '⚠ tache-pid-mort concepteur/a', 'concepteur DELIVERED U8/8 c14']);
 });
+
+test('sans-progres : ≥ 4 sessions et aucune unité close = alerte ; session-longue : session vivante ≥ 45 min', () => {
+  const f = fabriquer();
+  try {
+    const avantUsd = (collecte.collecter(f.root, deps(f)).sessions.parInstance['concepteur/enfant'] || { usd: 0 }).usd;
+    const ligne = (i) => `| 2026-09-12T1${i}:00:00Z | concepteur/enfant | s-e${i} | sonnet/medium | 60 | 10 / 20 / 0 / 5 | ≈ 0.2000 | 8 min | success | WORKING | 100 / 200 | 40000 / 50000 |`;
+    fs.appendFileSync(path.join(f.root, 'mission', 'registry', 'SESSIONS.md'), ['', ligne(0), ligne(1), ligne(2), ligne(3)].join('\n') + '\n');
+    const e = collecte.collecter(f.root, deps(f));
+    const a = e.anomalies.find((x) => x.code === 'sans-progres' && x.chemin === 'concepteur/enfant');
+    assert.ok(a, 'alerte sans-progres attendue');
+    assert.match(a.texte, /session\(s\).*aucune unité close.*--arret concepteur\/enfant/);
+    assert.equal(a.niveau, 'alerte');
+    assert.equal(e.sessions.parInstance['concepteur/enfant'].usd, Math.round((avantUsd + 0.8) * 10000) / 10000, 'les coûts « ≈ » (catalogue) sont sommés comme les autres');
+    // Une session vivante de 50 min pour l'enfant : session-longue.
+    const ps = `  1 /sbin/init\n ${process.pid} 1 3000 claude -p --model sonnet -n holarch:concepteur/enfant\n`;
+    const e2 = collecte.collecter(f.root, deps(f, { ps: () => ps }));
+    assert.ok(e2.anomalies.some((x) => x.code === 'session-longue' && x.chemin === 'concepteur/enfant'), JSON.stringify(e2.anomalies.map((x) => x.code)));
+  } finally { nettoyer(f.root); }
+});
+

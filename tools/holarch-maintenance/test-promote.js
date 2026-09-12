@@ -277,14 +277,14 @@ test('P2 : refus quand le manifeste et le paquet divergent (fichier sous cible-*
     // un fichier livré sous cible-framework/ mais oublié dans cibles[]
     fs.mkdirSync(path.join(paquetDir, 'cible-framework', 'tests'), { recursive: true });
     fs.writeFileSync(path.join(paquetDir, 'cible-framework', 'tests', 'oublie.test.js'), '// oublié\n');
-    // cible-docs/ est exclu de la réconciliation (fragments insérés à la main)
+    // cible-docs/ est réconcilié comme les autres (É2 holarch-modeles) : un fragment oublié est nommé
     fs.mkdirSync(path.join(paquetDir, 'cible-docs'), { recursive: true });
     fs.writeFileSync(path.join(paquetDir, 'cible-docs', 'fragment.md'), '# fragment\n');
     const r = executer('node', [CHEMIN_PROMOTE, paquetDir], { cwd: fixture.root });
     assert.equal(r.code, 1);
     assert.match(r.stderr, /désaccordé avec le paquet/);
     assert.match(r.stderr, /cible-framework\/tests\/oublie\.test\.js/);
-    assert.doesNotMatch(r.stderr, /cible-docs/);
+    assert.match(r.stderr, /cible-docs\/fragment\.md/);
     // une cible déclarée sans fichier dans le paquet
     fs.unlinkSync(path.join(paquetDir, 'cible-framework', 'tests', 'oublie.test.js'));
     const manifest = JSON.parse(fs.readFileSync(path.join(paquetDir, 'MANIFEST.json'), 'utf8'));

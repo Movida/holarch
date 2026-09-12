@@ -21,10 +21,18 @@ const capacites = Object.assign({}, claudeCode.capacites);
 
 /** Variables d'environnement d'un fournisseur. `url`/`jeton` sont lues par le lanceur dans
  *  `HOLARCH_FOURNISSEUR_<NOM>_URL` / `_JETON` (geste du mainteneur, jamais committées) ; `env`
- *  permet à une entrée de catalogue d'en ajouter d'autres sans toucher à ce fichier. */
+ *  permet à une entrée de catalogue d'en ajouter d'autres sans toucher à ce fichier.
+ *
+ *  `ANTHROPIC_API_KEY` est explicitement vidée dès qu'un fournisseur est posé : constaté en réel
+ *  (chantier 11, §12.6, sonde du 2026-09-12) une clé Anthropic laissée dans l'environnement à côté
+ *  du jeton de passerelle ne produit pas un 401 franc — le CLI se pend (aucun JSON, tué au bout de
+ *  187 s) au lieu d'échouer proprement. La vider garantit que seul le jeton du fournisseur est
+ *  utilisé, sans changer le comportement quand aucun fournisseur n'est posé (§12.6, garantie
+ *  « aucune clé requise pour que la suite passe » de l'en-tête ci-dessus). */
 function envFournisseur(f) {
   const out = {};
   if (!f) return out;
+  out.ANTHROPIC_API_KEY = '';
   if (f.url) out.ANTHROPIC_BASE_URL = f.url;
   if (f.jeton) out.ANTHROPIC_AUTH_TOKEN = f.jeton;
   if (f.env && typeof f.env === 'object') Object.assign(out, f.env);

@@ -8,7 +8,7 @@
  *   | Nom | Exécuteur | URL (variable) | Jeton (variable) | Secours |
  *
  *   ## Catalogue de modèles
- *   | Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent |
+ *   | Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent | Fenêtre (tokens) |
  *
  * **Compatibilité ascendante, règle cardinale** : les deux tables sont facultatives et un
  * identifiant absent du catalogue est passé tel quel à l'exécuteur (`modeleReel`). Un `CONFIG.md`
@@ -118,6 +118,9 @@ function parseCatalogue(texte) {
         cout_cache_lu: coutCacheLu,
         aptitudes: liste(cells[5]).map(normaliser),
         equivalent: liste(cells[6]),
+        // 1.18.0, facultative : fenêtre de contexte que le CLI prête à ce modèle (il compacte de lui-même vers
+        // 83 % de celle-ci, quels que soient --autocompact et le seuil HOLARCH) ; null = inconnue, aucun plafond.
+        fenetre: parseFenetre(cells[7]),
       };
     }
   }
@@ -134,6 +137,13 @@ function modele(cat, id) {
 function fournisseur(cat, nom) {
   if (!cat || !nom) return null;
   return cat.fournisseurs[nettoyer(nom)] || null;
+}
+
+/** Colonne « Fenêtre (tokens) » : entier positif (espaces, espaces fines et « _ » tolérés), sinon null. */
+function parseFenetre(cellule) {
+  if (cellule === undefined || estVide(cellule)) return null;
+  const n = Number(String(cellule).replace(/[\s\u202f\u00a0_]/g, ''));
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 /** Fournisseur d'un identifiant de modèle, ou null (identifiant hors catalogue, ou fournisseur non déclaré). */
@@ -246,5 +256,5 @@ module.exports = {
   coutEstime, secoursDe, equivalentChez, verifierCatalogue,
   EFFORTS, TARIF_CACHE_LU, TARIF_CACHE_ECRIT,
   // exportés pour les tests et `config-lint`
-  parseEfforts, parseTarif,
+  parseEfforts, parseTarif, parseFenetre,
 };

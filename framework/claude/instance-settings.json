@@ -37,10 +37,10 @@
       "Bash(npm run *)"
     ],
     "deny": [
-      "Write(framework/**)", "Edit(framework/**)",
-      "Write(mission/OBJECTIVE.md)", "Edit(mission/OBJECTIVE.md)",
-      "Write(docs/**)", "Edit(docs/**)",
-      "Write(tools/**)", "Edit(tools/**)"
+      "Write(/framework/**)", "Edit(/framework/**)",
+      "Write(/mission/OBJECTIVE.md)", "Edit(/mission/OBJECTIVE.md)",
+      "Write(/docs/**)", "Edit(/docs/**)",
+      "Write(/tools/**)", "Edit(/tools/**)"
     ]
   },
   "hooks": {

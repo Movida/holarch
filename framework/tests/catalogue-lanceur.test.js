@@ -47,11 +47,11 @@ const TABLES = `
 | secours-test | passerelle | ${URL_VAR} | ${JETON_VAR} | — |
 
 ## Catalogue de modèles
-| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie (USD par Mtok) | Aptitudes | Équivalent |
-|---|---|---|---|---|---|---|
-| opus | anthropic | claude-opus-5 | low…max | 15 / 75 | conception | opus@secours |
+| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie (USD par Mtok) | Aptitudes | Équivalent | Fenêtre (tokens) |
+|---|---|---|---|---|---|---|---|
+| opus | anthropic | claude-opus-5 | low…max | 15 / 75 | conception | opus@secours | — |
 | sonnet | anthropic | claude-sonnet-5 | low…high | 3 / 15 | execution | — |
-| opus@secours | secours-test | anthropic/claude-opus-5 | — | 20 / 80 | conception | — |
+| opus@secours | secours-test | anthropic/claude-opus-5 | — | 20 / 80 | conception | — | 200 000 |
 `;
 
 const CONFIG = CONFIG_1_11 + TABLES;
@@ -268,3 +268,109 @@ test('elaguerSectionsLanceur : la section suivante est conservée ; un texte san
   // Texte sans les deux tables (CONFIG.md 1.11) : renvoyé strictement identique.
   assert.equal(launcher.elaguerSectionsLanceur(CONFIG_1_11), CONFIG_1_11);
 });
+
+// -- 1.16.3 : refus de lancement quand un fournisseur atteignable n'a pas ses variables ----------------
+// 2026-09-12 : deux sessions (4,68 USD) lancées d'un shell sans les variables OpenRouter, chacune finie en
+// BLOCKER. Le lanceur refuse désormais avant toute session ; `--forcer` passe outre, le dry-run avertit.
+
+test('fournisseursSansVariables : fournisseur du modèle, puis secours atteignable ; rien pour un fournisseur hors d\'atteinte', () => {
+  const opus = launcher.enrichirMeta({ modele: 'opus', effort: 'high' }, CAT, 'a/b', {});
+  // opus @ anthropic (sans variables) avec un équivalent chez secours-test : le secours est atteignable.
+  assert.deepEqual(launcher.fournisseursSansVariables(CAT, opus, {}), [{ nom: 'secours-test', variables: [URL_VAR, JETON_VAR] }]);
+  assert.deepEqual(launcher.fournisseursSansVariables(CAT, opus, { [URL_VAR]: URL_TEST }), [{ nom: 'secours-test', variables: [JETON_VAR] }]);
+  assert.deepEqual(launcher.fournisseursSansVariables(CAT, opus, { [URL_VAR]: URL_TEST, [JETON_VAR]: 'j' }), []);
+  // sonnet @ anthropic sans équivalent chez le secours : le secours n'est pas atteignable, rien à exiger.
+  const sonnet = launcher.enrichirMeta({ modele: 'sonnet', effort: 'low' }, CAT, 'a/b', {});
+  assert.deepEqual(launcher.fournisseursSansVariables(CAT, sonnet, {}), []);
+  // Modèle directement chez le fournisseur à variables.
+  const chezSecours = launcher.enrichirMeta({ modele: 'opus@secours', effort: 'high' }, CAT, 'a/b', {});
+  assert.deepEqual(launcher.fournisseursSansVariables(CAT, chezSecours, {}), [{ nom: 'secours-test', variables: [URL_VAR, JETON_VAR] }]);
+  // Hors catalogue : rien.
+  assert.deepEqual(launcher.fournisseursSansVariables(CAT, { modele: 'inconnu' }, {}), []);
+});
+
+test('prepareLaunch : refus sans session quand les variables manquent ; --forcer et --dry-run passent avec un avertissement', () => {
+  const root = makeRoot(); // fiche de l'enfant : Modèle opus@secours
+  avecEnv({ [URL_VAR]: null, [JETON_VAR]: null, HOLARCH_FAKE_CLAUDE: null }, () => {
+    assert.throws(() => launcher.prepareLaunch(root, 'concepteur/enfant', {}), (e) => /sans ses variables d'environnement/.test(e.message) && e.message.includes(URL_VAR) && e.message.includes(JETON_VAR) && /--forcer/.test(e.message));
+    assert.equal(launcher.prepareLaunch(root, 'concepteur/enfant', { forcer: true }).fournisseur.url, null);
+    assert.equal(launcher.prepareLaunch(root, 'concepteur/enfant', { dryRun: true }).executeur, 'passerelle');
+  });
+  // Variables posées : aucun refus.
+  avecEnv({ [URL_VAR]: URL_TEST, [JETON_VAR]: 'jeton-de-test', HOLARCH_FAKE_CLAUDE: null }, () => {
+    assert.equal(launcher.prepareLaunch(root, 'concepteur/enfant', {}).fournisseur.url, URL_TEST);
+  });
+});
+
+// -- 1.18.0 : seuil de contexte plafonné par la fenêtre du modèle (écart 4 de holarch-passerelle) -------------
+// Derrière une passerelle, le CLI compacte seul à ≈ 167 k tokens (83 % de la fenêtre de 200 k qu'il prête à un
+// modèle inconnu), quels que soient --autocompact et seuil_contexte_tokens : le garde-fou HOLARCH ne parlait jamais.
+
+test('catalogue : colonne « Fenêtre (tokens) » facultative, entier avec ou sans espaces, « — » ⇒ null', () => {
+  assert.equal(catalogue.modele(CAT, 'opus@secours').fenetre, 200000);
+  assert.equal(catalogue.modele(CAT, 'opus').fenetre, null);
+  assert.equal(catalogue.parseFenetre('1 000 000'), 1000000);
+  assert.equal(catalogue.parseFenetre('200_000'), 200000);
+  assert.equal(catalogue.parseFenetre('—'), null);
+  assert.equal(catalogue.parseFenetre('beaucoup'), null);
+  assert.equal(catalogue.parseFenetre(undefined), null);
+});
+
+test('prepareLaunch : seuil_contexte_tokens plafonné à 80 % de la fenêtre du modèle, inchangé sans fenêtre', () => {
+  const root = makeRoot(); // enfant : Modèle opus@secours (fenêtre 200 000), seuil par défaut 240 000
+  avecEnv({ [URL_VAR]: URL_TEST, [JETON_VAR]: 'jeton-de-test', HOLARCH_FAKE_CLAUDE: null }, () => {
+    const l = launcher.prepareLaunch(root, 'concepteur/enfant', {});
+    assert.equal(l.params.seuil_contexte_tokens, '160000');
+    assert.equal(l.params.seuil_plafonne_par_fenetre, 200000);
+    assert.equal(l.env.HOLARCH_CONTEXT_LIMIT, '160000', 'context-watch reçoit le seuil plafonné');
+  });
+  // Même racine, enfant sur `sonnet` (pas de fenêtre déclarée) : le seuil de la mission reste tel quel.
+  const root2 = makeRoot(CONFIG, fiche('concepteur/enfant', { profil: 'execution' }));
+  avecEnv({ HOLARCH_FAKE_CLAUDE: null }, () => {
+    const l = launcher.prepareLaunch(root2, 'concepteur/enfant', {});
+    assert.equal(l.meta.modele, 'sonnet');
+    assert.equal(l.params.seuil_contexte_tokens, '240000');
+    assert.equal(l.params.seuil_plafonne_par_fenetre, undefined);
+  });
+});
+
+// -- 1.19.0 : modèle des sous-agents traduit chez le fournisseur de la session ----------------------------
+// Un sous-agent tourne dans le processus de la session : derrière une passerelle, « sonnet » n'est pas un modèle.
+test('modeleSousAgent : traduit en modèle réel chez la passerelle (équivalent si besoin), inchangé chez le fournisseur par défaut', () => {
+  const chezSecours = { nom: 'secours-test', url_var: URL_VAR };
+  const chezAnthropic = { nom: 'anthropic', url_var: null };
+  assert.equal(launcher.modeleSousAgent(CAT, 'opus@secours', chezSecours, 'a/b'), 'anthropic/claude-opus-5');
+  assert.equal(launcher.modeleSousAgent(CAT, 'opus', chezSecours, 'a/b'), 'anthropic/claude-opus-5', 'équivalent opus → opus@secours');
+  assert.equal(launcher.modeleSousAgent(CAT, 'sonnet', chezSecours, 'a/b'), 'sonnet', 'sans équivalent : tel quel, avec avertissement');
+  assert.equal(launcher.modeleSousAgent(CAT, 'inconnu', chezSecours, 'a/b'), 'inconnu');
+  assert.equal(launcher.modeleSousAgent(CAT, 'opus', chezAnthropic, 'a/b'), 'opus', 'le CLI comprend ses alias');
+  assert.equal(launcher.modeleSousAgent(CAT, 'opus', null, 'a/b'), 'opus', 'CONFIG 1.11 : sans fournisseur');
+});
+
+// -- 1.19.2 : la racine de travail d'un enfant en worktree est dite dans son prompt -----------------------------
+test('buildUserPromptDetail : rappel de la racine de travail quand le cwd est un worktree, rien sinon', () => {
+  const root = makeRoot();
+  const meta = launcher.enrichirMeta({ modele: 'sonnet', effort: 'low', profil: 'execution' }, CAT, 'concepteur/enfant', {});
+  const params = launcher.resolveParams(launcher.parseConfig(CONFIG));
+  const cfg = launcher.parseConfig(CONFIG);
+  const wt = launcher.buildUserPromptDetail(root, 'concepteur/enfant', meta, params, false, cfg, { workspace: { cwd: path.join(root, 'mission', '.holarch', 'worktrees', 'concepteur-enfant') } }).prompt;
+  assert.match(wt, /Ta racine de travail est `[^`]*worktrees\/concepteur-enfant`/);
+  assert.match(wt, new RegExp(`N'écris jamais sous \`${root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/…\``));
+  const principal = launcher.buildUserPromptDetail(root, 'concepteur/enfant', meta, params, false, cfg, { workspace: { cwd: root } }).prompt;
+  assert.doesNotMatch(principal, /Ta racine de travail/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// -- 1.19.5 : pesée des blocs du prompt système (mesure avant élagage du contrat) --------------------------------
+test('pesageSystemPrompt : un bloc par fichier injecté, somme des tailles ≈ prompt, apercu dry-run avec parts en %', () => {
+  const root = makeRoot();
+  const cfg = launcher.parseConfig(CONFIG);
+  const sp = launcher.buildSystemPrompt(root, cfg, false);
+  const p = launcher.pesageSystemPrompt();
+  assert.deepEqual(p.map((b) => b.nom).slice(0, 3), ['KERNEL', 'CONFIG', 'direct-spawn']);
+  const somme = p.reduce((s, b) => s + b.chars, 0);
+  // Ce qui manque à la somme : l'en-tête fixe du contrat et les sauts de ligne de jonction (quelques centaines de caractères).
+  assert.ok(somme <= sp.length && sp.length - somme < 600, `somme ${somme} vs prompt ${sp.length}`);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+

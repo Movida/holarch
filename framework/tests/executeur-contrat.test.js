@@ -144,3 +144,96 @@ test('limite : un résultat ordinaire (success ou erreur non-429) n\'est pas rec
     assert.equal(mod.limite(rErr), null, `limite(${n}) sur erreur non-429`);
   }
 });
+
+// -- 5. envFournisseur : ANTHROPIC_API_KEY vidée dès qu'un fournisseur est posé (§12.6) -------------
+// Constaté en réel (chantier 11, sonde du 2026-09-12) : une ANTHROPIC_API_KEY laissée dans
+// l'environnement à côté du jeton de passerelle ne produit pas un 401 franc — le CLI se pend
+// (aucun JSON, tué au bout de 187 s). Ce test échouerait sans la correction (ANTHROPIC_API_KEY
+// resterait absente du résultat au lieu d'être explicitement vidée).
+
+const passerelle = require(path.join(CIBLE, 'bin', 'executeurs', 'passerelle.js'));
+
+test('envFournisseur : vide ANTHROPIC_API_KEY quand un fournisseur est posé', () => {
+  const env = passerelle.envFournisseur({ url: 'https://fournisseur.invalid/v1', jeton: 'jeton-de-test' });
+  assert.equal(env.ANTHROPIC_API_KEY, '');
+  assert.equal(env.ANTHROPIC_BASE_URL, 'https://fournisseur.invalid/v1');
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'jeton-de-test');
+});
+
+test('envFournisseur : sans fournisseur, environnement inchangé (pas de clé requise pour la suite)', () => {
+  assert.deepEqual(passerelle.envFournisseur(null), {});
+  assert.deepEqual(passerelle.envFournisseur(undefined), {});
+  assert.deepEqual(passerelle.envFournisseur(false), {});
+});
+
+test('envFournisseur : préparer() propage ANTHROPIC_API_KEY = \'\' dans l\'environnement du processus fils', () => {
+  const launch = {
+    root: path.resolve(CIBLE, '..'),
+    fournisseur: { url: 'https://fournisseur.invalid/v1', jeton: 'jeton-de-test' },
+    env: { ANTHROPIC_API_KEY: 'une-cle-anthropic-preexistante', AUTRE: 'conserve' },
+    meta: {}, denied: [], permissionMode: 'plan', maxTours: 1, budget: 1,
+    params: {},
+  };
+  const prep = passerelle.preparer(launch, {});
+  assert.equal(prep.env.ANTHROPIC_API_KEY, '');
+  assert.equal(prep.env.AUTRE, 'conserve');
+  if (prep.nettoyer) prep.nettoyer();
+});
+
+test('envFournisseur : préparer() sans launch.fournisseur laisse ANTHROPIC_API_KEY intacte', () => {
+  const launch = {
+    root: path.resolve(CIBLE, '..'),
+    meta: {}, denied: [], permissionMode: 'plan', maxTours: 1, budget: 1,
+    env: { ANTHROPIC_API_KEY: 'une-cle-anthropic-preexistante' }, params: {},
+  };
+  const prep = passerelle.preparer(launch, {});
+  assert.equal(prep.env.ANTHROPIC_API_KEY, 'une-cle-anthropic-preexistante');
+  if (prep.nettoyer) prep.nettoyer();
+});
+
+// -- 1.19.2 : coût « unknown » du CLI et plafond mis à l'échelle derrière une passerelle -------------------
+// holarch-modeles, 2026-09-12 : deepseek/deepseek-v4.1-flash facturé 8,07 USD par le CLI (costBasis unknown, tarif
+// d'Opus 5), ≈ 0,23 USD au tarif réel — fusible de 8 USD déclenché à tort au 39e tour.
+test('normaliser : coût du CLI ignoré (null ⇒ « ≈ » catalogue) quand le modèle principal a costBasis ≠ list', () => {
+  const cc = index.resoudre('claude-code');
+  const brut = { type: 'result', subtype: 'error_max_budget_usd', session_id: 'ds', total_cost_usd: 8.1383, num_turns: 39, is_error: true,
+    usage: { input_tokens: 1346076, cache_read_input_tokens: 521728, cache_creation_input_tokens: 0, output_tokens: 31943 },
+    modelUsage: {
+      'deepseek/deepseek-v4.1-flash': { inputTokens: 1399191, outputTokens: 32210, cacheReadInputTokens: 538112, costUSD: 8.070261, costBasis: 'unknown' },
+      'claude-sonnet-5': { inputTokens: 4, outputTokens: 1160, cacheReadInputTokens: 13150, costUSD: 0.068, costBasis: 'list' },
+    } };
+  const r = cc.normaliserRes(brut);
+  assert.equal(r.cout_usd, null, 'le lanceur calculera « ≈ » au tarif du catalogue');
+  assert.equal(r.tokens.entree, 1346076);
+  assert.equal(cc.coutCliFiable({ modelUsage: { 'claude-opus-5': { inputTokens: 10, costBasis: 'list' } } }), true);
+  assert.equal(cc.coutCliFiable({ modelUsage: { 'claude-opus-5': { inputTokens: 10 } } }), true, 'sans costBasis (CLI ancien) : fiable');
+  assert.equal(cc.coutCliFiable({}), true);
+});
+
+test('budgetCli : plafond converti dans l\'unité du CLI pour un modèle tiers par la passerelle, inchangé sinon', () => {
+  const cc = index.resoudre('claude-code');
+  const passerelle = { nom: 'openrouter', url_var: 'HOLARCH_FOURNISSEUR_OPENROUTER_URL' };
+  const tarifFlash = { cout_entree: 0.15, cout_sortie: 0.6 };
+  // 8 USD réels chez DeepSeek Flash = 8 × (5 / 0,15) ≈ 266,67 « USD du CLI ».
+  assert.equal(cc.budgetCli({ budget: 8, fournisseur: passerelle, meta: { tarif: tarifFlash } }, 'deepseek/deepseek-v4.1-flash'), 266.67);
+  // Modèle Claude par la passerelle (1.21.0) : prix CLI = ligne anthropic équivalente ; ici sonnet 3 chez anthropic, 2 chez la
+  // passerelle ⇒ 8 × 3 / 2 = 12 ; sans catalogue ou sans équivalent : tel quel.
+  const catalogueTest = require(path.join(__dirname, '..', 'bin', 'catalogue.js')).parseCatalogue(`## Fournisseurs
+| Nom | Exécuteur | URL (variable) | Jeton (variable) | Secours |
+|---|---|---|---|---|
+| anthropic | claude-code | — | — | — |
+| openrouter | passerelle | HOLARCH_FOURNISSEUR_OPENROUTER_URL | HOLARCH_FOURNISSEUR_OPENROUTER_JETON | — |
+
+## Catalogue de modèles
+| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie (USD par Mtok) | Aptitudes | Équivalent |
+|---|---|---|---|---|---|---|
+| sonnet | anthropic | claude-sonnet-5 | low…high | 3 / 15 | execution | sonnet@openrouter |
+| sonnet@openrouter | openrouter | anthropic/claude-sonnet-5 | low…high | 2 / 10 | execution | — |
+`);
+  assert.equal(cc.budgetCli({ budget: 8, fournisseur: passerelle, catalogue: catalogueTest, meta: { modele: 'sonnet@openrouter', tarif: { cout_entree: 2 } } }, 'anthropic/claude-sonnet-5'), 12);
+  assert.equal(cc.budgetCli({ budget: 8, fournisseur: passerelle, meta: { modele: 'x', tarif: { cout_entree: 2 } } }, 'anthropic/claude-sonnet-5'), 8);
+  // Fournisseur par défaut, ou sans tarif : tel quel.
+  assert.equal(cc.budgetCli({ budget: 8, fournisseur: { nom: 'anthropic', url_var: null }, meta: { tarif: tarifFlash } }, 'x/y'), 8);
+  assert.equal(cc.budgetCli({ budget: 8, fournisseur: passerelle, meta: { tarif: null } }, 'x/y'), 8);
+});
+

@@ -11,6 +11,7 @@
  *   node tools/holarch-session/etat.js            # texte complet
  *   node tools/holarch-session/etat.js --bref     # une dizaine de lignes
  *   node tools/holarch-session/etat.js --hook     # hook SessionStart : JSON additionalContext (version brève),
+ *   node tools/holarch-session/etat.js --hook-prompt  # hook UserPromptSubmit : idem, seulement si l'état a changé (clé stable),
  *                                                 # inerte ({}) dans une session d'instance (HOLARCH_INSTANCE posée)
  * Aucune dépendance, aucun réseau (l'authentification gh est lue dans hosts.yml, pas vérifiée en ligne).
  */
@@ -87,6 +88,16 @@ function collecter(root, deps) {
   for (const mm of cfg.matchAll(/^\|\s*([a-z_]+)\s*\|\s*([^|]*?)\s*\|\s*$/gm)) tableParams[mm[1]] = mm[2];
   const DEFAUTS = { mode_attente: 'synchrone', isolation: 'worktree', budget_usd_par_session: '?', max_tours_par_session: '?', seuil_contexte_tokens: '?', relances_max: '2' };
   e.parametres = Object.keys(DEFAUTS).map((k) => ({ cle: k, valeur: tableParams[k] !== undefined ? tableParams[k] : DEFAUTS[k], defaut: tableParams[k] === undefined }));
+  // Fournisseurs à variables (2026-09-12) : deux sessions perdues (4,68 USD) pour des variables OpenRouter absentes du
+  // shell de lancement ; depuis 1.16.3 le lanceur refuse, mais la session de maintenance doit le voir avant de proposer
+  // une commande de lancement. Noms de variables seulement, jamais une valeur.
+  e.fournisseurs = [];
+  const secFourn = cfg.split(/^## /m).find((s) => /^Fournisseurs/.test(s)) || '';
+  for (const mm of secFourn.matchAll(/^\|\s*([^|\s][^|]*?)\s*\|[^|]*\|\s*([^|]*?)\s*\|\s*([^|]*?)\s*\|/gm)) {
+    const nom = mm[1]; if (/^nom$/i.test(nom) || /^-+$/.test(nom)) continue;
+    const variables = [mm[2], mm[3]].filter((x) => /^[A-Z][A-Z0-9_]+$/.test(x));
+    if (variables.length) e.fournisseurs.push({ nom, variables, absentes: variables.filter((x) => !process.env[x]) });
+  }
   // Après un archivage, mission/ n'existe plus mais CONFIG.md porte encore le nom de la mission archivée (2026-09-11).
   e.missionAbsente = d.lire('mission/OBJECTIVE.md') === null && d.lire('mission/concepteur/STATUS.md') === null;
   const parseStatus = (t) => { const s = { etat: '', note: '' }; if (!t) return s; const a = t.match(/^\|\s*[ÉE]tat\s*\|\s*([A-Z_]+)/m); if (a) s.etat = a[1]; const n = t.match(/^\|\s*Note\s*\|\s*(.*?)\s*\|\s*$/m); if (n) s.note = n[1]; return s; };
@@ -133,6 +144,9 @@ function formater(e, bref) {
     const v = (k) => { const x = e.parametres.find((q) => q.cle === k); return x ? `${x.valeur}${x.defaut ? ' (défaut)' : ''}` : '?'; };
     l.push(`paramètres : mode_attente=${v('mode_attente')} · isolation=${v('isolation')} · ${v('budget_usd_par_session')} USD/session · ${v('max_tours_par_session')} tours · seuil contexte ${v('seuil_contexte_tokens')} · relances sans progrès ${v('relances_max')}`);
   }
+  if (!e.missionAbsente && e.fournisseurs && e.fournisseurs.length) {
+    l.push(`fournisseurs à variables : ${e.fournisseurs.map((f) => `${f.nom} — ${f.absentes.length ? `${f.absentes.join(', ')} ABSENTE(S) de ce shell (le lanceur refuse un lancement qui l'atteint, 1.16.3)` : 'variables présentes'}`).join(' ; ')}`);
+  }
   if (e.observe) {
     l.push(`état effectif (npm run observe) : ${e.observe.instances.map((i) => `${i.chemin} ${i.effectif}`).join(' ; ')} · ${e.observe.sessions} session(s) ${e.observe.usd.toFixed(2)} USD · ${e.observe.mainteneur} message(s) pour le mainteneur`);
     for (const a of e.observe.alertes.slice(0, bref ? 3 : 10)) l.push(`  ⚠ ${bref ? a.slice(0, 140) : a}`);
@@ -152,17 +166,52 @@ function formater(e, bref) {
   return l.join('\n');
 }
 
+/** Clé stable d'un état bref : seules les lignes qui changent un geste (branche, mission, paramètres, fournisseurs,
+ *  état effectif, alertes), débarrassées des durées, pids et compteurs de tokens. Deux états de même clé ne valent
+ *  pas une nouvelle injection : c'est ce qui garde le hook UserPromptSubmit silencieux tant que rien ne bouge. */
+function cleStable(texte) {
+  return texte.split('\n')
+    .filter((l) => /^(branche|mission |aucune mission|paramètres|fournisseurs|état effectif|⚠)/.test(l))
+    .map((l) => (/^branche/.test(l) ? l.split(' · ')[0] : l)) // la propreté de l'arbre bouge à chaque commit de la session : hors clé
+    .map((l) => l.replace(/\d+ min\b/g, 'N min').replace(/\d+k tokens/g, 'Nk tokens').replace(/pid \d+/g, 'pid N').replace(/\d+ processus/g, 'N processus'))
+    .join('\n');
+}
+function fichierCache(sessionId) {
+  const dir = path.join(os.homedir(), '.cache', 'holarch');
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* fail-open */ }
+  return path.join(dir, `etat-${String(sessionId || 'sans-session').replace(/[^A-Za-z0-9_-]/g, '_')}.txt`);
+}
+function lireStdinJson() {
+  if (process.stdin.isTTY) return {};
+  try { const s = fs.readFileSync(0, 'utf8'); return s.trim() ? JSON.parse(s) : {}; } catch (_) { return {}; }
+}
+
 function main(argv) {
-  const hook = argv.includes('--hook');
+  // --hook (SessionStart) injecte l'état et note sa clé ; --hook-prompt (UserPromptSubmit) ne réinjecte que si la
+  // clé a changé depuis la dernière injection de la même session (2026-09-12 : une session ouverte à 20:44 a reçu
+  // son premier message à 22:51 avec un état de deux heures — mission « en cours » alors qu'elle était archivée).
+  const hookPrompt = argv.includes('--hook-prompt');
+  const hook = argv.includes('--hook') || hookPrompt;
   const bref = hook || argv.includes('--bref');
   if (hook && process.env.HOLARCH_INSTANCE) { process.stdout.write('{}'); return; } // instance : inerte
   const root = findRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
   if (!root) { if (hook) process.stdout.write('{}'); else process.stderr.write('racine introuvable (framework/KERNEL.md)\n'); return; }
   let texte;
   try { texte = formater(collecter(root), bref); } catch (e) { if (hook) { process.stdout.write('{}'); return; } throw e; }
-  if (hook) process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: texte } }));
-  else process.stdout.write(`${texte}\n`);
+  if (hook) {
+    const entree = lireStdinJson();
+    const cache = fichierCache(entree.session_id);
+    const cle = cleStable(texte);
+    if (hookPrompt) {
+      let precedente = null;
+      try { precedente = fs.readFileSync(cache, 'utf8'); } catch (_) { precedente = null; }
+      if (precedente === cle) { process.stdout.write('{}'); return; }
+    }
+    try { fs.writeFileSync(cache, cle); } catch (_) { /* fail-open : on réinjectera */ }
+    const contexte = hookPrompt ? `[HOLARCH · état du dépôt — changé depuis la dernière injection]\n${texte}` : texte;
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: hookPrompt ? 'UserPromptSubmit' : 'SessionStart', additionalContext: contexte } }));
+  } else process.stdout.write(`${texte}\n`);
 }
 
-module.exports = { collecter, formater, processusMission, findRoot };
+module.exports = { collecter, formater, processusMission, findRoot, cleStable };
 if (require.main === module) main(process.argv.slice(2));

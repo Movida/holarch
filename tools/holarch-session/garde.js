@@ -35,6 +35,11 @@ function missionEnCours(psText) {
 /** Analyse d'une commande Bash : retourne {decision: 'ok'|'deny', reason}. Pure. */
 function analyserBash(cmd, ctx) {
   const segments = String(cmd || '').split(/&&|\|\||;|\|/).map((s) => s.trim()).filter(Boolean);
+  // 2026-09-12 : un commit enchaîné derrière `npm test | grep …` est parti rouge (le grep masquait le code de sortie).
+  // Les tests se lisent dans une commande, le commit vient dans la suivante.
+  const lanceTests = segments.some((s) => /^(npm test|npm run test|node --test)\b/.test(s));
+  const committe = segments.some((s) => /^git\s+(-C\s+\S+\s+)?commit\b/.test(s));
+  if (lanceTests && committe) return { decision: 'deny', reason: 'tests et `git commit` dans la même commande : lance les tests seuls, lis leur code de sortie, puis committe dans une commande séparée (un commit rouge est parti le 2026-09-12 derrière `npm test | grep`)' };
   for (const seg of segments) {
     const tokens = seg.replace(/^(?:\S+=\S*\s+)*/, '').split(/\s+/);
     if (tokens[0] !== 'git') continue;

@@ -172,3 +172,25 @@ test('429 : le lanceur attend la remise à zéro et retente sans décompter de r
   const loin = launcher.limiteApi(res429(1, `resets ${new Date(Date.now() + 8 * 3600 * 1000).getUTCHours()}:00 (UTC)`));
   assert.ok(loin.attenteMs === null || loin.attenteMs <= 6 * 3600 * 1000);
 });
+
+// --- 1.21.0 (P5 holarch-modeles) : sessions consécutives sans nouvelle fiche d'unité, commits ou pas -----------
+test('sessions_sans_unite_max : trois hibernations sans fiche d\'unité ⇒ arrêt « sans-unite » et ALERT au parent', () => {
+  const root = makeRoot({ relances: 10, plafond: 0 }); // relances_max large : seul le fusible « sans unité » peut parler
+  let n = 0;
+  const runner = () => { n += 1; hiberne(root); return { res: res(n), elapsedMs: 10 }; };
+  const sessions = launcher.launchWithRelaunches(root, ENFANT, {}, runner);
+  assert.equal(n, 3, 'trois sessions puis arrêt (sessions_sans_unite_max = 3 par défaut)');
+  assert.equal(sessions[2].arret.motif, 'sans-unite');
+  assert.equal(sessions[2].arret.sansUnite, 3);
+  const { text, code } = launcher.summarize(sessions[2].launch, sessions);
+  assert.equal(code, 3);
+  assert.match(text, /sans nouvelle fiche d'unité/);
+  assert.match(inboxParent(root), /sans nouvelle fiche d'unité/);
+  // Une fiche par session : jamais d'arrêt sur ce motif (le plafond ou relances_max décident).
+  const root2 = makeRoot({ relances: 10, plafond: 5 });
+  let m = 0;
+  const runner2 = () => { m += 1; fiche(root2, m); hiberne(root2); return { res: res(m), elapsedMs: 10 }; };
+  const s2 = launcher.launchWithRelaunches(root2, ENFANT, {}, runner2);
+  assert.equal(s2[s2.length - 1].arret.motif, 'plafond');
+});
+

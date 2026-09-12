@@ -76,7 +76,12 @@ function appliquerParametres(bloc, params) {
     return l;
   });
   const ajouts = Object.keys(restants).map((cle) => `| ${cle} | ${restants[cle]} |`);
-  return [...avant, ...nouvelleTable, ...ajouts, ...apres].join('\n');
+  // Une clé nouvelle s'ajoute à la fin de la table, AVANT les lignes vides qui la séparent de la section
+  // suivante (sinon la ligne tombe hors table : constaté à l'ouverture de holarch-passerelle, 2026-09-11).
+  let finTable = nouvelleTable.length;
+  while (finTable > 0 && nouvelleTable[finTable - 1].trim() === '') finTable -= 1;
+  const tableComplete = [...nouvelleTable.slice(0, finTable), ...ajouts, ...nouvelleTable.slice(finTable)];
+  return [...avant, ...tableComplete, ...apres].join('\n');
 }
 
 /** Réécrit dans `cheminConfig` (framework/CONFIG.md réel) UNIQUEMENT la ligne de nom et la section

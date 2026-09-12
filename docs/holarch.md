@@ -778,6 +778,32 @@ sur les sessions réelles de la mission `holarch-outillage`, est dans `EQUIVALEN
   qui parlerait directement le protocole HTTP est rendu possible par l'interface (c'est ce que
   `capacites.hooks = false` a pour rôle de faire dégrader proprement) ; il n'est pas écrit — décision
   D3 du chantier 9 : ne généraliser qu'au moment où une seconde implémentation réelle existe.
+- **Ce que la passerelle préserve, mesuré et non plus supposé** (chantier 11, 2026-09-12 : première
+  session d'instance réelle chez un fournisseur tiers — `openrouter`, modèle réel
+  `anthropic/claude-sonnet-5`, 152 tours, lue sur sa transcription et sa ligne `SESSIONS.md`) : les
+  hooks du fichier `--settings` sont chargés et actifs de bout en bout (18 `SessionStart`,
+  827 `PreToolUse`, 493 `PostToolUse`) ; les refus de permission et de sandbox s'appliquent (11 refus
+  comptés par le lanceur, `framework-guard` et `git-guard` visibles à l'œuvre) — le cloisonnement du
+  KERNEL §4 tient donc aussi derrière la passerelle ; `context-watch` mesure et injecte (7 injections
+  « HOLARCH · contexte ») ; `sleep-guard` garde la fin de session. Deux réserves à ne pas gommer : les
+  plafonds de tours et de dépense n'ont pas été atteints (152 sur 200, 4,53 sur 8 USD), donc ne sont
+  **pas** éprouvés en réel ; et la capacité déclarée `sous_agents` ne l'est pas davantage — l'instance
+  avait l'outil `Agent` et le module de délégation, elle n'a lancé aucun sous-agent.
+- **Ce que la passerelle ne préserve pas : le garde-fou de contexte** (même session, écart principal du
+  chantier 11). Une compaction automatique du CLI est survenue à 166 985 tokens (`trigger: auto`,
+  contexte ramené à 12 176) alors que `--autocompact 400000` était bien passé et que
+  `seuil_contexte_tokens` valait 240 000. Conséquence : sur ce modèle par ce fournisseur,
+  `context-watch` **ne peut jamais** déclencher l'hibernation volontaire — 154 809 tokens de contexte
+  ont été résumés hors contrat, sans passage par `MEMORY.md`. Que la cause soit la fenêtre du modèle
+  chez le fournisseur (≈ 200 k) ou l'option non honorée dans ce mode, le fait tient et n'est pas
+  corrigé par ce chantier : tant que `seuil_contexte_tokens` n'est pas plafonné par la fenêtre du
+  modèle réel déclaré au catalogue, une instance par passerelle perd son contexte en silence.
+- Coût observé par la passerelle (même session) : **0,0298 USD par tour**, contre une médiane de
+  0,0337 (p90 0,0540) pour les 118 sessions `sonnet` chez `anthropic` des missions archivées. Le tour
+  n'y est donc pas plus cher ; c'est le nombre de tours qui fait la facture (152 ici contre un p90
+  archivé de 72 — cette instance n'ayant délégué à aucun sous-agent). Comme partout dans
+  `SESSIONS.md`, ce chiffre est un coût **rapporté** par l'exécuteur au tarif liste : chez un
+  revendeur, rien ne garantit qu'il égale le montant facturé — aucune facture n'a été lue.
 - Le coût calculé par le catalogue (`≈`) est une estimation à partir des tokens rapportés et du tarif
   liste de la table : il vaut ce que valent ces deux entrées. Un tarif périmé dans `CONFIG.md` produit
   un chiffre faux sans que rien ne le signale — le catalogue est une donnée tenue à la main, pas une
@@ -789,6 +815,50 @@ sur les sessions réelles de la mission `holarch-outillage`, est dans `EQUIVALEN
   avec un avertissement à un lancement refusé sur une table mal tenue — choix inverse de celui fait
   pour un nom d'exécuteur inconnu, où l'erreur est silencieuse une fois la session partie.
 **2026-09-04 — synchronisation du harnais depuis le framework public (`origin/main`, dépôt `Movida/holon`).** Cette section (§16 entière, plus la table T1-T7 en cas de recoupement futur et le format `CONFIG.md` §9.1) reflète désormais le lanceur/hooks du framework public plutôt qu'une version antérieure propre à cette mission : `resolveOverrides`/« Overrides hiérarchiques » (§9.1), jamais dogfoodable par la holarchie elle-même (§15, décision git-branches) et déjà signalé comme risqué par sa propre proposition, a été retiré plutôt que corrigé ; `presetWorking`/la ligne « démarrée » de `SESSIONS.md` ont été retirés avec lui (limite reformulée ci-dessus, pas résolue) ; `wake-guard` a été ajouté (garde-fou contre l'état périmé injecté à la ré-incarnation — la friction que `concepteur/holon-d2` avait elle-même diagnostiquée en itération 4, `docs/archive/mission-holon-v2/concepteur/JOURNAL.md`) ; le bug de `launchWithRelaunches` qui réutilisait un lancement figé d'une ré-incarnation à l'autre a été corrigé ; `--disallowedTools` (motifs relatifs, `Write` et `Edit`) et `permissions.deny` défendent maintenant en profondeur le refus d'écriture sous `framework/`, qui ne tenait plus que par la discipline de l'instance ; `--add-dir` a été ajouté à la surface CLI. Détail complet et arbitrage : `mission/registry/DECISIONS.md`, entrée du même jour.
+
+### 16.5 Politique de modèle proposée (chantier 12, mesurée — **non appliquée**)
+
+Ce qui suit est une **proposition** issue de la mission `holarch-modeles`, pas la politique en vigueur :
+`framework/CONFIG.md` n'est pas modifié par ce chantier, et son application reste un geste du
+mainteneur. Les chiffres viennent de `docs/bench/REGISTRE.md` (section « Mesure des modèles par unité
+de travail ») : un lot unique de trois unités cadrées (U-A écriture d'outil testé, U-B extraction de
+faits à schéma imposé, U-C correction d'un test rouge), confié à trois instances `execution` ne
+différant que par leur modèle, toutes via la passerelle `openrouter`, effort `medium`.
+
+| Modèle | Lot | Coût du lot | Conduite |
+|---|---|---|---|
+| `anthropic/claude-sonnet-5` | 3/3 | 2,1421 USD (tarif liste, coût réel non recalculé) | 65 tours, 2 sessions, aucun sous-agent |
+| `deepseek/deepseek-v4.1-flash` | 3/3 | **0,1771 USD réels** | 79 tours, 2 sessions, sous-agents aux deux sessions |
+| `openai/gpt-5-mini` | 0/3 | 1,2575 USD réels, sans livrable | 474 tours, 8 sessions, 94 refus de garde-fou |
+
+**Proposition.**
+
+1. Profil `execution` : `deepseek-flash@openrouter` en effort `medium` par défaut, sous deux conditions
+   cumulatives — (a) l'unité est cadrée comme celles du lot de référence : critère de fin vérifiable,
+   chemins explicites, preuve attendue nommée ; (b) le parent note sur pièces, sans jamais reprendre le
+   compte rendu de l'enfant. À qualité égale sur les trois unités, l'écart de coût observé est d'un
+   ordre de grandeur (facteur ≈ 12 entre le coût réel du moins cher et le tarif liste de `sonnet`).
+2. Garder `sonnet@openrouter` en `execution` pour les unités dont l'énoncé reste ouvert, ou quand la
+   conduite compte plus que le prix : c'est le seul des trois à avoir bouclé le lot sans déléguer, en
+   un tiers de tours.
+3. Ne pas retenir `gpt-5-mini` pour incarner une instance HOLARCH, à aucun profil. Son échec n'est pas
+   un manque de capacité sur l'énoncé mais un défaut de conduite en boucle longue : contournements
+   successifs après un refus d'allowlist plutôt qu'une correction, hibernation « contexte » invoquée à
+   50 k tokens comme échappatoire, défauts jamais repris d'une session à l'autre.
+4. Ne rien changer aux profils `conception`, `relecture` et `exploration` : **aucune mesure n'a été
+   faite** sur eux. La mission n'a comparé que le profil `execution` à profondeur 2.
+
+**Deux préalables avant toute application** (détail en `docs/IMPLEMENTATION.md` §13.6) : le coût des
+modèles Anthropic passés par `openrouter` n'est pas recalculé au catalogue, et le plafond
+`budget_usd_par_session` s'applique au tarif liste — il coupe donc d'autant plus tôt que le modèle est
+bon marché (8,14 USD imputés pour ≈ 0,05 USD réels sur une session). Fonder une politique de coût sur
+une mesure que le harnais biaise dans ce sens serait bâtir sur du sable.
+
+**Portée de la mesure.** Un lot, trois unités, une session-type, un seul profil : c'est une mesure
+utile, pas une loi. Elle vaut pour des unités cadrées et vérifiées, pas pour du travail ouvert, et elle
+demande à être refaite quand les modèles ou leurs tarifs changent — `tools/holarch-modeles/` fournit
+les deux outils pour la refaire (`lecture-openrouter.js` pour le catalogue, `jointure.js` pour croiser
+fiches d'unité et `registry/SESSIONS.md`).
 
 ---
 

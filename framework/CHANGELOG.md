@@ -10,6 +10,134 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.21.0 — 2026-09-12
+
+Mineure (paramètre, preset, harnais) — propositions P1, P2 et P5 du rapport `holarch-modeles` :
+- **Coût au catalogue pour tout modèle derrière une passerelle** (P1) : `SESSIONS.md` porte « ≈ » au tarif du catalogue dès
+  que le fournisseur a des variables, Claude compris — le CLI tarife au prix liste Anthropic ou à celui d'Opus 5, jamais
+  au prix du fournisseur ; les colonnes de deux modèles ne sont comparables que si elles ont la même source. Le plafond
+  `--max-budget-usd` d'un modèle Claude par passerelle est converti par le prix de sa ligne `anthropic` équivalente.
+- **Tarifs Anthropic réels au preset** : `opus` 5 / 25 / 6,25 / 0,5 et `sonnet` 2 / 10 / 2,5 / 0,2 (15 / 75 et 3 / 15
+  étaient ceux d'Opus 4 / Sonnet 4 ; la mesure du CLI sur un modèle inconnu, tarifé comme Opus 5, a donné 5 / 25).
+- **`sessions_sans_unite_max`** (`direct-spawn`, défaut 3, P5) : sessions consécutives sans nouvelle fiche d'unité — commits
+  ou pas — avant arrêt et `ALERT` au parent ; `mesure-gpt5mini` avait commité du travail en cours pendant 8 sessions.
+- `tools/holarch-maintenance/promote.js` (P2) : `cwd` du sous-processus `appliquer.js` fixé sur le dépôt visé ;
+  `cible-docs/` réconcilié comme les autres cibles.
+
+## 1.20.0 — 2026-09-12
+
+Mineure — **chantier 12 promu** (mission `holarch-modeles`, 17 sessions, 38,34 USD au tarif liste dont ≈ 8 fictifs) :
+`tools/holarch-modeles/` (lecture du catalogue d'OpenRouter → lignes de catalogue candidates ; jointure fiches d'unité ×
+`SESSIONS.md` sur les archives), première table de mesure 3 unités × 3 modèles dans `docs/bench/REGISTRE.md` (sonnet 3/3,
+DeepSeek Flash 3/3 pour ≈ 0,18 USD, gpt-5-mini 0/3 en 8 sessions), politique de modèle **proposée** en `holarch.md` §16.5
+(non appliquée, `CONFIG.md` inchangé), écarts en `IMPLEMENTATION.md` §13.6. Détail des cibles :
+- **2026-09-12T14:07:01.119Z** : promotion automatique via `promote.js` — cibles :
+  tools/holarch-modeles/lecture-openrouter.js, tools/holarch-modeles/test-lecture-openrouter.js, tools/holarch-modeles/exemples/openrouter-models.json, tools/holarch-modeles/jointure.js, tools/holarch-modeles/test-jointure.js, tools/holarch-modeles/README.md, package.json, docs/bench/REGISTRE.md, docs/holarch.md, docs/IMPLEMENTATION.md, docs/README.md. <!-- à compléter -->
+
+## 1.19.5 — 2026-09-12
+
+Patch (harnais) — `--dry-run` pèse le prompt système : ligne « blocs système » avec les six blocs les plus lourds et
+leur part (KERNEL, CONFIG, modules, paramètres effectifs). Le contexte fixe relu à chaque tour est deux tiers du cache
+lu d'une mission (`docs/IDEES.md`) ; la règle « mesure avant réglage » veut cette pesée avant tout élagage du contrat.
+`pesageSystemPrompt()` exporté pour le banc.
+
+## 1.19.4 — 2026-09-12
+
+Patch (harnais) — jamais deux lanceurs pour la même instance : entre deux sessions d'une ré-incarnation le verrou
+`live/` est absent, et un second `--detach` (le parent relançant un enfant dont le lanceur tournait encore) a fait
+tourner deux sessions de `mesure-gpt5mini` en parallèle dans le même worktree (holarch-modeles, 13:15 UTC). Le
+lanceur refuse désormais tout lancement quand une fiche de tâche « running » au pid vivant existe pour ce chemin
+(`tacheVivantePour`), sauf `--forcer`. `wakeWaiters` et `--reprendre` gardent leur contrôle par verrou `live/` (un
+contrôle par fiche de tâche y bloquait les réveils légitimes : 1.19.4 corrigé avant publication du modèle).
+
+## 1.19.3 — 2026-09-12
+
+Patch (harnais) — deux faux refus mesurés sur `holarch-modeles` :
+- **Motifs de permission ancrés** (`instance-settings.json`, `--disallowedTools`) : `Write(tools/**)` sans ancre suit
+  la sémantique gitignore et refuse tout chemin contenant un segment `tools/` — `mission/shared/<x>/cible-tools/tools/…`
+  a coûté une délégation entière (25 appels, ≈ 0,86 USD). Désormais `Write(/tools/**)` etc., ancrés à la racine du
+  projet ; vérifié par sonde (haiku, 3 tours, 0,03 USD) : `tools/b.txt` refusé, `mission/shared/…/tools/a.txt` écrit.
+- **Garde a posteriori, règle 1, sur les seuls commits de l'instance** (sujet `[<chemin>]`, `[bootstrap]`, `[harnais]`,
+  `review(`) : la racine partage l'arbre principal avec la session de maintenance, dont sept commits (1.19.2) lui ont
+  valu sept écarts et une session « en erreur ». `verifierSession(…, { prefixes })` ; sans option, comportement d'origine.
+
+## 1.19.2 — 2026-09-12
+
+Patch (harnais) — deux mesures de `holarch-modeles` (premiers enfants sur des modèles tiers par la passerelle) :
+- **Coût et fusible pour un modèle que le CLI ne sait pas tarifer** (`costBasis: "unknown"`, tarifé au prix d'Opus 5) :
+  `deepseek/deepseek-v4.1-flash` facturé 8,07 USD par le CLI pour ≈ 0,23 USD réels, fusible de 8 USD déclenché au
+  39e tour. L'exécuteur `claude-code` rend `cout_usd = null` quand le modèle principal n'est pas tarifé « list » (le
+  lanceur écrit alors « ≈ » au tarif du catalogue), et convertit `--max-budget-usd` dans l'unité du CLI
+  (× 5 / tarif d'entrée du catalogue) pour un modèle tiers derrière une passerelle (`budgetCli`).
+- **Racine de travail dite au prompt** d'un enfant en worktree : trois enfants sur trois ont écrit sous l'arbre
+  principal (chemin absolu tiré du `CLAUDE.md` du dépôt), se sont fait refuser et se sont arrêtés.
+
+## 1.19.1 — 2026-09-12
+
+Patch (harnais) — `--detach` relançait le lanceur avec le seul chemin de l'instance : `--bootstrap --detach` mourait
+aussitôt sur « ROLE.md introuvable » (premier lancement détaché d'un bootstrap, `holarch-modeles`). Les options de
+session (`--bootstrap`, `--forcer`, `--profil`, `--modele`, `--effort`, `--budget-usd`, `--max-tours`,
+`--permission-mode`, `--timeout-min`, `--add-dir`) sont désormais transmises au lanceur détaché (`argsRelance`) et
+notées dans la fiche de tâche (`args`).
+
+## 1.19.0 — 2026-09-12
+
+Mineure (gabarit enrichi, harnais) — préparation du chantier 12 :
+- `templates/OBJECTIVE.template.md` : deux contraintes permanentes de plus — le livrable porte `MANIFEST.json` +
+  `appliquer.js` (contrat de `promote.js` ; `holarch-passerelle` a livré `MANIFESTE.md`, promu à la main) ; règle
+  « secrets » : le jeton ne s'écrit jamais et se cherche par préfixe, l'URL d'un service est publique (écart 7 du
+  rapport : 19 faux positifs sur `https://`).
+- `sous_agent_modele` traduit chez le fournisseur de la session (`modeleSousAgent`) : derrière une passerelle, un
+  sous-agent tourne dans le même processus et recevait l'identifiant du catalogue (« sonnet ») que le fournisseur
+  tiers ne connaît pas ; il reçoit désormais le modèle réel chez ce fournisseur, ou l'équivalent, avec avertissement
+  si aucun. Inchangé chez le fournisseur par défaut et pour un `CONFIG.md` sans catalogue.
+
+## 1.18.0 — 2026-09-12
+
+Mineure (catalogue enrichi, harnais) — colonne facultative **« Fenêtre (tokens) »** au `## Catalogue de modèles`
+(preset et `CONFIG.md`) : la fenêtre de contexte que le CLI prête au modèle (200 000 pour un modèle qu'il ne reconnaît
+pas, derrière une passerelle). Motif : écart 4 de `holarch-passerelle` (`IMPLEMENTATION.md` §12.8) — derrière la
+passerelle, Claude Code a compacté seul à 166 985 tokens malgré `--autocompact 400000` et un seuil de 240 000, si bien
+que `context-watch` ne pouvait jamais déclencher l'hibernation et que 155 k tokens ont été résumés hors `MEMORY.md`.
+Quand la fenêtre est déclarée, `prepareLaunch` plafonne `seuil_contexte_tokens` à 80 % d'elle (160 000 pour 200 000)
+et l'annonce sur stderr ; absente, rien ne change. Un `CONFIG.md` sans la colonne reste valide.
+
+## 1.17.0 — 2026-09-12
+
+Mineure — chantier 11 (`docs/IMPLEMENTATION.md` §12) : `executeurs/passerelle.js`, `envFournisseur`
+pose désormais `ANTHROPIC_API_KEY = ''` dès qu'un fournisseur (`launch.fournisseur`) est posé — laisser
+cette variable à sa valeur héritée du lanceur, en plus du jeton du fournisseur, ne provoque pas un 401
+propre mais une pendaison silencieuse du CLI Claude Code (constaté en réel, sonde §12.3, tué après 187 s).
+Comportement inchangé sans fournisseur. Tests unitaires ajoutés à `tests/executeur-contrat.test.js`
+(rouges sans le correctif). Nouveau test e2e opt-in `tests/e2e-passerelle.test.js` (§12.5) : ignoré par
+défaut, ne s'exécute qu'avec `HOLARCH_E2E_PASSERELLE=1` et les deux variables du fournisseur openrouter
+posées ; jamais en CI ; vérifie l'absence de fuite de secret dans le résultat et sur stderr.
+
+## 1.16.3 — 2026-09-12
+
+Patch (harnais) — refus de lancement, avant toute session, quand un fournisseur **atteignable** par la session
+(celui de son modèle, ou le secours chez qui ce modèle a un équivalent) n'a pas ses variables d'environnement
+(`HOLARCH_FOURNISSEUR_<NOM>_URL` / `_JETON`) ; `--forcer` passe outre, `--dry-run` avertit seulement, l'exécuteur
+factice n'exige rien. Motif : deux sessions perdues (4,68 USD) le 2026-09-12, lancées d'un shell sans les
+variables OpenRouter et finies chacune en `BLOCKER`. Un fournisseur déclaré mais hors d'atteinte (preset par
+défaut) n'exige rien : un `CONFIG.md` existant reste lançable sans changement.
+
+## 1.16.2 — 2026-09-12
+
+Patch (harnais) — `launchWithRelaunches` : un `--bootstrap` dont la session n'a pas eu lieu (429, puis repli
+sur le secours ou attente) restait marqué `bootstrap: false` à la tentative suivante, qui plantait sur
+« ROLE.md introuvable » — la racine n'existait pas encore. Constaté au premier 429 réel d'un bootstrap
+(`holarch-passerelle`, 2026-09-11 23:14 UTC, repli vers OpenRouter perdu). La tentative reste un bootstrap
+tant que `mission/<racine>/ROLE.md` n'existe pas ; test de non-régression dans `tests/repli-429.test.js`
+(rouge sans le correctif).
+
+## 1.16.1 — 2026-09-11
+
+Patch (tests seuls) — `tests/catalogue.test.js` lisait le `CONFIG.md` réel de la racine pour vérifier le
+catalogue par défaut et l'absence de `Secours` ; ce fichier est réécrit à chaque mission (`open.js`), et
+l'ouverture de `holarch-passerelle` (catalogue OpenRouter, `Secours` armé) le rendait rouge. Les deux tests
+lisent désormais le bloc `markdown` du preset `solo-light`, qui est le catalogue par défaut du framework.
+
 ## 1.16.0 — 2026-09-11
 
 Mineure (harnais, contrat) — indépendance du fournisseur de modèles (chantier 9, `IMPLEMENTATION.md` §11) :

@@ -310,7 +310,7 @@ const SESSIONS_VENTILEES = `# Sessions
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2026-09-11T10:00:00Z | a | s1 | opus/high | 40 | 1000 / 2000 / 500 / 300 | 3.00 | 5m | success | DELIVERED | 100 / 200 | 40000 / 90000 | anthropic / claude-opus-5 |
 | 2026-09-11T11:00:00Z | a | s2 | opus/high | 60 | 1200 / 2200 / 600 / 400 | 5.00 | 6m | success | DELIVERED | 100 / 200 | 45000 / 120000 | anthropic / claude-opus-5 |
-| 2026-09-11T12:00:00Z | b | s3 | sonnet/medium | 20 | 500 / 800 / 100 / 200 | ≈ 0.4000 | 2m | success | DELIVERED | 90 / 150 | 20000 / 30000 | passerelle / gpt-oss-120b |
+| 2026-09-11T12:00:00Z | b | s3 | sonnet/medium | 20 | 500 / 800 / 100 / 200 | ≈ 0.4000 | 2m | success | DELIVERED | 90 / 150 | 20000 / 30000 | passerelle / anthropic/claude-sonnet-5 |
 | 2026-09-11T13:00:00Z | c | s4 | sonnet/medium | 10 | 400 / 700 / 100 / 100 | 0.20 | 1m | success | DELIVERED | 90 / 150 | 18000 / 25000 | — |
 `;
 
@@ -327,6 +327,8 @@ test('ventilation par fournisseur : coût, contexte et modèles réels, « ≈ �
   const passerelle = v.find((g) => g.fournisseur === 'passerelle');
   assert.equal(passerelle.nEstimes, 1, 'un coût « ≈ » reste lu, mais compté comme estimé');
   assert.equal(passerelle.coutTotal, 0.4);
+  // Écart 6 de holarch-passerelle : un modèle réel contenant « / » n'est plus coupé à « anthropic ».
+  assert.deepEqual(passerelle.modeles, [{ modele: 'anthropic/claude-sonnet-5', nSessions: 1 }]);
   assert.ok(v.find((g) => g.fournisseur === 'non renseigné'), 'une ligne sans fournisseur reste visible');
   // Le coût « ≈ » entre aussi dans les statistiques globales, qui l'ignoraient avant le chantier 9.
   assert.equal(r.stats.coutUSD.n, 4);

@@ -133,8 +133,12 @@ const FOURNISSEUR_INCONNU = 'non renseigné';
 function parseFournisseurCell(v) {
   const t = String(v === undefined ? '' : v).trim();
   if (t === '' || t === '—' || t === '?') return { fournisseur: FOURNISSEUR_INCONNU, modele: null };
-  const parts = t.split('/').map((p) => p.trim()).filter(Boolean);
-  return { fournisseur: parts[0] || FOURNISSEUR_INCONNU, modele: parts[1] || null };
+  // Coupure sur le premier « / » entouré d'espaces seulement : un modèle réel peut contenir « / »
+  // (`openrouter / anthropic/claude-sonnet-5`, écart 6 de holarch-passerelle — le banc affichait « anthropic »).
+  const i = t.indexOf(' / ');
+  const fournisseur = (i === -1 ? t : t.slice(0, i)).trim();
+  const modele = i === -1 ? null : t.slice(i + 3).trim();
+  return { fournisseur: fournisseur || FOURNISSEUR_INCONNU, modele: modele || null };
 }
 
 // Ventilation par fournisseur (chantier 9, §11.2 : « le banc ventile contexte et coût par fournisseur

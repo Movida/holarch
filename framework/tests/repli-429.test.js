@@ -182,3 +182,73 @@ test('un seul repli par invocation : le secours qui refuse à son tour retombe s
   }
   fs.rmSync(root, { recursive: true, force: true });
 });
+
+// -- Bootstrap refusé par 429 : la tentative de repli reste un bootstrap ----------------------------
+// holarch-passerelle, 2026-09-11 23:14 UTC : premier 429 réel au --bootstrap, repli vers OpenRouter décidé,
+// puis plantage « ROLE.md introuvable » — la tentative suivante repartait comme instance ordinaire alors que
+// la racine n'existait pas encore (aucune session n'avait eu lieu). Ici sans exécuteur factice : un runner
+// direct rend le 429 puis un succès, et c'est le prompt de la seconde tentative qui prouve le bootstrap.
+test('--bootstrap refusé par 429 : la tentative de repli est encore un bootstrap (pas de ROLE.md exigé)', () => {
+  const root = makeRoot('conception');
+  fs.rmSync(path.join(root, 'mission', 'x'), { recursive: true, force: true }); // aucune racine incarnée
+  fs.writeFileSync(path.join(root, 'framework', 'BOOTSTRAP.md'), '# BOOTSTRAP de test\n');
+  const RES_429 = { type: 'result', subtype: 'success', session_id: 'boot-429', total_cost_usd: 0, num_turns: 1,
+    usage: {}, is_error: true, api_error_status: 429, result: "You've hit your session limit · resets 1am (UTC)" };
+  const RES_OK = { type: 'result', subtype: 'success', session_id: 'boot-ok', total_cost_usd: 0.2, num_turns: 3,
+    usage: {}, is_error: false };
+  let n = 0;
+  const runner = () => { n += 1; return { res: n === 1 ? RES_429 : RES_OK, elapsedMs: 10 }; };
+  // Runner direct (pas le seam `fake`) ; l'attente 429 est bornée par sécurité, le repli ne doit pas l'atteindre.
+  // Variables du secours posées : depuis 1.16.3 un secours atteignable sans elles est refusé avant toute session.
+  const envAvant = {};
+  for (const [k, v] of Object.entries({ HOLARCH_ATTENTE_429_MS: '30000', HOLARCH_FOURNISSEUR_SECOURS_URL: 'https://secours.invalid', HOLARCH_FOURNISSEUR_SECOURS_JETON: 'jeton-de-test' })) { envAvant[k] = process.env[k]; process.env[k] = v; }
+  let sessions;
+  try { sessions = launchWithRelaunches(root, 'concepteur', { bootstrap: true }, runner); }
+  finally { for (const [k, v] of Object.entries(envAvant)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } }
+  assert.equal(n, 2, `le 429 puis la session de repli (runner appelé ${n} fois)`);
+  assert.equal(sessions.length, 2);
+  for (const s of sessions) {
+    assert.match(s.launch.prompt, /première session de cette mission/, 'les deux tentatives sont des bootstraps');
+    assert.match(s.launch.systemPrompt, /BOOTSTRAP de test/);
+  }
+  assert.equal(sessions[0].launch.meta.fournisseur, 'anthropic');
+  assert.equal(sessions[1].launch.meta.fournisseur, 'secours-test');
+  assert.match(lignes(root)[1], /repli depuis anthropic/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// -- 1.19.1 : le lanceur détaché reçoit les options de la ligne de commande ----------------------------
+// holarch-modeles, 2026-09-12 : `--bootstrap --detach` relançait `[chemin]` nu → « ROLE.md introuvable ».
+test('argsRelance : --bootstrap et les options de session sont transmis, jamais --detach/--dry-run', () => {
+  const { argsRelance, detachLaunch } = require(path.join(ROOT, 'framework', 'bin', 'holarch-spawn.js'));
+  assert.deepEqual(argsRelance({ bootstrap: true, detach: true, dryRun: true }), ['--bootstrap']);
+  assert.deepEqual(argsRelance({ modele: 'sonnet', effort: 'low', budget: '2', maxTours: 30, forcer: true, addDir: ['/x'] }),
+    ['--forcer', '--modele', 'sonnet', '--effort', 'low', '--budget-usd', '2', '--max-tours', '30', '--add-dir', '/x']);
+  assert.deepEqual(argsRelance({}), []);
+  // La fiche de tâche garde les arguments transmis (lecture par --taches et par l'observation).
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-detach-'));
+  const { id, pid } = detachLaunch(root, 'concepteur', { args: ['--bootstrap'] });
+  assert.ok(pid > 0);
+  const fiche = JSON.parse(fs.readFileSync(path.join(root, 'mission', '.holarch', 'tasks', `${id}.json`), 'utf8'));
+  assert.deepEqual(fiche.args, ['--bootstrap']);
+  try { process.kill(pid, 'SIGKILL'); } catch (_) { /* déjà mort : racine sans framework */ }
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+// -- 1.19.4 : jamais deux lanceurs pour la même instance ------------------------------------------------------
+test('tacheVivantePour + refus de lancement : une tâche « running » au pid vivant bloque un second lanceur, sauf --forcer', () => {
+  const { tacheVivantePour } = require(path.join(ROOT, 'framework', 'bin', 'holarch-spawn.js'));
+  const root = makeRoot('execution');
+  const dir = path.join(root, 'mission', '.holarch', 'tasks');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'x-1.json'), JSON.stringify({ id: 'x-1', chemin: 'x', pid: process.pid, state: 'running' }));
+  fs.writeFileSync(path.join(dir, 'x-0.json'), JSON.stringify({ id: 'x-0', chemin: 'x', pid: 999999999, state: 'running' }));
+  assert.equal(tacheVivantePour(root, 'x').id, 'x-1', 'la fiche au pid vivant, pas celle au pid mort');
+  assert.equal(tacheVivantePour(root, 'autre'), null);
+  const r = require('child_process').spawnSync(process.execPath, [path.join(ROOT, 'framework', 'bin', 'holarch-spawn.js'), 'x', '--detach'], { cwd: root, encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /déjà lancée \(tâche x-1, pid \d+ vivant\)/);
+  assert.equal(fs.readdirSync(dir).filter((f) => f.endsWith('.json')).length, 2, 'aucune fiche de tâche créée');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+

@@ -47,6 +47,8 @@ c'est le mode qu'un `Monitor` de session de maintenance consomme sans bruit.
 | `attend-mainteneur` | alerte | message `to: utilisateur` (PROPOSAL, CLARIFICATION, BLOCKER, DELIVERABLE, ALERT) sans `RESPONSE` |
 | `session-sans-journal` | alerte | transcription d'une instance sans ligne dans `SESSIONS.md` : coût invisible (tours et pic de contexte lus dans la transcription) |
 | `branche-principale` | alerte | l'arbre principal n'est pas sur `main` |
+| `sans-progres` | alerte | ≥ 4 sessions et aucune unité close : l'instance tourne sans livrer — `--arret` puis recadrage ou verdict par le parent (2026-09-12) |
+| `session-longue` | alerte | session vivante depuis ≥ 45 min : lire la transcription avant qu'un fusible ne parle |
 | `org-en-retard`, `fiche-en-retard` | info | `ORG.md` ou la fiche registre ne disent pas ce que dit `STATUS.md` |
 | `contexte-orphelin` | info | `.contexte.json` d'une session ni vivante ni journalisée |
 | `contexte-au-seuil` | info | contexte de la session vivante ≥ `seuil_contexte_tokens` |

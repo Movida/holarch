@@ -290,3 +290,25 @@ test('fail-open : root inexistant et arguments vides — {ecarts: []}', () => {
   const res = verifierSession('', '', '', '');
   assert.deepEqual(res, { ecarts: [] });
 });
+
+// 1.19.3 : avec `opts.prefixes`, seuls les commits de l'instance sont jugés — pas ceux d'une session de
+// maintenance tombés dans l'intervalle (racine sur l'arbre principal partagé, holarch-modeles 2026-09-12).
+test('règle 1 : avec prefixes, un commit de maintenance dans l’intervalle n’est pas un écart, un commit [chemin] l’est', () => {
+  const dir = creerDepot();
+  try {
+    ecrire(dir, arbreNormal());
+    const avant = commit(dir, 'avant');
+    ecrire(dir, { 'framework/VERSION': '9.9.9\n', 'docs/note.md': '# maintenance\n' });
+    commit(dir, 'Framework 9.9.9 : patch de maintenance');
+    ecrire(dir, { 'mission/registry/PROGRESS.md': '# ok\n' });
+    commit(dir, `[${CHEMIN}] U1 : progrès`);
+    ecrire(dir, { 'framework/bin/x.js': '// intrusion\n' });
+    const apres = commit(dir, `[${CHEMIN}] U2 : intrusion`);
+    const prefixes = [`[${CHEMIN}]`, '[bootstrap]', '[harnais]', 'review('];
+    const ecarts = ecartsRegle(verifierSession(dir, CHEMIN, avant, apres, { prefixes }), 1);
+    assert.deepEqual(ecarts.map((e) => e.chemin), ['framework/bin/x.js']);
+    // Sans prefixes : comportement d'origine, tout l'intervalle est jugé.
+    assert.equal(ecartsRegle(verifierSession(dir, CHEMIN, avant, apres), 1).length, 3);
+  } finally { nettoyer(dir); }
+});
+

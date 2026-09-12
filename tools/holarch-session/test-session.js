@@ -63,6 +63,54 @@ test('etat : collecte et formate branche, fichiers d\'instance, mission, process
   assert.match(calme, /  · mission\/concepteur\/enfant\/MEMORY\.md/);
 });
 
+test('etat : fournisseurs à variables — absentes du shell signalées par leur nom, présentes reconnues, rien sans table', () => {
+  const root = makeRoot();
+  const cfgPath = path.join(root, 'framework', 'CONFIG.md');
+  const deps = {
+    git: () => '', ps: () => PS_CALME, hostsYml: () => null, versionClaude: () => '2.1.263', versionNode: () => 'v24.20.0',
+    mtimePassation: () => null, maintenant: () => new Date('2026-09-12T10:00:00Z'),
+  };
+  // Sans table Fournisseurs : aucune ligne.
+  assert.doesNotMatch(etat.formater(etat.collecter(root, deps), false), /fournisseurs à variables/);
+  fs.appendFileSync(cfgPath, '\n## Fournisseurs\n| Nom | Exécuteur | URL (variable) | Jeton (variable) | Secours |\n|---|---|---|---|---|\n| anthropic | claude-code | — | — | — |\n| routeur-test | passerelle | HOLARCH_FOURNISSEUR_ROUTEURTEST_URL | HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON | — |\n');
+  delete process.env.HOLARCH_FOURNISSEUR_ROUTEURTEST_URL; delete process.env.HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON;
+  const e = etat.collecter(root, deps);
+  assert.deepEqual(e.fournisseurs, [{ nom: 'routeur-test', variables: ['HOLARCH_FOURNISSEUR_ROUTEURTEST_URL', 'HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON'], absentes: ['HOLARCH_FOURNISSEUR_ROUTEURTEST_URL', 'HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON'] }]);
+  const t = etat.formater(e, false);
+  assert.match(t, /fournisseurs à variables : routeur-test — HOLARCH_FOURNISSEUR_ROUTEURTEST_URL, HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON ABSENTE\(S\) de ce shell/);
+  process.env.HOLARCH_FOURNISSEUR_ROUTEURTEST_URL = 'https://routeur.invalid'; process.env.HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON = 'jeton-de-test';
+  try {
+    const t2 = etat.formater(etat.collecter(root, deps), false);
+    assert.match(t2, /fournisseurs à variables : routeur-test — variables présentes/);
+    assert.doesNotMatch(t2, /jeton-de-test|routeur\.invalid/, 'jamais une valeur');
+  } finally { delete process.env.HOLARCH_FOURNISSEUR_ROUTEURTEST_URL; delete process.env.HOLARCH_FOURNISSEUR_ROUTEURTEST_JETON; }
+});
+
+test('etat --hook-prompt : réinjecte seulement quand la clé stable change ; --hook note la clé au départ', () => {
+  const root = makeRoot();
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-home-'));
+  const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root, HOME: home });
+  delete env.HOLARCH_INSTANCE;
+  const sid = JSON.stringify({ session_id: 'sess-test' });
+  const depart = JSON.parse(spawnSync('node', [ETAT, '--hook'], { encoding: 'utf8', env, input: sid }).stdout);
+  assert.equal(depart.hookSpecificOutput.hookEventName, 'SessionStart');
+  // Rien n'a changé : silence.
+  assert.equal(spawnSync('node', [ETAT, '--hook-prompt'], { encoding: 'utf8', env, input: sid }).stdout, '{}');
+  // La mission est archivée entre-temps : réinjection, étiquetée UserPromptSubmit.
+  fs.rmSync(path.join(root, 'mission'), { recursive: true, force: true });
+  const apres = JSON.parse(spawnSync('node', [ETAT, '--hook-prompt'], { encoding: 'utf8', env, input: sid }).stdout);
+  assert.equal(apres.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
+  assert.match(apres.hookSpecificOutput.additionalContext, /changé depuis la dernière injection[\s\S]*aucune mission ouverte/);
+  // Puis silence à nouveau, et une autre session repart de zéro (clé par session).
+  assert.equal(spawnSync('node', [ETAT, '--hook-prompt'], { encoding: 'utf8', env, input: sid }).stdout, '{}');
+  assert.notEqual(spawnSync('node', [ETAT, '--hook-prompt'], { encoding: 'utf8', env, input: JSON.stringify({ session_id: 'autre' }) }).stdout, '{}');
+  // Une instance : inerte.
+  assert.equal(spawnSync('node', [ETAT, '--hook-prompt'], { encoding: 'utf8', env: Object.assign({}, env, { HOLARCH_INSTANCE: 'concepteur' }), input: sid }).stdout, '{}');
+  // La clé stable ignore durées, pids et tokens.
+  assert.equal(etat.cleStable('branche main · 3 fichier(s) non committé(s)\nmission x : concepteur WORKING · session vivante (pid 12, 5 min, 88k tokens)\nderniers commits : abc'), 'branche main\nmission x : concepteur WORKING · session vivante (pid N, N min, Nk tokens)');
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
 test('etat --hook : JSON additionalContext hors instance, {} dans une session d\'instance', () => {
   const root = makeRoot();
   const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root, HOLARCH_INSTANCE: '' });
@@ -86,6 +134,11 @@ test('garde : git push — origin refusé, force refusé, sans remote refusé, h
   assert.equal(garde.analyserBash('git push holon-v2 main mission-holon-v2-final', ctx).decision, 'ok');
   assert.equal(garde.analyserBash('git push --dry-run holon-v2 main', ctx).decision, 'ok');
   assert.equal(garde.analyserBash('echo "git push origin"', ctx).decision, 'ok'); // pas une invocation de git
+  // 2026-09-12 : jamais de commit enchaîné derrière un test filtré.
+  assert.equal(garde.analyserBash('npm test 2>&1 | grep pass && git add x && git commit -m y', ctx).decision, 'deny');
+  assert.equal(garde.analyserBash('node --test a.test.js; git commit -am y', ctx).decision, 'deny');
+  assert.equal(garde.analyserBash('npm test', ctx).decision, 'ok');
+  assert.equal(garde.analyserBash('git add x && git commit -m y', ctx).decision, 'ok');
 });
 
 test('garde : changement d\'arbre de travail refusé seulement pendant une mission', () => {

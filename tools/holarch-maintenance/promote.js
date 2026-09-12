@@ -125,11 +125,12 @@ function main() {
 
   // P2 (rapport holarch-fournisseurs, 2026-09-11) : réconciliation manifeste ↔ fichiers du paquet. Un fichier ajouté sous
   // cible-*/ mais oublié dans cibles[] passait en silence, dry-run vert compris (le test du câblage du garde a failli ne
-  // jamais être promu). cible-docs/ est exclu : ses fragments s'insèrent à la main.
+  // jamais être promu). cible-docs/ compris (É2 holarch-modeles : un fragment oublié passait en silence ; le mode `fragment` de
+  // l'appliquer.js de référence l'insère lui-même).
   const declares = new Set(manifest.cibles.map((c) => c.depuis));
   const oublies = [];
   const marcher = (dir, rel) => { for (const ent of fs.readdirSync(dir, { withFileTypes: true })) { const r = `${rel}/${ent.name}`; if (ent.isDirectory()) marcher(path.join(dir, ent.name), r); else if (!declares.has(r)) oublies.push(r); } };
-  for (const ent of fs.readdirSync(dossierPaquetAbsolu, { withFileTypes: true })) if (ent.isDirectory() && ent.name.startsWith('cible-') && ent.name !== 'cible-docs') marcher(path.join(dossierPaquetAbsolu, ent.name), ent.name);
+  for (const ent of fs.readdirSync(dossierPaquetAbsolu, { withFileTypes: true })) if (ent.isDirectory() && ent.name.startsWith('cible-')) marcher(path.join(dossierPaquetAbsolu, ent.name), ent.name);
   const introuvables = manifest.cibles.filter((c) => !fs.existsSync(path.join(dossierPaquetAbsolu, c.depuis))).map((c) => c.depuis);
   if (oublies.length || introuvables.length) {
     process.stderr.write(`MANIFEST.json désaccordé avec le paquet : ${oublies.length ? `${oublies.length} fichier(s) sous cible-*/ absent(s) de cibles[] (${oublies.join(', ')})` : ''}${oublies.length && introuvables.length ? ' ; ' : ''}${introuvables.length ? `${introuvables.length} cible(s) sans fichier dans le paquet (${introuvables.join(', ')})` : ''}\n`);
@@ -165,7 +166,7 @@ function main() {
   const appliqueCopie = executer(
     'node',
     [cheminAppliquer, '--depot', copieDir],
-    { doitReussir: false },
+    { doitReussir: false, cwd: copieDir }, // É1 holarch-modeles : un appliquer.js qui ne lirait que le cwd écrirait dans le dépôt réel
   );
   if (appliqueCopie.code !== 0) {
     process.stderr.write(`${appliqueCopie.stderr}\n`);
@@ -207,7 +208,7 @@ function main() {
   const appliqueReel = executer(
     'node',
     [cheminAppliquer, '--depot', depotReel],
-    { doitReussir: false },
+    { doitReussir: false, cwd: depotReel },
   );
   if (appliqueReel.code !== 0) {
     process.stderr.write(`${appliqueReel.stderr}\n`);

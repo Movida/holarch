@@ -76,6 +76,7 @@ en une ligne où on en est (unités closes, session en cours, coût) et rendre l
 | `BLOCKER`, `CLARIFICATION`, `PROPOSAL` adressés à `utilisateur` | rien | décider (si le mainteneur n'a pas de préférence : trancher soi-même), écrire une `RESPONSE` dans l'`INBOX.md` du destinataire (racine : `mission/<racine>/INBOX.md` sur `main` ; enfant : dans son worktree, jamais dans l'arbre principal), committer si racine, relancer par `holarch-iterate` |
 | Enfant `FAILED` ou `BLOCKED` sans réveil du parent | — | comme « arrêt du lanceur » |
 | Racine `DELIVERED` | fin de mission | lire `shared/<racine>/RAPPORT.md`, vérifier de première main (tests sur copie, `appliquer.js`), proposer la promotion (`npm run promote -- <paquet> --appliquer`, `CHANGELOG`, `VERSION`) et l'archivage (`npm run archive`) |
+| `sans-progres` (≥ 4 sessions, aucune unité close) ou `session-longue` (≥ 45 min) dans `observe` | rien : le lanceur ré-incarne tant qu'il voit un commit | lire la transcription et l'INDEX de l'enfant ; s'il tourne à vide (WIP sans unité, hibernations précoces, refus répétés) : `--arret <chemin>` puis ALERT au parent « échec mesuré, pose FAILED et termine » — chaque ALERT réveille le parent (≈ 5 USD la session de racine) : grouper les constats dans une seule |
 | `exit=2` d'une tâche (STATUS resté `WORKING` sans note d'hibernation) | rien : session plantée | relancer une fois (`--detach`) ; un second échec ⇒ `FAILED` et recadrage |
 
 Un message de réveil pour l'utilisateur (`PushNotification`) seulement pour les lignes « geste du
