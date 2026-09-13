@@ -144,7 +144,7 @@ Indépendamment du module d'orchestration actif, créer un enfant suit toujours 
 2. Instancier `ROLE.md` depuis `framework/templates/ROLE.template.md` — remplir **toutes** les sections, dont "Contexte hérité" et le budget alloué (⊂ ton propre budget).
 3. Instancier `MEMORY.md`, `STATUS.md` (état `INIT`), `JOURNAL.md`, `INBOX.md`, `OUTBOX.md` depuis les templates correspondants.
 4. Créer la fiche `mission/registry/instances/<chemin-avec-tirets>.md` (structure définie par le module registre actif).
-5. Mettre à jour `mission/registry/ORG.md`.
+5. Mettre à jour `mission/registry/ORG.md` — si un module de registre actif régit ce fichier (ex. `sharded-files`), selon ce qu'il prescrit : sous `isolation = worktree`, le parent l'édite sur sa propre branche, après la fusion de l'enfant, jamais dans le worktree de l'enfant.
 6. Déclarer les dépendances entre enfants, si un module de synchronisation qui en a besoin est actif (ex. `dependency-graph`).
 7. Commit Git : `[<chemin-parent>] spawn <nom-role>`.
 

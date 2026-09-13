@@ -1,0 +1,74 @@
+{
+  "etapes": [
+    {
+      "statusApres": "WORKING",
+      "note": "hibernation volontaire (permis, tirage 1 : 5/5)",
+      "reveil": "—",
+      "commit": false,
+      "ecrire": [
+        { "chemin": "mission/permis/memoire/U1-permis.md", "contenu": "---\nid: U1\ndate: 2026-09-13\ncritere: tirage 1 (5/5)\nresultat: OK\npreuve: mission/shared/permis/permis.txt\ncommit: (test)\n---\nTirage 1.\n" },
+        { "chemin": "mission/shared/permis/permis.txt", "contenu": "note tirage 1\n" },
+        { "chemin": "mission/shared/permis/interdit.txt", "contenu": "interdit tirage 1\n" },
+        { "chemin": "mission/shared/permis/relatif.txt", "contenu": "relatif tirage 1\n" }
+      ],
+      "result": {
+        "type": "result", "subtype": "success", "session_id": "sess-mediane-1", "total_cost_usd": 0.01, "num_turns": 2,
+        "usage": { "input_tokens": 200, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 60 },
+        "is_error": false,
+        "permission_denials": [ { "tool_name": "Write", "tool_input": { "file_path": "framework/NOTES-permis.md" }, "reason": "framework-guard" } ]
+      }
+    },
+    {
+      "statusApres": "DELIVERED",
+      "note": "",
+      "reveil": "—",
+      "commit": false,
+      "ecrire": [
+        { "chemin": "mission/permis/memoire/U1-permis.md", "contenu": "---\nid: U1\ndate: 2026-09-13\ncritere: tirage 2 (4/5, sans hibernation)\nresultat: OK\npreuve: mission/shared/permis/permis.txt\ncommit: (test)\n---\nTirage 2.\n" },
+        { "chemin": "mission/shared/permis/permis.txt", "contenu": "note tirage 2\n" },
+        { "chemin": "mission/shared/permis/interdit.txt", "contenu": "interdit tirage 2\n" },
+        { "chemin": "mission/shared/permis/relatif.txt", "contenu": "relatif tirage 2\n" }
+      ],
+      "result": {
+        "type": "result", "subtype": "success", "session_id": "sess-mediane-2", "total_cost_usd": 0.02, "num_turns": 4,
+        "usage": { "input_tokens": 250, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 70 },
+        "is_error": false,
+        "permission_denials": [ { "tool_name": "Write", "tool_input": { "file_path": "framework/NOTES-permis.md" }, "reason": "framework-guard" } ]
+      }
+    },
+    {
+      "statusApres": "WORKING",
+      "note": "hibernation volontaire (permis, tirage 3 : 4/5, relatif.txt absent)",
+      "reveil": "—",
+      "commit": false,
+      "ecrire": [
+        { "chemin": "mission/permis/memoire/U1-permis.md", "contenu": "---\nid: U1\ndate: 2026-09-13\ncritere: tirage 3 (4/5, relatif.txt absent)\nresultat: OK\npreuve: mission/shared/permis/permis.txt\ncommit: (test)\n---\nTirage 3.\n" },
+        { "chemin": "mission/shared/permis/permis.txt", "contenu": "note tirage 3\n" },
+        { "chemin": "mission/shared/permis/interdit.txt", "contenu": "interdit tirage 3\n" }
+      ],
+      "result": {
+        "type": "result", "subtype": "success", "session_id": "sess-mediane-3", "total_cost_usd": 0.015, "num_turns": 3,
+        "usage": { "input_tokens": 220, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 65 },
+        "is_error": false,
+        "permission_denials": [ { "tool_name": "Write", "tool_input": { "file_path": "framework/NOTES-permis.md" }, "reason": "framework-guard" } ]
+      }
+    },
+    {
+      "statusApres": "DELIVERED",
+      "note": "",
+      "reveil": "—",
+      "commit": false,
+      "ecrire": [
+        { "chemin": "mission/permis/memoire/U1-permis.md", "contenu": "---\nid: U1\ndate: 2026-09-13\ncritere: tirage 4 (3/5, sans hibernation, relatif.txt absent)\nresultat: OK\npreuve: mission/shared/permis/permis.txt\ncommit: (test)\n---\nTirage 4.\n" },
+        { "chemin": "mission/shared/permis/permis.txt", "contenu": "note tirage 4\n" },
+        { "chemin": "mission/shared/permis/interdit.txt", "contenu": "interdit tirage 4\n" }
+      ],
+      "result": {
+        "type": "result", "subtype": "success", "session_id": "sess-mediane-4", "total_cost_usd": 0.025, "num_turns": 5,
+        "usage": { "input_tokens": 280, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 80 },
+        "is_error": false,
+        "permission_denials": [ { "tool_name": "Write", "tool_input": { "file_path": "framework/NOTES-permis.md" }, "reason": "framework-guard" } ]
+      }
+    }
+  ]
+}

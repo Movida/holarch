@@ -21,6 +21,25 @@ node tools/holarch-init/holarch-init.js --out /tmp/ma-mission
 node tools/holarch-init/holarch-init.js --reponses reponses.json --out /tmp/ma-mission
 ```
 
+`reponses.json` attend les valeurs **déjà dérivées**, pas les saisies brutes du dialogue interactif —
+`ampleur` est `"solo"` ou `"equipe"` (jamais `"1"`/`"2"`), `dependances`/`audit`/`suivi` sont des
+booléens JSON `true`/`false` (jamais `"o"`/`"N"`) :
+
+```json
+{
+  "mission": "refonte-site",
+  "objectif": "Refondre la page d'accueil et ses trois sous-pages.",
+  "reussite": "Les quatre pages sont en ligne et relues.",
+  "ampleur": "solo",
+  "dependances": false,
+  "audit": false,
+  "suivi": true
+}
+```
+
+Une forme interactive glissée par erreur dans ce fichier (`"ampleur": "1"`, `"dependances": "o"`) est
+rejetée avec un message explicite (code 2) plutôt que dérivée silencieusement en une autre configuration.
+
 Options : `--force` (écraser des fichiers existants), `--sans-validation`, `--manifest <f>`, `--modules-dir <d>`, `-h`.
 Codes de sortie : **0** succès · **1** configuration produite non conforme · **2** erreur d'usage.
 

@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"git commit -am x"}}],"usage":{"input_tokens":90,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":6}}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"u1","is_error":true,"content":"[HOLARCH · garde-fou git-guard] `git commit -a` indexe tout l'arbre, y compris ce qu'une autre session a en cours : nomme tes fichiers avec `git add mission/...` puis `git commit` sans -a."}]}}

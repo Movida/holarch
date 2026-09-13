@@ -8,7 +8,7 @@
  *   | Nom | Exécuteur | URL (variable) | Jeton (variable) | Secours |
  *
  *   ## Catalogue de modèles
- *   | Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent | Fenêtre (tokens) |
+ *   | Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent | Fenêtre (tokens) | Permis |
  *
  * **Compatibilité ascendante, règle cardinale** : les deux tables sont facultatives et un
  * identifiant absent du catalogue est passé tel quel à l'exécuteur (`modeleReel`). Un `CONFIG.md`
@@ -121,6 +121,9 @@ function parseCatalogue(texte) {
         // 1.18.0, facultative : fenêtre de contexte que le CLI prête à ce modèle (il compacte de lui-même vers
         // 83 % de celle-ci, quels que soient --autocompact et le seuil HOLARCH) ; null = inconnue, aucun plafond.
         fenetre: parseFenetre(cells[7]),
+        // U5, facultative : permis de protocole (`permis.js`) obtenu par ce modèle ; null = permis non
+        // passé, jamais un refus — seulement un avertissement au lancement (`ecartPermis`).
+        permis: parsePermis(cells[8]),
       };
     }
   }
@@ -144,6 +147,65 @@ function parseFenetre(cellule) {
   if (cellule === undefined || estVide(cellule)) return null;
   const n = Number(String(cellule).replace(/[\s\u202f\u00a0_]/g, ''));
   return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+/**
+ * Colonne facultative « Permis » : `{ date: 'YYYY-MM-DD' | null, note: entier 0..sur, sur: entier > 0,
+ * k: entier ≥ 1 }`, ou `null` si la cellule est absente, vide, ou illisible. Formes acceptées :
+ *   - « 2026-09-12 4/4 » (ancienne forme, un seul tirage — `sur` vaut alors 4, `k` vaut 1) ;
+ *   - « 4/4 » (sans date) ;
+ *   - « 2026-09-12 · 3/4 » (séparateurs espace, « · », « — », « - » autour de la date tolérés,
+ *     espaces fines tolérées) ;
+ *   - « 2026-09-13 4/5 ×3 » (chantier 14 volet 3, §15.3) : la note est une médiane sur `k` tirages,
+ *     `sur` vaut alors 5 (protocole à 5 questions). Le signe multiplication accepté en lecture est
+ *     `×` (U+00D7) ou `x` ASCII ; sans suffixe `×k`, `k` vaut 1 (« permis à un tirage »), y compris
+ *     pour l'ancienne forme `n/4` — c'est ce qui rend les deux formes indiscernables pour un appelant
+ *     qui ne regarde que `note` et `sur`.
+ * Une note supérieure à « sur », ou un `k` inférieur à 1, est illisible (`null`).
+ */
+function parsePermis(cellule) {
+  if (cellule === undefined || estVide(cellule)) return null;
+  const brut = nettoyer(cellule).replace(/[\u202f\u00a0]/g, ' ');
+  const m = /^(?:(\d{4}-\d{2}-\d{2})\s*(?:·|—|-|–|\s)\s*)?(\d+)\s*\/\s*(\d+)(?:\s*[×x]\s*(\d+))?$/.exec(brut);
+  if (!m) return null;
+  const date = m[1] || null;
+  const note = Number(m[2]);
+  const sur = Number(m[3]);
+  const k = m[4] === undefined ? 1 : Number(m[4]);
+  if (!Number.isInteger(note) || !Number.isInteger(sur) || sur <= 0 || note > sur) return null;
+  if (!Number.isInteger(k) || k < 1) return null;
+  return { date, note, sur, k };
+}
+
+/**
+ * Seuil de permis par défaut, à l'échelle du protocole qui a produit la note : 3 sur l'échelle `/4`
+ * (protocole 1.0, quatre épreuves) et 4 sur l'échelle `/5` (protocole 1.1, cinquième épreuve des
+ * chemins relatifs — §15.3). Un seuil fixe, hérité de 1.0, rendrait `3/5` acceptable alors que la
+ * même proportion est un échec à cinq épreuves.
+ */
+function seuilPermis(sur) {
+  return sur >= 5 ? 4 : 3;
+}
+
+/**
+ * Écart d'un modèle par rapport au seuil de permis de protocole, sous forme de message
+ * d'avertissement (jamais un refus) — ou `null` si rien à signaler. `entree` absente, ou permis dont
+ * la note atteint le seuil (`seuilPermis` de son échelle, sauf `seuil` passé explicitement) : rien à
+ * signaler. Sur l'échelle `/5`, un permis passé à un seul tirage (`k = 1`) est signalé même si la
+ * note atteint le seuil : une épreuve unique ne vaut pas médiane (§15.3). L'ancienne forme `n/4`,
+ * pour laquelle `k` vaut 1 par construction, n'est pas concernée — son comportement 1.0 est
+ * inchangé. `ecartPermis` ne jette jamais et ne rend qu'un message ou `null` ; le lanceur et
+ * `config-lint` partagent cette même règle.
+ */
+function ecartPermis(entree, seuil = null) {
+  if (!entree) return null;
+  const p = entree.permis;
+  if (!p) return `modèle « ${entree.id} » sans permis de protocole au catalogue — lancé tel quel`;
+  const s = seuil === null || seuil === undefined ? seuilPermis(p.sur) : seuil;
+  const passe = p.date ? `, passé le ${p.date}` : '';
+  if (p.note < s) return `modèle « ${entree.id} » : permis ${p.note}/${p.sur} au catalogue (< ${s}/${p.sur})${passe} — lancé tel quel`;
+  if (p.sur >= 5 && p.k === 1) return `modèle « ${entree.id} » : permis ${p.note}/${p.sur} passé à un seul tirage (×1)${passe} — médiane non établie, lancé tel quel`;
+  return null;
 }
 
 /** Fournisseur d'un identifiant de modèle, ou null (identifiant hors catalogue, ou fournisseur non déclaré). */
@@ -256,5 +318,5 @@ module.exports = {
   coutEstime, secoursDe, equivalentChez, verifierCatalogue,
   EFFORTS, TARIF_CACHE_LU, TARIF_CACHE_ECRIT,
   // exportés pour les tests et `config-lint`
-  parseEfforts, parseTarif, parseFenetre,
+  parseEfforts, parseTarif, parseFenetre, parsePermis, seuilPermis, ecartPermis,
 };

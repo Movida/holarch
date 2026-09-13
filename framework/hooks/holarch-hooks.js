@@ -390,6 +390,66 @@ function frameworkGuard(ctx) {
   });
 }
 
+// Racine de l'arbre principal du dépôt vue depuis `root` (chantier 14, §15.1) : dans un worktree,
+// `<root>/.git` est un FICHIER contenant `gitdir: <principal>/.git/worktrees/<nom>` — `readIf` échoue
+// aussi bien sur une absence de fichier que sur un répertoire (EISDIR), ce qui rend `racinePrincipale`
+// inerte (null) dans l'arbre principal sans test explicite. Repli sur le chemin du worktree lui-même
+// (`.../mission/.holarch/worktrees/<nom>`) si le fichier `.git` ne porte pas la forme attendue.
+function racinePrincipale(root) {
+  const gitFile = readIf(path.join(root, '.git'));
+  if (gitFile) {
+    const m = gitFile.match(/^gitdir:\s*(.+?)\/\.git\/worktrees\//m);
+    if (m) return m[1];
+  }
+  const marker = '/mission/.holarch/worktrees/';
+  const idx = root.indexOf(marker);
+  if (idx !== -1) return root.slice(0, idx);
+  return null;
+}
+
+/**
+ * path-guard (chantier 14, §15.1) : sous `isolation = worktree`, un chemin absolu qui pointe l'arbre
+ * PRINCIPAL du dépôt (pas le worktree courant) porte des données périmées pour cette session — un
+ * refus muet « hors du projet » a coûté 58 tours (docs/IMPLEMENTATION.md §15.1). Ce hook remplace ce
+ * refus par un message qui nomme le chemin relatif à reprendre. Inerte dans l'arbre principal
+ * (`racinePrincipale` y renvoie null ou root lui-même).
+ */
+function pathGuard(ctx) {
+  const { root, input } = ctx;
+  const principal = racinePrincipale(root);
+  if (!principal || principal === root) return ok();
+  const candidates = [];
+  const fp = input.tool_input && input.tool_input.file_path;
+  if (input.tool_name === 'Write' || input.tool_name === 'Edit' || input.tool_name === 'Read' || fp) {
+    if (fp) candidates.push(String(fp));
+  } else if (input.tool_name === 'Bash') {
+    const cmd = String((input.tool_input && input.tool_input.command) || '');
+    const re = /(?:^|[\s'"=:(,])(\/[^\s'"`;)|&]+)/g;
+    const seen = new Set();
+    let m;
+    while ((m = re.exec(cmd)) !== null) {
+      const c = m[1];
+      if (c.length > 1 && !seen.has(c)) { seen.add(c); candidates.push(c); }
+    }
+  }
+  for (const c of candidates) {
+    if (c === root || c.startsWith(`${root}/`)) continue; // absolu dans le worktree : accepté
+    if (c.startsWith(`${principal}/`)) {
+      const rel = c.slice(principal.length + 1);
+      emit({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: `[HOLARCH · garde-fou path-guard] \`${c}\` pointe l'arbre principal du dépôt (données périmées pour cette session), ta racine de travail est ${root}, le chemin relatif est \`${rel}\` — reprends avec ce chemin.`,
+        },
+      });
+      return;
+    }
+    // relatif ou absolu hors des deux : hors du périmètre de ce garde-fou, accepté.
+  }
+  return ok();
+}
+
 /**
  * git-guard (1.15.1) : une instance n'écrit jamais hors de `mission/` (KERNEL §4) — elle n'a donc jamais à y indexer
  * quoi que ce soit. Refuse `git add` sans pathspec restreint à mission/ (`-A`, `--all`, `.`, `-u`, `:/`) et tout
@@ -571,6 +631,7 @@ function main() {
     if (event === 'spawn-guard') return spawnGuard(ctx);
     if (event === 'wake-guard') return wakeGuard(ctx);
     if (event === 'framework-guard') return frameworkGuard(ctx);
+    if (event === 'path-guard') return pathGuard(ctx);
     if (event === 'git-guard') return gitGuard(ctx);
     if (event === 'context-watch') return contextWatch(ctx);
     return ok();
@@ -580,5 +641,5 @@ function main() {
   }
 }
 
-module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard };
+module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard, pathGuard, racinePrincipale };
 if (require.main === module) main();

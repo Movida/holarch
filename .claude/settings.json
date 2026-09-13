@@ -17,13 +17,7 @@
       "Bash(pytest *)",
       "Bash(node *)",
       "Bash(npm test)",
-      "Bash(npm run *)",
-      "Bash(gh auth status)",
-      "Bash(gh repo view *)",
-      "Bash(gh pr list *)",
-      "Bash(gh pr view *)",
-      "Bash(gh run list *)",
-      "Bash(gh run view *)"
+      "Bash(npm run *)"
     ]
   },
   "hooks": {

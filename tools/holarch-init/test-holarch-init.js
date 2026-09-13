@@ -113,6 +113,28 @@ test('refuse d\'écraser des fichiers existants sans --force', () => {
   assert.doesNotThrow(() => init.ecrire(REPONSES_SOLO, { out: dir, force: true }));
 });
 
+test('validerReponses rejette les formes interactives brutes (\'o\'/\'N\', numéro de choix) dans --reponses', () => {
+  assert.deepStrictEqual(init.validerReponses(REPONSES_SOLO), [], 'des réponses déjà dérivées, valides, ne produisent aucune erreur');
+
+  const booleenBrut = { ...REPONSES_SOLO, dependances: 'o' };
+  assert.ok(init.validerReponses(booleenBrut).some((e) => e.includes('dependances')), 'une chaîne \'o\' à la place d\'un booléen doit être rejetée');
+
+  const choixBrut = { ...REPONSES_SOLO, ampleur: '2' };
+  assert.ok(init.validerReponses(choixBrut).some((e) => e.includes('ampleur')), 'le numéro \'2\' du dialogue à la place de \'equipe\' doit être rejeté');
+
+  const manquant = { ...REPONSES_SOLO };
+  delete manquant.objectif;
+  assert.ok(init.validerReponses(manquant).some((e) => e.includes('objectif')), 'une clé non facultative absente doit être signalée');
+});
+
+test('le CLI non interactif refuse (code 2) un fichier de réponses aux formes interactives, sans dériver de configuration', () => {
+  const dir = tmp();
+  const f = path.join(dir, 'reponses.json');
+  fs.writeFileSync(f, JSON.stringify({ ...REPONSES_SOLO, dependances: 'o', ampleur: '1' }));
+  assert.throws(() => execFileSync('node', [OUTIL, '--reponses', f, '--out', dir], { encoding: 'utf8', stdio: 'pipe' }));
+  assert.ok(!fs.existsSync(path.join(dir, 'CONFIG.md')), 'aucune configuration ne doit être écrite sur un fichier de réponses non conforme');
+});
+
 test('bout en bout : le CLI non interactif produit une config validée à 0 erreur par module-forge', () => {
   const dir = tmp();
   const f = path.join(dir, 'reponses.json');

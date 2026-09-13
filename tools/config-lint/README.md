@@ -33,6 +33,11 @@ il découle) :
 - politique de modèle (profil/modèle/effort) valide, paramètres du harnais
   entiers positifs, `haiku` jamais utilisé pour une instance quand
   `direct-spawn` est actif (1.3.f) ;
+- colonne facultative « Permis » du catalogue de modèles (U5, permis de
+  protocole obtenu par `framework/bin/permis.js`) : absente ou vide → aucun
+  contrôle (colonne facultative) ; présente mais illisible (attendu
+  `<AAAA-MM-JJ> <note>/<sur>`) → erreur ; lisible avec une note < 3/4 →
+  avertissement (le lanceur avertira au spawn, sans jamais refuser) ;
 - étapes 1.1/1.2 (fichiers présents, mission déjà en cours), en option
   (`--bootstrap-check`), car elles échouent par construction dans un dépôt
   qui porte déjà une mission.

@@ -238,6 +238,46 @@ function normaliser(q, brut) {
   return v;
 }
 
+/**
+ * Valide la forme d'un objet de réponses déjà résolu (chemin --reponses) : les mêmes règles
+ * que `normaliser()` applique aux saisies du dialogue, mais sur des valeurs déjà dérivées —
+ * un booléen JS pour une question `booleen`, une valeur de `q.choix` (jamais son numéro) pour
+ * une question à choix. Un fichier qui réutilise par erreur les formes interactives ('o'/'N',
+ * '1'/'2') doit être rejeté ici plutôt que dériver silencieusement une autre configuration.
+ */
+function validerReponses(reponses) {
+  const erreurs = [];
+  for (const q of QUESTIONS) {
+    const v = reponses[q.cle];
+    if (q.facultatif) {
+      if (v !== undefined && typeof v !== 'string') {
+        erreurs.push(`« ${q.cle} » : attendu une chaîne (facultative), reçu ${JSON.stringify(v)}`);
+      }
+      continue;
+    }
+    if (v === undefined) { erreurs.push(`réponse manquante : « ${q.cle} »`); continue; }
+    if (q.booleen) {
+      if (typeof v !== 'boolean') {
+        erreurs.push(`« ${q.cle} » : attendu un booléen (true/false), reçu ${JSON.stringify(v)} — --reponses attend les valeurs déjà dérivées, pas les saisies du dialogue interactif ('o'/'N')`);
+      }
+      continue;
+    }
+    if (q.choix) {
+      const valeurs = Object.values(q.choix);
+      if (!valeurs.includes(v)) {
+        erreurs.push(`« ${q.cle} » : attendu l'une de ${JSON.stringify(valeurs)}, reçu ${JSON.stringify(v)} — --reponses attend la valeur dérivée, pas le numéro du dialogue interactif`);
+      }
+      continue;
+    }
+    if (typeof v !== 'string') { erreurs.push(`« ${q.cle} » : attendu une chaîne, reçu ${JSON.stringify(v)}`); continue; }
+    if (q.valide) {
+      const ok = q.valide(v);
+      if (ok !== true) erreurs.push(`« ${q.cle} » : ${ok}`);
+    }
+  }
+  return erreurs;
+}
+
 async function dialogue() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const demander = (t) => new Promise((res) => rl.question(t, res));
@@ -302,12 +342,11 @@ async function main(argv) {
   let reponses;
   if (o.reponses) {
     reponses = JSON.parse(fs.readFileSync(o.reponses, 'utf8'));
-    for (const q of QUESTIONS) {
-      if (q.facultatif) continue;
-      if (reponses[q.cle] === undefined) {
-        process.stderr.write(`réponse manquante : « ${q.cle} »\n`);
-        return 2;
-      }
+    const erreursForme = validerReponses(reponses);
+    if (erreursForme.length) {
+      process.stderr.write('fichier de réponses non conforme :\n');
+      for (const e of erreursForme) process.stderr.write(`  - ${e}\n`);
+      return 2;
     }
   } else {
     reponses = await dialogue();
@@ -343,4 +382,4 @@ if (require.main === module) {
   main(process.argv.slice(2)).then((c) => process.exit(c));
 }
 
-module.exports = { deriver, rendreConfig, rendreObjective, ecrire, validerConfigProduite, normaliser, QUESTIONS };
+module.exports = { deriver, rendreConfig, rendreObjective, ecrire, validerConfigProduite, normaliser, validerReponses, QUESTIONS };

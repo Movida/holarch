@@ -10,6 +10,89 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.23.0 — 2026-09-13
+
+Mineure — chantier 14 « Conduite dans un worktree : refus qui enseignent, permis rejoué », promu par
+`promote.js` (28 cibles) depuis la mission `holarch-worktree` (7 sessions, 32,69 USD liste ; constat de
+départ : 0 unité livrée pour 58 refus de garde-fou au chantier 13, tous des chemins absolus vers l'arbre
+principal) :
+- **Hook `path-guard`** (`hooks/holarch-hooks.js`, déclaré en `PreToolUse` sur `Write|Edit|Read` et `Bash`
+  dans `claude/instance-settings.json`) : sous `isolation = worktree`, un chemin absolu vers l'arbre
+  principal est refusé avec, dans le message, le chemin relatif correct réécrit ; inerte quand le cwd est
+  la racine ; 5 cas à sec (`tests/path-guard.test.js`), exercé en réel dans le clone du permis.
+- **KERNEL §9.5** : `ORG.md` mis à jour par le parent sur sa propre branche après la fusion de l'enfant,
+  jamais dans le worktree de l'enfant.
+- **Permis 1.1** (`bin/permis.js`) : cinquième épreuve (e) « chemin absolu refusé puis corrigé »,
+  `MAX_TOURS` 8, `--tirages` (défaut 3) avec médiane et écart, `--livrable <paquet>` pour jouer le permis sur
+  la copie jetable avec un livrable appliqué ; racine du dépôt trouvée par trois marqueurs. Score sur
+  l'échelle `/5` : `catalogue.js` (`parsePermis`, champ `k`) et `config-lint` acceptent « AAAA-MM-JJ n/5 ×k »
+  sans perdre « n/4 » ; `ecartPermis` avertit sous 4/5 et sur un permis à tirage unique. Joué en réel sur
+  les quatre modèles OpenRouter du catalogue (12 tirages, 0,979 USD) : médianes sonnet 1/5, deepseek-flash
+  4/5, qwen-coder-flash 0/5, kimi-k2 3/5, écart intra-modèle jusqu'à 4 points — lignes de catalogue au
+  `RAPPORT.md` §2, non appliquées.
+- **`--nettoyer-worktree --forcer`** (`bin/holarch-spawn.js`) : changements non committés d'un worktree
+  écrits en patch sous `mission/.holarch/graveyard/` avant suppression (`tests/graveyard-forcer.test.js`).
+- Hors `framework/` : `tools/holarch-session/refus.js` relève les refus de hooks par garde-fou et par cause
+  (`--transcriptions <dir>`, fixtures et test) ; `docs/IMPLEMENTATION.md` §15.7 (neuf écarts constatés),
+  `docs/bench/REGISTRE.md` (permis 1.1 en réel), `docs/holarch.md` §16.2 (entrée `path-guard`).
+- Tests : 579 → 640 (+61, tous verts) ; 6 tests préexistants réécrits pour le champ `k` et le format `x/5 ×k`.
+
+## 1.22.1 — 2026-09-12
+
+Patch (`bin/permis.js`, `tests/`) — CI rouge sur 08a1c3a, première exécution des tests 1.21.1 → 1.22.0
+sur GitHub Actions :
+- `permis.js` et `permis-sec.test.js` ne cherchaient la racine du dépôt qu'à condition d'y trouver
+  `mission/` : absent entre deux missions (après `npm run archive`) et sur la CI — désormais
+  `framework/KERNEL.md` suffit (le permis crée sa mission factice dans son propre clone).
+- `check-env.test.js` : les deux tests « en shell normal » exigeaient la CLI `claude` installée et
+  authentifiée ; ils sont sautés (`skip`, motif imprimé) là où elle manque, le test « binaire hors
+  PATH » reste joué partout.
+
+## 1.22.0 — 2026-09-12
+
+Mineure (chantier 13, mission `holarch-permis`, promue) — permis de conduire d'un modèle et
+réplication de la mesure :
+- **`framework/bin/permis.js`** : épreuve de protocole (quelques tours, quelques centimes) jouée
+  avant la première session réelle d'un modèle nouveau au catalogue — écriture d'une fiche d'unité,
+  chemins relatifs dans un worktree, réaction à un refus de hook, hibernation sur consigne.
+- **Colonne « Permis » facultative** au catalogue (`catalogue.js`, `config-lint`) : le lanceur avertit
+  (jamais ne refuse) au spawn d'un modèle sans permis ou noté sous 3/4.
+- **Résultat mesuré, négatif** (`docs/bench/REGISTRE.md`, `docs/IMPLEMENTATION.md` §14.5) : le permis à
+  n = 1 ne prédit pas la mission — faux négatif sur `sonnet` (recalé 2/4, a livré 8/9 unités réelles),
+  faux positif sur `qwen-coder-flash` (admis 4/4, n'a livré aucune unité, 58 refus sur des chemins
+  absolus hors worktree). Correctifs consignés en proposition : permis joué 3× (médiane au catalogue),
+  5e épreuve sur la discipline du chemin relatif. Politique de modèle révisée proposée en fragment
+  (`docs/holarch.md` §16.5-16.6) — **non appliquée à `CONFIG.md`** par cette promotion.
+- Réplication à n = 3 du lot du chantier 12 : 6 exécutions sur 7 (`qwen-coder-flash` clos en échec,
+  décision du mainteneur) ; dispersion mesurée (`sonnet` U-B noté 11, 11, 8 sur le même énoncé) et
+  coût médian ~10,3× entre `sonnet` et `deepseek-flash` pour une qualité médiane identique.
+
+## 1.21.2 — 2026-09-12
+
+Patch (`tests/` seul) — constaté en dogfooding réel (mission `montage-video-pacs`, `docs/IDEES.md`) :
+deux endroits où un test du framework lisait le `framework/CONFIG.md` **vivant** du dépôt au lieu
+d'une fixture figée, faisant dépendre son résultat de la mission en cours plutôt que du framework :
+- `contrat-reduit-regles-injectees.test.js` (budget 55 000 caractères) : la liste des 12 modules
+  était déjà figée (fix du 2026-09-11), mais `buildSystemPrompt` lit toujours `framework/CONFIG.md`
+  sur disque quelle que soit la config déjà analysée qu'on lui passe — toute prose ajoutée à la main
+  au CONFIG.md réel (que `holarch-init`/`BOOTSTRAP.md` encouragent explicitement) grignotait ce budget.
+  Fixe maintenant sur une racine jetable dont seul `CONFIG.md` est figé, `KERNEL.md` et `modules/`
+  restant des liens vers le dépôt réel.
+- `catalogue.test.js` (tarif de cache du modèle `fable`, colonne Efforts de `sonnet`) : les deux
+  lisaient aussi le CONFIG.md réel — recopier tel quel un CONFIG.md produit par `holarch-init` (qui ne
+  génère aucune des deux tables de catalogue, facultatives) cassait ces deux tests en silence. Fixe sur
+  une fixture dédiée (`TARIFS_ET_EFFORTS`), au même principe que `SANS_TARIF`/`DEUX_FOURNISSEURS` déjà
+  en usage dans ce fichier.
+
+## 1.21.1 — 2026-09-12
+
+Patch (harnais seul, `bin/` + `tests/`) — constaté en dogfooding réel (mission `montage-video-pacs`,
+`docs/IDEES.md`) :
+- **`--check-env`** (`holarch-spawn.js`) : vérifie mécaniquement les prérequis d'Étape 0 de
+  `BOOTSTRAP.md` — `node --version` (≥ 18), `git --version`, `claude --version` et une authentification
+  active (`claude auth status`) — avant tout lancement réel. Sans lui, un `claude` absent du shell
+  n'apparaissait qu'au lancement, en `command not found` opaque plutôt qu'un diagnostic HOLARCH.
+
 ## 1.21.0 — 2026-09-12
 
 Mineure (paramètre, preset, harnais) — propositions P1, P2 et P5 du rapport `holarch-modeles` :

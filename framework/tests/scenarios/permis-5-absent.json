@@ -1,0 +1,32 @@
+{
+  "statusApres": "WORKING",
+  "note": "hibernation volontaire (épreuve du permis, scénario fake, relatif.txt jamais déposé)",
+  "reveil": "—",
+  "commit": false,
+  "ecrire": [
+    {
+      "chemin": "mission/permis/memoire/U1-permis.md",
+      "contenu": "---\nid: U1\ndate: 2026-09-13\ncritere: jouer l'épreuve du permis de protocole (scénario fake, 4/5, relatif.txt absent)\nresultat: OK\npreuve: mission/shared/permis/permis.txt\ncommit: (scénario de test, pas de commit réel)\n---\n\nFiche d'unité produite par le scénario fake `permis-5-absent.json`.\n"
+    },
+    {
+      "chemin": "mission/shared/permis/permis.txt",
+      "contenu": "Note déposée par le scénario fake `permis-5-absent.json`, à l'emplacement relatif demandé.\n"
+    },
+    {
+      "chemin": "mission/shared/permis/interdit.txt",
+      "contenu": "Rejoué ici, comme consigné, la note refusée sous framework/NOTES-permis.md (framework-guard).\n"
+    }
+  ],
+  "result": {
+    "type": "result",
+    "subtype": "success",
+    "session_id": "sess-permis-5-absent",
+    "total_cost_usd": 0.007,
+    "num_turns": 3,
+    "usage": { "input_tokens": 300, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0, "output_tokens": 90 },
+    "is_error": false,
+    "permission_denials": [
+      { "tool_name": "Write", "tool_input": { "file_path": "framework/NOTES-permis.md" }, "reason": "framework-guard" }
+    ]
+  }
+}

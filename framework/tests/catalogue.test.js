@@ -71,6 +71,20 @@ const SANS_TARIF = `# Configuration — mission : essai
 | inconnu | anthropic | modele-sans-prix | — | — | exploration | — |
 `;
 
+/** Un tarif de cache en forme longue et une colonne Efforts restreinte. Écrite ici plutôt que lue
+ *  dans le CONFIG.md de la mission (comme SANS_TARIF ci-dessus) : `holarch-init` ne génère aucune des
+ *  deux tables de catalogue (elles sont facultatives selon la spec), et recopier tel quel le CONFIG.md
+ *  qu'il produit vers `framework/CONFIG.md` — sa procédure documentée — faisait rougir ces deux tests
+ *  en silence, sans rapport avec le catalogue réel du dépôt (constaté en dogfooding réel, docs/IDEES.md). */
+const TARIFS_ET_EFFORTS = `# Configuration — mission : essai
+
+## Catalogue de modèles
+| Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie (USD par Mtok) | Aptitudes | Équivalent |
+|---|---|---|---|---|---|---|
+| sonnet | anthropic | claude-sonnet-5 | low…high | 2 / 10 | execution | — |
+| fable | anthropic | claude-fable-5-1 | low…max | 10 / 50 / 12,5 / 0,25 | exploration | — |
+`;
+
 // -- 1. Les deux tables du CONFIG.md cible ---------------------------------------------------------
 
 test('parseCatalogue lit les deux tables du CONFIG.md par défaut (preset solo-light)', () => {
@@ -144,7 +158,7 @@ test('coutEstime applique le tarif du catalogue, cache lu au dixième et cache �
 test('coutEstime : un tarif de cache écrit au catalogue prime sur la dérivation', () => {
   // `claude-fable-5-1` facture la lecture de cache à 0,25 par Mtok, soit 2,5 % de son tarif d'entrée
   // et non le dixième dérivé par défaut — c'est le cas qui a motivé la forme longue de la colonne.
-  const c = cat.parseCatalogue(fs.readFileSync(path.join(CIBLE, 'CONFIG.md'), 'utf8'));
+  const c = cat.parseCatalogue(TARIFS_ET_EFFORTS);
   const fable = cat.modele(c, 'fable');
   assert.deepEqual([fable.cout_entree, fable.cout_sortie, fable.cout_cache_ecrit, fable.cout_cache_lu], [10, 50, 12.5, 0.25]);
   proche(cat.coutEstime(fable, { cache_lu: 1e6 }), 0.25, 'cache lu au tarif publié, pas 1,00 dérivé');
@@ -169,7 +183,7 @@ test('coutEstime rend null plutôt qu\'un zéro inventé', () => {
 // -- 5. Efforts permis -----------------------------------------------------------------------------
 
 test('effortPermis suit la colonne Efforts, et ne bloque rien quand elle est vide', () => {
-  const c = cat.parseCatalogue(fs.readFileSync(path.join(CIBLE, 'CONFIG.md'), 'utf8'));
+  const c = cat.parseCatalogue(TARIFS_ET_EFFORTS);
   assert.equal(cat.effortPermis(cat.modele(c, 'sonnet'), 'high'), true);
   assert.equal(cat.effortPermis(cat.modele(c, 'sonnet'), 'xhigh'), false);
   assert.equal(cat.effortPermis(cat.modele(cat.parseCatalogue(SANS_TARIF), 'inconnu'), 'max'), true); // efforts inconnus ⇒ permis

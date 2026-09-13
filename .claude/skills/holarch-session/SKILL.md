@@ -22,7 +22,7 @@ ou le carnet d'idées ne permet de trancher. Sinon, l'état dicte le geste, et l
 | Mission ouverte, non démarrée | Lancer soi-même (`--bootstrap`, `--detach`) si la ligne « fournisseurs à variables » dit « présentes » ; sinon donner la commande et guetter les variables (`Monitor` sur `bash -lc env`), lancer dès qu'elles sont là — après avoir vérifié qu'aucune session ne tourne déjà |
 | Mission en cours | `holarch-supervise` ; ne réagir qu'aux gestes du mainteneur ; un `BLOCKER` sans préférence connue se tranche soi-même (`RESPONSE`, commit par le mainteneur si le classifieur refuse) |
 | Racine `DELIVERED` | Vérifier sur clone, promouvoir (`npm run promote`), archiver, fichiers transverses, `VERSION`/`CHANGELOG`, idées du rapport dans `IDEES.md`, écart principal corrigé en patch si sa mesure est faite |
-| Tests verts, commits locaux | Pousser sur `holon-v2` sans demander, puis `gh run list` ; la publication du modèle reste au mainteneur (§7 de `ENVIRONNEMENT.md`), sauf demande explicite |
+| Tests verts, commits locaux | Pousser sur `holon-v2` sans demander (la CI de ce dépôt privé se lit sur GitHub par le mainteneur : le dire) ; la publication du modèle reste au mainteneur (§7 de `ENVIRONNEMENT.md`), sauf demande explicite |
 | Consigne ambiguë (« on continue », « paramètre X ») | La lecture qui fait avancer le cycle ci-dessus, annoncée en une ligne ; jamais une question à choix |
 
 Ce qui reste au mainteneur : la clé d'un fournisseur (dans son shell ou son `~/.bashrc`), la publication du modèle, une
@@ -54,7 +54,8 @@ elle se traite avant tout lancement ; après un redémarrage du conteneur, `node
   `CHANGELOG.md` ; `npm test`, `npm run lint`, `--dry-run` avant de committer un changement du harnais.
 - Noter au fil de l'eau, dans le scratchpad, ce qui a manqué au contexte de départ et ce qui a été découvert :
   c'est la matière de la passation, pas quelque chose à reconstruire de mémoire au dernier message.
-- Après tout push ou publication : `gh run list` sur le dépôt concerné (`main` et tag), avant de rendre compte.
+- Après un push sur `holon-v2` : dire que la CI est à lire sur GitHub (dépôt privé, pas de jeton dans le conteneur) ; après une
+  publication du modèle (public) : `curl -s https://api.github.com/repos/Movida/holarch/actions/runs?per_page=2` (`main` et tag).
 
 ## 3. En fin de session : la passation
 

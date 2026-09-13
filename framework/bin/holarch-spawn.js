@@ -243,15 +243,54 @@ function resolveWorkspace(root, chemin, cfg) {
   }
   return { cwd: dir, branche };
 }
-/** `--nettoyer-worktree <chemin>` : git worktree remove (refuse si des changements non committés subsistent). */
-function removeWorktree(root, chemin) {
+/** Écrit sous `<root>/mission/.holarch/graveyard/<chemin-tirets>-<horodatage>.patch` le diff (index et arbre,
+ *  fichiers non suivis inclus) du worktree `dir` par rapport à HEAD, sans polluer l'index réel du worktree :
+ *  copie de son fichier d'index dans un temporaire, passé par `GIT_INDEX_FILE` aux commandes git. Écrit
+ *  toujours un fichier (même vide) — les raisons d'un diff vide ou d'un échec de commande sont notées en
+ *  en-tête (lignes `# …`). Retourne le chemin du patch relatif à `root`. */
+function writeGraveyardPatch(root, chemin, dir) {
+  const notes = [];
+  let diff = '';
+  try {
+    const gitPath = spawnSync('git', ['-C', dir, 'rev-parse', '--git-path', 'index'], { encoding: 'utf8' });
+    if (gitPath.status !== 0) throw new Error((gitPath.stderr || '').trim() || 'git rev-parse --git-path index a échoué');
+    const indexReel = gitPath.stdout.trim();
+    const indexAbs = path.isAbsolute(indexReel) ? indexReel : path.join(dir, indexReel);
+    const indexTmp = path.join(os.tmpdir(), `holarch-graveyard-index-${process.pid}-${Date.now()}`);
+    fs.copyFileSync(indexAbs, indexTmp);
+    const env = Object.assign({}, process.env, { GIT_INDEX_FILE: indexTmp });
+    const add = spawnSync('git', ['-C', dir, 'add', '-N', '.'], { encoding: 'utf8', env });
+    if (add.status !== 0) notes.push(`git add -N . a échoué : ${(add.stderr || '').trim()}`);
+    const diffRes = spawnSync('git', ['-C', dir, 'diff', 'HEAD'], { encoding: 'utf8', env });
+    if (diffRes.status !== 0) notes.push(`git diff HEAD a échoué : ${(diffRes.stderr || '').trim()}`);
+    else diff = diffRes.stdout || '';
+    try { fs.unlinkSync(indexTmp); } catch (_) { /* best-effort */ }
+  } catch (e) {
+    notes.push(e.message);
+  }
+  if (!diff.trim()) notes.push('diff vide');
+  const graveyard = path.join(root, 'mission', '.holarch', 'graveyard');
+  fs.mkdirSync(graveyard, { recursive: true });
+  const horodatage = new Date().toISOString().replace(/[:.]/g, '-');
+  const fichier = path.join(graveyard, `${chemin.replace(/\//g, '-')}-${horodatage}.patch`);
+  const entete = notes.map((n) => `# ${n}\n`).join('');
+  fs.writeFileSync(fichier, entete + diff);
+  return path.relative(root, fichier);
+}
+
+/** `--nettoyer-worktree <chemin>` : git worktree remove (refuse si des changements non committés subsistent,
+ *  sauf `--forcer` : le diff est alors sauvé sous `mission/.holarch/graveyard/` avant suppression forcée). */
+function removeWorktree(root, chemin, opts = {}) {
   const dir = worktreeDir(root, chemin);
   if (!fs.existsSync(dir)) return { removed: false, reason: 'absent' };
   const status = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
-  if (status.status === 0 && status.stdout.trim()) return { removed: false, reason: 'changements non committés' };
-  const rm = spawnSync('git', ['worktree', 'remove', dir], { cwd: root, encoding: 'utf8' });
+  const sale = status.status === 0 && !!status.stdout.trim();
+  if (sale && !opts.forcer) return { removed: false, reason: 'changements non committés' };
+  const patch = sale ? writeGraveyardPatch(root, chemin, dir) : null;
+  const args = opts.forcer ? ['worktree', 'remove', '--force', dir] : ['worktree', 'remove', dir];
+  const rm = spawnSync('git', args, { cwd: root, encoding: 'utf8' });
   if (rm.status !== 0) return { removed: false, reason: (rm.stderr || '').trim() || 'échec git worktree remove' };
-  return { removed: true };
+  return patch ? { removed: true, patch } : { removed: true };
 }
 
 /** Remonte depuis `start` jusqu'au répertoire contenant framework/KERNEL.md et mission/. */
@@ -382,6 +421,11 @@ function enrichirMeta(meta, cat, chemin, opts) {
   meta.tarif = entree || null;
   // Marque portée par la session de repli (volet 3) jusqu'à la colonne « Fin » de SESSIONS.md.
   meta.repli_depuis = (opts && opts.repliDepuis) || null;
+  // Permis de protocole (chantier 13) : avertissement au spawn si le modèle n'a pas de permis au
+  // catalogue, ou si sa note est sous le seuil (3/4). Jamais un refus — un modèle sans permis reste
+  // lançable, l'avertissement est là pour que le choix soit conscient (docs/IMPLEMENTATION.md §14).
+  const ecartPermisModele = catalogue.ecartPermis(entree);
+  if (ecartPermisModele) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ${ecartPermisModele}\n`);
   if (entree && !catalogue.effortPermis(entree, meta.effort)) {
     process.stderr.write(`HOLARCH ▸ ${chemin} ▸ effort « ${meta.effort} » hors des paliers déclarés pour « ${meta.modele} » (${(entree.efforts || []).join(', ')}) — lancé tel quel\n`);
   }
@@ -1769,7 +1813,7 @@ function summarize(launch, sessions) {
 // CLI
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '', reprendre: false };
+  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '', reprendre: false, checkEnv: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -1796,6 +1840,7 @@ function parseArgs(argv) {
     else if (a === '--arret') o.arret = next();
     else if (a === '--immediat') o.immediat = true;
     else if (a === '--nettoyer-worktree') o.nettoyerWorktree = next();
+    else if (a === '--check-env') o.checkEnv = true;
     else if (a === '-h' || a === '--help') { o.help = true; }
     else if (a.startsWith('-')) throw new Error(`option inconnue : ${a}`);
     else if (!o.chemin) o.chemin = a.replace(/^mission\//, '').replace(/\/+$/, '');
@@ -1803,6 +1848,38 @@ function parseArgs(argv) {
   }
   if (o.bootstrap) o.chemin = 'concepteur';
   return o;
+}
+
+/** Vérifie les prérequis de l'Étape 0 de BOOTSTRAP.md avant un lancement réel (`--check-env`) : Node,
+ *  CLI `claude` installé et authentifié, `git` disponible — pour un diagnostic HOLARCH explicite plutôt
+ *  qu'un `command not found` opaque découvert seulement au premier lancement (constaté en dogfooding
+ *  réel, docs/IDEES.md). Ne vérifie pas l'identité Git : le lanceur la pose lui-même dans l'environnement
+ *  de chaque session (BOOTSTRAP.md Étape 0, point 3), rien à préparer côté utilisateur. */
+function verifierEnv() {
+  const lignes = [];
+  let ok = true;
+  const majeur = Number(process.version.replace(/^v/, '').split('.')[0]);
+  if (majeur >= 18) lignes.push(`✓ Node ${process.version} (≥ 18 requis)`);
+  else { lignes.push(`✗ Node ${process.version} — 18 ou plus requis`); ok = false; }
+
+  const git = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (!git.error && git.status === 0) lignes.push(`✓ git : ${(git.stdout || '').trim()}`);
+  else { lignes.push('✗ git introuvable ou en échec — requis pour les commits de mission'); ok = false; }
+
+  const claudeV = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  const claudeOk = !claudeV.error && claudeV.status === 0;
+  if (claudeOk) lignes.push(`✓ claude : ${(claudeV.stdout || '').trim()}`);
+  else { lignes.push('✗ CLI `claude` introuvable (npm install -g @anthropic-ai/claude-code) — un lancement réel échouerait en « command not found »'); ok = false; }
+
+  if (claudeOk) {
+    const auth = spawnSync('claude', ['auth', 'status'], { encoding: 'utf8' });
+    if (!auth.error && auth.status === 0) lignes.push('✓ claude authentifié');
+    else { lignes.push(`✗ claude non authentifié (${((auth.stdout || auth.stderr || '').trim().split('\n')[0]) || 'claude auth status a échoué'})`); ok = false; }
+  } else {
+    lignes.push('  (authentification non vérifiée : claude introuvable)');
+  }
+
+  return { ok, lignes };
 }
 
 function usage() {
@@ -1814,7 +1891,9 @@ function usage() {
     '          --add-dir <dir> (répétable — dépôt externe accessible en plus de la racine) --dry-run --json',
     '          --forcer (lance même si un fournisseur atteignable n\'a pas ses variables d\'environnement)',
     '          --detach --reveil --taches --reprendre --arret <chemin> [--immediat] (réveil/arrêt/tâches : voir docs/IMPLEMENTATION.md §3.2-§3.5)',
-    '          --nettoyer-worktree <chemin> (supprime le worktree d\'une instance déjà fusionnée ; refuse si des changements non committés subsistent)',
+    '          --nettoyer-worktree <chemin> (supprime le worktree d\'une instance déjà fusionnée ; refuse si des changements non committés subsistent,',
+    '          sauf --forcer : écrit d\'abord un patch sous mission/.holarch/graveyard/ puis supprime de force)',
+          '          --check-env (prérequis d\'Étape 0 de BOOTSTRAP.md : Node, git, CLI claude installée et authentifiée — avant tout lancement réel)',
   ].join('\n');
 }
 
@@ -1915,6 +1994,12 @@ function main() {
   let o;
   try { o = parseArgs(process.argv.slice(2)); } catch (e) { process.stderr.write(`${e.message}\n${usage()}\n`); process.exit(1); }
   if (o.help) { process.stdout.write(`${usage()}\n`); process.exit(0); }
+  if (o.checkEnv) {
+    const r = verifierEnv();
+    for (const l of r.lignes) process.stdout.write(`${l}\n`);
+    process.stdout.write(r.ok ? '\nprérequis d\'Étape 0 réunis.\n' : '\nprérequis manquants — régler avant un lancement réel (framework/BOOTSTRAP.md Étape 0).\n');
+    process.exit(r.ok ? 0 : 1);
+  }
   const root = o.root ? path.resolve(o.root) : findRoot(process.cwd());
   if (!root) { process.stderr.write('Racine introuvable : lance depuis un dépôt contenant framework/KERNEL.md et mission/ (ou --root).\n'); process.exit(1); }
 
@@ -1938,8 +2023,8 @@ function main() {
   }
   if (o.nettoyerWorktree) {
     const chemin = o.nettoyerWorktree.replace(/^mission\//, '').replace(/\/+$/, '');
-    const res = removeWorktree(root, chemin);
-    if (res.removed) { process.stdout.write(`HOLARCH ▸ ${chemin} ▸ worktree supprimé\n`); }
+    const res = removeWorktree(root, chemin, { forcer: !!o.forcer });
+    if (res.removed) { process.stdout.write(`HOLARCH ▸ ${chemin} ▸ worktree supprimé${res.patch ? ` (patch écrit : ${res.patch})` : ''}\n`); }
     else { process.stderr.write(`HOLARCH ▸ ${chemin} ▸ worktree non supprimé (${res.reason})\n`); process.exit(1); }
     return;
   }
@@ -2027,8 +2112,9 @@ module.exports = {
   isLive, tacheVivantePour, pesageSystemPrompt, demanderArret, descendants, wakeWaiters, detachLaunch, finishLaunch, reprendreTaches, coutCumule, countSessions, commitJournalLanceur, lastStatusCommitIso, stopPath, liveLockPath, readStatusOf, gitBranchesCtx, limiteApi,
   verifierSession: gardeGit.verifierSession, verifierApresSession, shaInstance,
   progressSnapshot, hasProgressed, countSessions, appendAlertToParent,
-  worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree, relayInboxFromParent,
+  worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree, writeGraveyardPatch, relayInboxFromParent,
   ensureSessionsFile, lastContexteDepart, contexteLivePath,
+  verifierEnv,
 };
 
 if (require.main === module) main();

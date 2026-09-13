@@ -601,6 +601,21 @@ Les trois points restés ouverts en fin de conception ont été tranchés. Confo
     `promote.js`) et P3 (le test du contrat réduit imprime sa marge) sont appliquées à la promotion, P1, P4 et P5 vont au
     carnet `docs/IDEES.md`. Mesure retenue pour le seuil de contexte : maximum observé 172 796 tokens sur 15 sessions,
     le seuil de 240 000 n'a jamais déclenché ; le facteur limitant d'une session est le budget de 8 USD.
+41. **Chantier 14 promu (2026-09-13, framework 1.23.0, mission `holarch-worktree`)** — une racine seule, 7 sessions,
+    32,69 USD liste, 19 unités, 28 cibles. Trois décisions du mainteneur en cours de mission et à la promotion :
+    (a) **plafond relevé de 25 à 40 USD** sur BLOCKER de l'instance (MSG-concepteur-003) — la validation d'intégration
+    réelle (`npm test` avant/après sur clone, six tests tiers cassés par le livrable et réécrits en fragments) a coûté
+    trois sessions pour une estimée ; un livrable sans cette mesure ni rapport n'était pas promouvable, l'option
+    « arrêter là » aurait perdu tout le chantier ; (b) les quatre rouges `zod` du clone jetable sont **écartés** comme
+    fait d'environnement (ligne de base mesurée par la session de maintenance sur l'arbre courant : 0 rouge), et la
+    règle « mesurer avant ET après sur le même clone » entre en §15.7 de `IMPLEMENTATION.md` ; (c) des quatre
+    propositions du rapport, aucune n'est appliquée à la promotion — toutes vont au carnet `docs/IDEES.md`
+    (`permis.js --sortie`, « le refus enseigne » étendu à `git-guard`, budget d'intégration à part, double usage de
+    `--forcer`). Résultat mesuré à retenir : permis 1.1 à trois tirages, l'écart intra-modèle atteint 4 points sur 5
+    (`deepseek-flash` 1/5, 5/5, 4/5) — **un tirage unique aurait inversé le classement**, ce qui ferme la question de
+    la décision 3 de §16.6 (« ne jamais conclure d'une exécution unique ») pour le permis aussi. Réserve : la
+    ventilation par garde-fou des refus de `path-guard` en réel reste à relever par le dogfooding après promotion
+    (recette au rapport §6), l'instance ne pouvant pas lire `/tmp`.
 
 ## 16. Harnais d'exécution (v1.1 — 2026-09-02, synchronisé depuis le framework public le 2026-09-04)
 
@@ -687,6 +702,7 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
 | `wake-guard` | `PreToolUse` (Write, Edit) | Symétrique de `sleep-guard` côté réveil : refuse tout `Write`/`Edit` hors de l'arbre propre de l'instance (`mission/<chemin>/**`, sa ligne `registry/PROGRESS.md`, sa fiche registre) tant que son `STATUS.md` n'est pas passé à un état actif (`WORKING`, `WAITING_CHILDREN`, `BLOCKED`) et qu'elle n'a pas ajouté sa propre ligne `ON_ORIENT` à `registry/PROGRESS.md` **depuis le début de la session courante** — détecté par le contenu ajouté à `PROGRESS.md` depuis une baseline calculée par le **lanceur avant de démarrer la session** (`HOLARCH_PROGRESS_BASELINE`, pas au premier appel du hook côté session : une baseline posée trop tard refuserait systématiquement la toute première écriture d'une instance pourtant déjà conforme). Une fois la porte ouverte, elle reste ouverte pour le reste de la session (pas de re-vérification à chaque écriture). |
 | `framework-guard` | `PreToolUse` (Write, Edit) | Refuse tout `Write`/`Edit` sous `framework/`, `docs/`, `tools/` ou sur `mission/OBJECTIVE.md` — hors de l'arbre propre de l'instance (`mission/<instance>/**`, `mission/shared/<instance>/**`) —, quel que soit l'état de `STATUS.md`. Différent de `wake-guard` par la portée : `wake-guard` porte sur l'arbre autorisé selon la phase de l'instance (gouverné par `ON_ORIENT`/l'état actif) et s'ouvre une fois la porte franchie ; `framework-guard` porte sur une liste fixe de répertoires qui ne sont jamais la production d'une mission (le produit et la documentation du harnais lui-même) et refuse inconditionnellement, indépendamment de `STATUS.md`/`PROGRESS.md`. Doublé, en défense en profondeur, par `permissions.deny` d'`instance-settings.json` (`framework/**`, `docs/**`, `tools/**`, `mission/OBJECTIVE.md`) — ceinture et bretelles, `--disallowedTools` du lanceur restant le troisième niveau pour `framework/**` et `mission/OBJECTIVE.md` (chantier 7 U2, `IMPLEMENTATION.md` §9.4). |
 | `context-watch` | `PostToolUse` (tous outils) | Lit l'usage du dernier message assistant dans la transcription (entrée + cache lu + cache écrit = contexte réel) ; au-delà de `seuil_contexte_tokens`, injecte l'ordre d'hiberner volontairement (une fois par palier de 20 000 tokens ; ton renforcé au-delà de 125 % du seuil). Remplace, quand le lanceur est utilisé, l'heuristique auto-rapportée de `context-budget`. **Depuis 1.9.0**, persiste aussi la mesure instantanée (`{session_id, depart, max, dernier, tours}`) dans `mission/.holarch/live/<chemin-tirets>.contexte.json`, lue et consommée par `appendSessionLine` en fin de session (colonne 12 de `SESSIONS.md`, §16.1 point 10). Lit aussi la demande d'arrêt propre (`mission/.holarch/stop/<instance>`, posée par `--arret`) et injecte une seule fois par session l'ordre d'hiberner avec la note « hibernation volontaire (arrêt demandé) », que le lanceur ne ré-incarne jamais (chantier 2). |
+| `path-guard` | `PreToolUse` (Write, Edit, Read, Bash) | Déclaré dans `framework/claude/instance-settings.json` (chantier 14). Sous `isolation = worktree`, intercepte l'usage, par une instance incarnée dans un worktree, d'un chemin absolu de l'arbre **principal** (`<racine principale>/…`) dans un appel d'outil, et refuse **en enseignant** : le message de refus donne le chemin **relatif** équivalent à employer, au lieu d'un refus sec. La racine de l'arbre principal est déduite du fichier `.git` du worktree, avec repli sur la forme `…/mission/.holarch/worktrees/<instance>` ; si la session tourne dans l'arbre principal (racine indéterminable), le hook est **inerte** — il ne gêne jamais une session de maintenance. Motivation : au chantier 13, une instance a produit 58 refus pour 0 unité livrée ; un refus d'allowlist est muet et perdu à l'archivage, un refus de hook est lisible, compté et ventilé par `tools/holarch-session/refus.js`. |
 
 ### Gardes a posteriori : vérifier une session par le dépôt
 
@@ -859,6 +875,62 @@ utile, pas une loi. Elle vaut pour des unités cadrées et vérifiées, pas pour
 demande à être refaite quand les modèles ou leurs tarifs changent — `tools/holarch-modeles/` fournit
 les deux outils pour la refaire (`lecture-openrouter.js` pour le catalogue, `jointure.js` pour croiser
 fiches d'unité et `registry/SESSIONS.md`).
+
+### 16.6 Politique de modèle — révision à n = 3 (chantier 13, mesurée — **appliquée puis retirée le 2026-09-13**)
+
+Proposée par la mission comme §16.5, **appliquée par le mainteneur** le 2026-09-13 à `framework/CONFIG.md`
+(profil `execution` → `deepseek-flash@openrouter`, commit `fa1bf95`), puis **retirée le même jour sur décision du
+mainteneur** : le développement d'HOLARCH lui-même reste sur les modèles Anthropic de l'abonnement Max (forfait
+mensuel, aucune dépense par appel) ; le profil `execution` est rendu à `sonnet`. La passerelle OpenRouter et le
+catalogue restent en place pour les campagnes de mesure (banc, permis, réplication) et pour les projets issus du
+modèle qui choisissent un fournisseur tiers — la politique mesurée ci-dessous vaut pour eux comme recommandation.
+La modification de `CONFIG.md` reste un geste du mainteneur. Ce qui change, c'est la base : le lot de §16.5 a été **rejoué à l'identique
+(énoncés inchangés mot pour mot), trois fois par modèle de référence**. Chiffres et méthode :
+`docs/bench/REGISTRE.md`, section « Réplication n = 3 (chantier 13) ».
+
+| Modèle (via `openrouter`) | n | Unités justes | U-B (méd. · min–max) | Tours (méd.) | Coût ≈ USD (méd. · min–max) |
+|---|---|---|---|---|---|
+| `anthropic/claude-sonnet-5` | 3 | 8/9 | 11/11 · **8–11** | 52 | 1,3960 · 1,3093–1,7173 |
+| `deepseek/deepseek-v4.1-flash` | 3 | 9/9 | 11/11 · 11–11 | 47 | **0,1355** · 0,0679–0,1658 |
+| `qwen/qwen3-coder-flash` | 0 exploitable | 0 en 2 sessions | — | 36 · 84 | 0,1936 · 0,5995 |
+| `moonshotai/kimi-k2` | non incarné (permis 2/4) | — | — | — | — |
+
+**Ce que la réplication change par rapport à §16.5.**
+
+1. **La proposition 1 de §16.5 est confirmée, et pour une raison plus solide qu'à n = 1** :
+   `deepseek-flash@openrouter` tient les trois unités **trois fois sur trois**, sans dispersion de note,
+   pour un coût médian **10,3×** inférieur (0,045 contre 0,47 USD par unité livrée). Les deux conditions
+   cumulatives de §16.5 (énoncé cadré, notation sur pièces par le parent) restent nécessaires : elles
+   décrivent les conditions exactes de la mesure, pas une précaution de style.
+2. **La proposition 2 est à corriger sur son motif, pas sur sa conclusion.** §16.5 gardait `sonnet` pour
+   « la conduite ». À n = 3, c'est `sonnet` qui **disperse** : une exécution sur trois rend une U-B
+   amputée de trois lignes (8/11), et le compte rendu de cette exécution-là déclare l'unité vérifiée et
+   conforme — elle ne l'était pas. Garder `sonnet` pour les énoncés ouverts reste défendable ; s'appuyer
+   sur ses comptes rendus ne l'est pas.
+3. **Nouvelle règle, issue du chantier 13 : ne jamais conclure d'une exécution unique.** Le chantier 12
+   avait tiré, pour `sonnet`, l'exécution conforme sur trois : la note était juste, la généralisation ne
+   l'était pas. Toute ligne de politique de modèle doit porter une médiane **et** une étendue sur au
+   moins trois exécutions du même énoncé, ou se déclarer non mesurée.
+4. **Le permis (§14.1 de `docs/IMPLEMENTATION.md`) ne suffit pas à admettre un modèle.** Sur les trois
+   modèles passés par les deux épreuves, il s'est trompé deux fois : `qwen-coder-flash` admis 4/4 n'a
+   livré **aucune** unité en deux sessions (58 refus d'allowlist, tous sur des chemins absolus hors de son
+   worktree) ; `sonnet` recalé 2/4 a livré 8 unités justes sur 9. À n = 1, le permis mesure un tirage —
+   le défaut même qu'il devait corriger. Deux correctifs proposés, dans cet ordre : jouer le permis
+   **trois fois** et porter la médiane au catalogue ; ajouter une **cinquième épreuve** « écrire un
+   fichier dans son propre workspace par chemin relatif », qui est la première cause d'échec observée en
+   mission réelle et qu'aucune des quatre épreuves actuelles ne touche.
+5. **Inchangé : `conception`, `relecture` et `exploration` ne sont toujours pas mesurés.** La réplication
+   n'a porté que sur `execution` à profondeur 2, comme §16.5.
+
+**Préalable d'instrumentation, renforcé.** Les deux réserves de §16.5 tiennent, et une troisième s'ajoute :
+le coût « ≈ » du catalogue **agrège l'instance et le sous-agent qu'elle délègue**, tandis que la
+ventilation par modèle de `registry/SESSIONS.md` vient du CLI, qui facture les jetons passés par
+`openrouter` au tarif Anthropic (facteur ≈ 25 constaté sur une session : 14,83 USD CLI contre 0,5995 USD
+au tarif catalogue). Aucune des deux sources ne donne donc le coût **propre** du modèle mesuré : les
+rapports de coût ci-dessus sont robustes à un ordre de grandeur près, pas à 10 %.
+
+**Portée.** Trois exécutions par modèle, un lot, un profil. Ce qui est établi, c'est que la dispersion
+entre exécutions identiques est **non nulle** — pas sa valeur.
 
 ---
 

@@ -121,6 +121,30 @@ function effortsDeCellule(cellule) {
   return out;
 }
 
+/**
+ * Cellule « Permis » du catalogue (U5, colonne facultative) → `{ note, sur, k, date } | null | undefined`.
+ * `undefined` = cellule absente ou vide (colonne facultative, silence complet) ; `null` = cellule
+ * présente mais illisible (erreur) ; objet = note lisible, `note < 3` avertit (lanceur avertira au
+ * spawn, modèle non recommandé pour incarner une instance), `note >= 3` ne produit rien.
+ * Formes acceptées, chantier 14 volet 3 (§15.3) : outre l'ancienne forme « <date> <note>/<sur> » (un
+ * seul tirage, `k` vaut alors 1), la forme « <date> <note>/5 ×<k> » où la note est une médiane sur
+ * `k` tirages ; `×` (U+00D7) ou `x` ASCII sont tous deux acceptés en lecture. Un `k` absent vaut 1.
+ * Volontairement dupliqué de `framework/bin/catalogue.js` (même règle, deux lectures indépendantes) :
+ * config-lint valide un texte et ne dépend d'aucun fichier de `framework/bin/`.
+ */
+function permisDeCellule(cellule) {
+  if (estVide(cellule)) return undefined;
+  const brut = String(cellule).replace(/`/g, '').trim();
+  const m = /^(?:(\d{4}-\d{2}-\d{2})\s*(?:·|—|-|–|\s)\s*)?(\d+)\s*\/\s*(\d+)(?:\s*[×x]\s*(\d+))?$/.exec(brut);
+  if (!m) return null;
+  const note = Number(m[2]);
+  const sur = Number(m[3]);
+  const k = m[4] === undefined ? 1 : Number(m[4]);
+  if (!Number.isInteger(note) || !Number.isInteger(sur) || sur <= 0 || note > sur) return null;
+  if (!Number.isInteger(k) || k < 1) return null;
+  return { date: m[1] || null, note, sur, k };
+}
+
 /** MANIFEST.md → Map(nom → { categorie, version, requiert[], incompatible[] }). */
 function parseManifest(texte) {
   const modules = new Map();
@@ -199,6 +223,8 @@ function parseConfig(texte) {
       cout: texteCellule(celluleCout(ligne)),
       aptitudes: liste(ligne['aptitudes']),
       equivalent: liste(ligne['equivalent']),
+      // U5, facultative : permis de protocole (`permis.js`) — colonne « Permis ».
+      permis: texteCellule(ligne['permis']),
     });
   }
   return { actifs, parametres, politique, aPolitique, fournisseurs, catalogue, aFournisseurs, aCatalogue };
@@ -415,6 +441,15 @@ function lintConfig(entree) {
     for (const a of m.aptitudes) {
       if (!PROFILS.includes(normaliser(a))) avert(`catalogue : modèle "${m.id}" — aptitude "${a}" hors des profils connus (${PROFILS.join(', ')}).`);
     }
+    // U5 — colonne facultative « Permis » (permis de protocole, `framework/bin/permis.js`). Cellule
+    // absente ou vide : silence complet (colonne facultative). Présente et illisible : erreur. Lisible
+    // et < 3/4 : avertissement (le lanceur avertira au spawn) — jamais un refus.
+    const permis = permisDeCellule(m.permis);
+    if (permis === null) {
+      err(`catalogue : modèle "${m.id}" — permis "${m.permis}" illisible (attendu "<AAAA-MM-JJ> <note>/<sur>", ex. "2026-09-12 4/4").`);
+    } else if (permis !== undefined && permis.note < 3) {
+      avert(`catalogue : modèle "${m.id}" — permis ${permis.note}/${permis.sur} au catalogue (< 3/${permis.sur}) : le lanceur avertira au spawn, modèle non recommandé pour incarner une instance.`);
+    }
   }
   // Références croisées : tout identifiant de modèle nommé ailleurs dans CONFIG.md doit être au catalogue.
   if (config.aCatalogue && catalogueParId.size > 0) {
@@ -537,7 +572,7 @@ function main(argv) {
 }
 
 module.exports = { parseManifest, parseConfig, parseModuleParams, lintConfig, lintDepuisDisque, parseArgs, main,
-  effortsDeCellule,
+  effortsDeCellule, permisDeCellule,
   CATEGORIES_OBLIGATOIRES, PERMISSION_MODES, FORMATS_RAPPORT, EFFORTS, PROFILS };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

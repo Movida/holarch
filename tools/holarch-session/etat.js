@@ -5,7 +5,7 @@
  *
  * Remplace la check-list manuelle de docs/ENVIRONNEMENT.md §11 : branche et fichiers non committés,
  * processus de mission en cours, derniers commits, organigramme et état de la racine, dernières
- * sessions journalisées, authentification gh, versions, remotes.
+ * sessions journalisées, versions, remotes.
  *
  * Usage :
  *   node tools/holarch-session/etat.js            # texte complet
@@ -13,7 +13,7 @@
  *   node tools/holarch-session/etat.js --hook     # hook SessionStart : JSON additionalContext (version brève),
  *   node tools/holarch-session/etat.js --hook-prompt  # hook UserPromptSubmit : idem, seulement si l'état a changé (clé stable),
  *                                                 # inerte ({}) dans une session d'instance (HOLARCH_INSTANCE posée)
- * Aucune dépendance, aucun réseau (l'authentification gh est lue dans hosts.yml, pas vérifiée en ligne).
+ * Aucune dépendance, aucun réseau.
  */
 const fs = require('fs');
 const os = require('os');
@@ -52,7 +52,6 @@ function collecter(root, deps) {
   const d = Object.assign({
     git: (args) => run('git', ['-C', root, ...args]),
     ps: () => run('ps', ['-eo', 'pid,args']) || '',
-    hostsYml: () => readIf(path.join(os.homedir(), '.config', 'gh', 'hosts.yml')),
     versionClaude: () => run('claude', ['--version']),
     versionNode: () => process.version,
     lire: (rel) => readIf(path.join(root, rel)),
@@ -112,9 +111,6 @@ function collecter(root, deps) {
   } catch (_) { /* pas de racine incarnée */ }
   const sessions = d.lire('mission/registry/SESSIONS.md');
   e.sessions = sessions ? sessions.split('\n').filter((l) => /^\| 20/.test(l)).slice(-3).map((l) => { const c = l.split('|').map((x) => x.trim()); return `${c[1].slice(0, 16)} ${c[2]} ${c[10] || ''} ${c[7]} USD ${c[5]} tours`; }) : [];
-  const hosts = d.hostsYml();
-  const u = hosts && hosts.match(/user:\s*(\S+)/);
-  e.gh = hosts ? (u ? `authentifié (${u[1]})` : 'authentifié') : 'non authentifié — gh auth login --web';
   e.versions = { claude: d.versionClaude() || '?', node: d.versionNode(), framework: (d.lire('framework/VERSION') || '?').trim() };
   e.observe = null;
   if (!e.missionAbsente && e.racine.etat) {
@@ -161,7 +157,7 @@ function formater(e, bref) {
   suivi.push(`${e.ideesOuvertes} idée(s) ouverte(s) dans docs/IDEES.md${e.ideesOuvertes ? ' (à prendre quand la main est libre, à compléter à chaque passation)' : ''}`);
   l.push(`suivi : ${suivi.join(' · ')}`);
   if (e.sessions.length) l.push(`dernières sessions : ${e.sessions.join(' · ')}`);
-  l.push(`framework v${e.versions.framework} · gh ${e.gh} · Claude Code ${e.versions.claude.replace(/\s*\(Claude Code\)/, '')} · Node ${e.versions.node} · remotes : ${e.remotes.join(', ') || 'aucun'}`);
+  l.push(`framework v${e.versions.framework} · Claude Code ${e.versions.claude.replace(/\s*\(Claude Code\)/, '')} · Node ${e.versions.node} · remotes : ${e.remotes.join(', ') || 'aucun'}`);
   l.push(`règles : docs/ENVIRONNEMENT.md (§7 réservé au mainteneur, §12 fichiers transverses) · scripts : npm run etat | observe (mission en cours, --watch) | lint | test | dry-run | mission -- <chemin> | upgrade | publish-template -- --out <dir>`);
   return l.join('\n');
 }
@@ -173,7 +169,8 @@ function cleStable(texte) {
   return texte.split('\n')
     .filter((l) => /^(branche|mission |aucune mission|paramètres|fournisseurs|état effectif|⚠)/.test(l))
     .map((l) => (/^branche/.test(l) ? l.split(' · ')[0] : l)) // la propreté de l'arbre bouge à chaque commit de la session : hors clé
-    .map((l) => l.replace(/\d+ min\b/g, 'N min').replace(/\d+k tokens/g, 'Nk tokens').replace(/pid \d+/g, 'pid N').replace(/\d+ processus/g, 'N processus'))
+    .map((l) => l.replace(/\d+ min\b/g, 'N min').replace(/\d+k tokens|contexte inconnu/g, 'Nk tokens').replace(/pid \d+/g, 'pid N').replace(/\d+ processus/g, 'N processus'))
+    .map((l) => l.replace(/^(⚠ N processus de mission en cours) : .* — /, '$1 — ')) // la liste pid + commande bouge à chaque sous-agent claude -p
     .join('\n');
 }
 function fichierCache(sessionId) {

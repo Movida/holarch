@@ -28,12 +28,11 @@ function makeRoot() {
 const PS_MISSION = '  1 /sbin/init\n 59956 /x/native-binary/claude --output-format stream-json --replay-user-messages\n 81532 node framework/bin/holarch-spawn.js --bootstrap\n 81539 claude -p --model opus --effort high\n';
 const PS_CALME = '  1 /sbin/init\n 59956 /x/native-binary/claude --output-format stream-json --replay-user-messages\n';
 
-test('etat : collecte et formate branche, fichiers d\'instance, mission, processus, sessions, gh, versions', () => {
+test('etat : collecte et formate branche, fichiers d\'instance, mission, processus, sessions, versions', () => {
   const root = makeRoot();
   const deps = {
     git: (args) => ({ 'branch --show-current': 'main', 'status --short --untracked-files=all': 'M mission/concepteur/enfant/MEMORY.md\n M README.md\n?? tools/x.js', 'log --oneline -5': 'abc1234 Un commit\ndef5678 Un autre', 'remote -v': 'holon-v2\thttps://x/holon-v2.git (fetch)\nholon-v2\thttps://x/holon-v2.git (push)' }[args.join(' ')] || ''),
     ps: () => PS_MISSION,
-    hostsYml: () => 'github.com:\n    user: Movida\n',
     versionClaude: () => '2.1.263 (Claude Code)',
     versionNode: () => 'v24.20.0',
     mtimePassation: () => new Date('2026-09-11T18:00:00Z'),
@@ -47,7 +46,6 @@ test('etat : collecte et formate branche, fichiers d\'instance, mission, process
   assert.deepEqual(e.enfants, [{ nom: 'enfant', etat: 'READY' }]);
   assert.equal(e.processus.length, 2); // lanceur + claude -p, jamais la session interactive
   assert.equal(e.sessions.length, 1);
-  assert.match(e.gh, /Movida/);
   const t = etat.formater(e, true);
   assert.match(t, /branche main · 3 fichier\(s\) non committé\(s\) dont 1 d'instance/);
   assert.match(t, /mission test-etat : concepteur WORKING \(hibernation volontaire \(contexte\)\) · enfants : enfant READY/);
@@ -56,10 +54,9 @@ test('etat : collecte et formate branche, fichiers d\'instance, mission, process
   assert.equal(e.ideesOuvertes, 1);
   assert.match(t, /suivi : dernière passation en mémoire il y a 3 h · 1 idée\(s\) ouverte\(s\) dans docs\/IDEES\.md/);
   assert.match(t, /paramètres : mode_attente=detache · isolation=worktree \(défaut\) · 8 USD\/session · 200 tours · seuil contexte \? \(défaut\) · relances sans progrès 2 \(défaut\)/);
-  assert.match(t, /framework v\S+ · gh authentifié \(Movida\) · Claude Code 2\.1\.263 · Node v24\.20\.0 · remotes : holon-v2 https:\/\/x\/holon-v2\.git/);
-  const calme = etat.formater(etat.collecter(root, Object.assign({}, deps, { ps: () => PS_CALME, hostsYml: () => null })), false);
+  assert.match(t, /framework v\S+ · Claude Code 2\.1\.263 · Node v24\.20\.0 · remotes : holon-v2 https:\/\/x\/holon-v2\.git/);
+  const calme = etat.formater(etat.collecter(root, Object.assign({}, deps, { ps: () => PS_CALME })), false);
   assert.match(calme, /aucune session de mission en cours/);
-  assert.match(calme, /gh non authentifié/);
   assert.match(calme, /  · mission\/concepteur\/enfant\/MEMORY\.md/);
 });
 
@@ -108,6 +105,8 @@ test('etat --hook-prompt : réinjecte seulement quand la clé stable change ; --
   assert.equal(spawnSync('node', [ETAT, '--hook-prompt'], { encoding: 'utf8', env: Object.assign({}, env, { HOLARCH_INSTANCE: 'concepteur' }), input: sid }).stdout, '{}');
   // La clé stable ignore durées, pids et tokens.
   assert.equal(etat.cleStable('branche main · 3 fichier(s) non committé(s)\nmission x : concepteur WORKING · session vivante (pid 12, 5 min, 88k tokens)\nderniers commits : abc'), 'branche main\nmission x : concepteur WORKING · session vivante (pid N, N min, Nk tokens)');
+  // … et la liste des processus (un sous-agent claude -p qui apparaît ne vaut pas une réinjection), ainsi que « contexte inconnu ».
+  assert.equal(etat.cleStable('⚠ 3 processus de mission en cours : 12 node spawn.js ; 13 claude -p --model opus ; 14 claude -p — ne pas toucher mission/\nétat effectif (npm run observe) : concepteur WORKING · session vivante (pid 13, 19 min, contexte inconnu)'), '⚠ N processus de mission en cours — ne pas toucher mission/\nétat effectif (npm run observe) : concepteur WORKING · session vivante (pid N, N min, Nk tokens)');
   fs.rmSync(home, { recursive: true, force: true });
 });
 

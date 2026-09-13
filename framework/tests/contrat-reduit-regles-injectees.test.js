@@ -1,15 +1,32 @@
 'use strict';
 // Tests U5 (chantier 7, §9.2/§9.5) : le prompt système n'injecte plus que KERNEL/CONFIG entiers et,
 // par module actif, l'en-tête (`>`) + `## Règles injectées` — jamais `## Constat` ni `## Ce que ce
-// module ne fait pas`. Cible chiffrée : ≤ 55 000 caractères avec le CONFIG.md réel du dépôt (12 modules).
+// module ne fait pas`. Cible chiffrée : ≤ 55 000 caractères avec un CONFIG.md figé à 12 modules
+// (racineContratFige ci-dessous — jamais le CONFIG.md vivant du dépôt, réécrit à chaque mission).
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const CIBLE = path.resolve(__dirname, '..');
-const ROOT_REEL = path.resolve(CIBLE, '..');
 const LANCEUR = require(path.join(CIBLE, 'bin', 'holarch-spawn.js'));
+
+/** Racine jetable dont `framework/CONFIG.md` est figé (le texte passé), `KERNEL.md` et `modules/` des
+ *  liens vers ceux du dépôt réel. `buildSystemPrompt` lit `framework/CONFIG.md` sur disque quelle que
+ *  soit la config déjà analysée qu'on lui passe (pushConfig, holarch-spawn.js) — measurer avec
+ *  `ROOT_REEL` faisait donc dépendre ce budget de la prose du CONFIG.md *vivant* de la mission en
+ *  cours dans ce dépôt, sans rapport avec les 12 modules mesurés à la livraison du chantier 7 (constaté
+ *  en dogfooding réel : un CONFIG.md honnêtement personnalisé grignotait ce budget, docs/IDEES.md). */
+function racineContratFige(configText) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-contrat-reduit-'));
+  const fw = path.join(tmp, 'framework');
+  fs.mkdirSync(fw);
+  fs.writeFileSync(path.join(fw, 'CONFIG.md'), configText);
+  fs.symlinkSync(path.join(CIBLE, 'KERNEL.md'), path.join(fw, 'KERNEL.md'));
+  fs.symlinkSync(path.join(CIBLE, 'modules'), path.join(fw, 'modules'));
+  return tmp;
+}
 
 test('extraireEnTeteEtReglesInjectees : garde en-tête + Règles injectées, retire Constat et Ce que ce module ne fait pas', () => {
   const source = [
@@ -49,9 +66,9 @@ test('extraireEnTeteEtReglesInjectees : repli fail-open (texte entier) si Règle
 });
 
 test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livraison du chantier 7', (t) => {
-  // Découplé du CONFIG.md vivant du dépôt (2026-09-11 : la mission suivante y a ajouté un 13e module et le test
-  // rougissait, bloquant la publication du modèle) : la cible de 55 000 caractères vaut pour les 12 modules mesurés
-  // à la livraison ; les modules réels sont lus sur disque, seule la liste est figée.
+  // Figé (liste de modules *et* texte de CONFIG.md, racineContratFige ci-dessus) : la cible de 55 000
+  // caractères vaut pour les 12 modules mesurés à la livraison du chantier 7 ; KERNEL.md et les modules
+  // réels sont lus sur disque, seuls eux peuvent la faire bouger légitimement.
   const config12 = [
     '# Configuration — mission : test-contrat-reduit', '> Preset de base : solo-light · Framework : v1.1', '', '## Modules actifs',
     '| # | Catégorie | Module |', '|---|---|---|',
@@ -62,13 +79,18 @@ test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livrai
     '## Paramètres', '| Paramètre | Valeur |', '|---|---|', '| seuil_contexte_tokens | 180000 |', '',
     '## Politique de modèle', '| Profil | Modèle | Effort |', '|---|---|---|', '| conception | opus | high |', '| execution | sonnet | medium |', '',
   ].join('\n');
-  const cfg = LANCEUR.parseConfig(config12);
-  const prompt = LANCEUR.buildSystemPrompt(ROOT_REEL, cfg, false);
-  // P3 (rapport holarch-fournisseurs) : la marge se lit même au vert — le prochain module qui grossit ferait rougir ce test.
-  t.diagnostic(`contrat réduit : ${prompt.length} / 55000 caractères, marge ${55000 - prompt.length}`);
-  assert.ok(prompt.length <= 55000, `prompt système ${prompt.length} caractères, attendu ≤ 55000`);
-  assert.equal(prompt.includes('## Constat'), false);
-  assert.equal(prompt.includes('## Ce que ce module ne fait pas'), false);
-  assert.match(prompt, /# KERNEL — contrat social invariant de HOLARCH/);
-  assert.match(prompt, /## Règles injectées/);
+  const root = racineContratFige(config12);
+  try {
+    const cfg = LANCEUR.parseConfig(config12);
+    const prompt = LANCEUR.buildSystemPrompt(root, cfg, false);
+    // P3 (rapport holarch-fournisseurs) : la marge se lit même au vert — le prochain module qui grossit ferait rougir ce test.
+    t.diagnostic(`contrat réduit : ${prompt.length} / 55000 caractères, marge ${55000 - prompt.length}`);
+    assert.ok(prompt.length <= 55000, `prompt système ${prompt.length} caractères, attendu ≤ 55000`);
+    assert.equal(prompt.includes('## Constat'), false);
+    assert.equal(prompt.includes('## Ce que ce module ne fait pas'), false);
+    assert.match(prompt, /# KERNEL — contrat social invariant de HOLARCH/);
+    assert.match(prompt, /## Règles injectées/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
