@@ -136,6 +136,8 @@ function deriver(r) {
     push('extensions', 'git-branches', 'fichiers produits pour un tiers : un worktree par instance, revue par fusion');
     push('extensions', 'milestone-reviews', 'fichiers produits pour un tiers : jalons relus par une instance distincte');
     push('extensions', 'regles-du-metier', 'références ou faits à valider déclarés : règles du métier écrites avant de produire (J0)');
+    // Chantier 16, §18.7 : le preset `artefacts` active aussi `jobs-et-lots` (rendus et lots payants hors session).
+    push('extensions', 'jobs-et-lots', 'fichiers produits pour un tiers : travaux longs, lourds ou payants hors session (holarch-job)');
   }
 
   modules.sort((a, b) => ORDRE_CATEGORIES.indexOf(a.categorie) - ORDRE_CATEGORIES.indexOf(b.categorie));

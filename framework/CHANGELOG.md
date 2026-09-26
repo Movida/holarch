@@ -10,6 +10,48 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.27.1 — 2026-09-26
+
+Correctif (aucun comportement changé) — `framework/COMMANDEMENTS.md` sort du produit et du modèle publié : il se
+présentait comme une « loi immuable » gardée par un hash SHA-256 vérifié au lancement, un hook Git pré-commit et
+`commandements-guard`, dont aucun n'existe, et aucune instance ne le chargeait (avis externe du 2026-09-26, vérifié).
+Déplacé vers `docs/conception/demiurge/COMMANDEMENTS.md` avec en tête « intention, non implémentée » ; la garde se
+construira avec le programme DEMIURGE. `README.md` et `docs/ENVIRONNEMENT.md` §7 suivent.
+
+## 1.27.0 — 2026-09-26
+
+Mineure — chantier 16 « Ressources », promu par `promote.js` (95 cibles, dont 70 fragments) depuis la mission
+`holarch-ressources` (racine seule, 25 sessions, 119,26 USD liste ; jalon J1 accepté puis rouvert par une revue
+adversariale, 17 constats corrigés ; paquet final soumis à quatre revues adversariales sur clone — 50, puis 28, puis
+14 constats corrigés chacun avec un test rouge sans la correction, puis une revue finale ciblée sans bloquant ni défaut
+d'argent ou de réveil introduit, `docs/diagnostics/2026-09-26-revue-chantier-16.md` ; porte V1 franchie en cours de
+mission) :
+- **Fusible qui prévient** : hook `budgetWatch` (consigne d'hiberner à `seuil_budget_pct`, coût estimé par
+  transcription pendant un sous-agent, rappels filtrés au plafond de la session, une citation ne donne ni ordre ni
+  plafond), Fin `coupée (fusible)` sur `error_max_budget_usd` ; budget USD par fiche registre (trois sources, refus
+  au-delà de `budget_usd_session_max`, défaut `min(8, plafond)` pour tous les lecteurs) ; attente 429 interruptible
+  (fichier stop, `--arret`, verrou `.attente.json` pid + `starttime`).
+- **Une instance, un lanceur** : le verrou `live/` est tenu du départ à la sortie par le processus qui joue les
+  sessions, en synchrone comme en détaché ; réveil différé ; tâches jugées sur pid + `starttime` ; `--reprendre` ne
+  relance plus une instance déjà tenue.
+- **Refus aux instances tenus par le lanceur** : quand `HOLARCH_INSTANCE` est posé, le lanceur applique lui-même les
+  refus de `spawn-guard` (budget au-delà du plafond, `--reprendre`, `--reveil`, `--forcer`, cible hors enfants directs,
+  `--add-dir`), sur le seul dépôt de la session ; ses appelants internes passent un environnement sans la variable.
+- Nouveau module **`jobs-et-lots`** 1.0.0 (preset `artefacts`) et CLI **`holarch-job`** : job détaché qui survit à sa
+  session, publication après validation, condition de réveil `job:<id>` (guetteur unique par propriétaire) ; charge
+  machine (`jobs_lourds_max`, `memoire_libre_min_mo`, `motifs_lourds`, file d'attente, suspension, jeton libéré quand
+  le groupe est mort) ; lots payants (`LOT.template.json`, verrou, reprise idempotente, couverture qui suit le groupe
+  qui paie, devis borné par `budget_services_usd`, `registry/COUTS-SERVICES.md`, `sleep-guard`).
+- `direct-spawn` 1.10.0 (règle `Budget USD`), `sharded-files` 1.4.0 (ligne de budget de la fiche).
+- `observe` : anomalies `session-coupee-fusible`, `budget-au-seuil`, `attente-limite`, `job-orphelin`,
+  `job-sans-progres`, `lourd-hors-job`, `lot-en-cours`, `budget-services-au-seuil`, `job-en-file-long`, coût des
+  services ; correctif de `parseSessions`, qui avalait les colonnes Fin, STATUS, Réveil et Contexte dans un commentaire.
+- `config-lint` : `seuil_budget_pct`, `budget_usd_session_max`, `jobs_lourds_max`, `memoire_libre_min_mo`,
+  `motifs_lourds`, `job_duree_min`, `job_silence_max_min`, `budget_services_usd`, lecture des montants partagée avec
+  le lanceur (virgule acceptée).
+- Docs : `holarch.md` §16.1-16.2, `IMPLEMENTATION.md` §18.10 (écarts, dont les restes de la revue finale) et annexes
+  A, B, C.
+
 ## 1.26.0 — 2026-09-26
 
 Mineure — chantier 17 « Spécialisation de l'instance », promu par `promote.js` (58 cibles, dont 44 fragments) depuis la

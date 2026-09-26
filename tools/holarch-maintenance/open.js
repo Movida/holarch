@@ -2,14 +2,16 @@
 'use strict';
 // Ouverture d'une nouvelle mission. Préconditions (dans l'ordre, arrêt au premier refus) : mission/
 // contient déjà autre chose que mission/.holarch/ (résidu jetable, non significatif), aucune tâche
-// détachée vivante. Si tout passe : mission/OBJECTIVE.md depuis framework/templates/OBJECTIVE.template.md,
+// détachée vivante, branche courante pas en retard sur son amont fraîchement lu (`git fetch`, holon-v2/main ici :
+// un chantier s'ouvre sur ce que le dépôt de référence a de plus récent ; fetch impossible = avertissement, pas
+// refus). Si tout passe : mission/OBJECTIVE.md depuis framework/templates/OBJECTIVE.template.md,
 // framework/CONFIG.md réécrit (ligne de nom + table Paramètres depuis le preset choisi, surchargée par
 // --param), lignes « en cours » dans docs/ROADMAP.md et README.md, commit (sauf --sans-commit), puis
 // affichage des commandes de vérification et de bootstrap. Jamais de bootstrap réel.
 const fs = require('fs');
 const path = require('path');
 const {
-  tacheDetacheeVivante, insererSquelette, verifierAncres, commitStandard,
+  tacheDetacheeVivante, insererSquelette, verifierAncres, ecartAmont, commitStandard,
 } = require('./lib/commun.js');
 
 function usage() {
@@ -137,6 +139,19 @@ function main() {
     return;
   }
 
+  const ecart = ecartAmont(cheminDepot);
+  if (ecart.erreur) {
+    process.stderr.write(`Amont ${ecart.amont} non relu (fetch : ${ecart.erreur}) : écart calculé sur sa dernière copie locale.\n`);
+  }
+  if (ecart.retard > 0) {
+    const geste = ecart.avance > 0
+      ? `branches divergées (+${ecart.avance}/-${ecart.retard}) : rebase ou fusion, geste du mainteneur`
+      : `git pull --ff-only`;
+    process.stderr.write(`Branche en retard de ${ecart.retard} commit(s) sur ${ecart.amont}, refus : rattraper d'abord (${geste}), puis rouvrir.\n`);
+    process.exitCode = 1;
+    return;
+  }
+
   const nomPreset = args.params.preset || 'solo-light';
   const dirPresets = path.join(cheminDepot, 'framework', 'presets');
   const cheminPreset = path.join(dirPresets, `${nomPreset}.md`);
@@ -194,6 +209,9 @@ function main() {
     );
   }
 
+  console.log(ecart.amont
+    ? `Amont ${ecart.amont} ${ecart.erreur ? 'non relu (dernière copie locale)' : 'relu'} : 0 commit en retard${ecart.avance ? `, ${ecart.avance} à pousser` : ''}.`
+    : 'Amont : aucune branche amont configurée, rien à rattraper.');
   console.log('Mission prête. Pour vérifier :');
   console.log('  npm run dry-run   (ou : node framework/bin/holarch-spawn.js concepteur --dry-run)');
   console.log('Pour démarrer :');

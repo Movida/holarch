@@ -28,6 +28,9 @@ function parseTerm(str) {
     if (!ETATS.includes(m[1])) { parseReveil.lastError = `état inconnu : ${m[1]}`; return null; }
     return { kind: 'enfants', arg: m[1] };
   }
+  if ((m = str.match(/^job:([a-z0-9-]+)$/))) {
+    return { kind: 'job', arg: m[1] };
+  }
   if ((m = str.match(/^fichier:(.+)$/))) {
     return { kind: 'fichier', arg: m[1] };
   }
@@ -153,6 +156,13 @@ function evalTerm(t, ctx) {
     const etats = enfants.map((n) => ((ctx.readStatus ? ctx.readStatus(`${ctx.chemin}/${n}`) : null) || {}).etat || '(absent)');
     const vrai = etats.every((e) => e === t.arg);
     return { terme, vrai, pourquoi: `enfants [${enfants.join(', ')}] états [${etats.join(', ')}] (attendu ${t.arg})` };
+  }
+  if (t.kind === 'job') {
+    // require paresseux (jamais en tête de fichier) : reveil.js reste chargeable même si jobs.js
+    // n'existe pas encore dans un arbre plus ancien (chantier 16, unité U9).
+    const { evalJob } = require('./jobs');
+    const r = evalJob(ctx.root, t.arg);
+    return { terme, vrai: r.vrai, pourquoi: r.pourquoi };
   }
   if (t.kind === 'fichier') {
     const p = path.join(ctx.root, t.arg);

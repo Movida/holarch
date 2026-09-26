@@ -124,6 +124,25 @@ function verifierAncres(liste) {
 
 /** `git add -A -- <cibles...>` ciblé (jamais un `add -A` global sans pathspec) puis `git commit -m
  *  message`. `cibles` doit contenir au moins un pathspec explicite. */
+/** Écart de la branche courante avec sa branche amont (`@{u}`, ici holon-v2/main), après un `git fetch` du remote
+ *  amont borné par `delaiMs` et sans invite d'authentification. Retourne {amont, avance, retard, erreur} : amont null =
+ *  aucune branche amont configurée (fixture, clone local) ; erreur = fetch impossible (hors ligne, clé absente), écart
+ *  alors calculé sur la dernière copie locale de l'amont. */
+function ecartAmont(cheminDepot, delaiMs = 30000) {
+  const u = executer('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { cwd: cheminDepot });
+  if (u.code !== 0) return { amont: null, avance: 0, retard: 0, erreur: null };
+  const amont = u.stdout.trim();
+  const branche = executer('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: cheminDepot }).stdout.trim();
+  const remote = executer('git', ['config', `branch.${branche}.remote`], { cwd: cheminDepot }).stdout.trim();
+  const f = executer('git', ['fetch', '--quiet', remote], {
+    cwd: cheminDepot, timeout: delaiMs, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  });
+  const erreur = f.code === 0 ? null : (f.stderr.trim().split('\n').pop() || `délai de ${delaiMs / 1000} s dépassé`);
+  const c = executer('git', ['rev-list', '--left-right', '--count', 'HEAD...@{u}'], { cwd: cheminDepot });
+  const [avance, retard] = c.stdout.trim().split(/\s+/).map(Number);
+  return { amont, avance: avance || 0, retard: retard || 0, erreur };
+}
+
 function commitStandard(cheminDepot, cibles, message) {
   if (!Array.isArray(cibles) || cibles.length === 0) {
     throw new Error('commitStandard : au moins un pathspec explicite est requis (jamais un add -A global)');
@@ -142,5 +161,6 @@ module.exports = {
   insererSquelette,
   trouverAncre,
   verifierAncres,
+  ecartAmont,
   commitStandard,
 };

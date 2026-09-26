@@ -49,9 +49,18 @@ c'est le mode qu'un `Monitor` de session de maintenance consomme sans bruit.
 | `branche-principale` | alerte | l'arbre principal n'est pas sur `main` |
 | `sans-progres` | alerte | ≥ 4 sessions et aucune unité close : l'instance tourne sans livrer — `--arret` puis recadrage ou verdict par le parent (2026-09-12) |
 | `session-longue` | alerte | session vivante depuis ≥ 45 min : lire la transcription avant qu'un fusible ne parle |
+| `session-coupee-fusible` | alerte | dernière ligne `SESSIONS.md` de l'instance coupée par le fusible de budget (`Fin` = « coupée (fusible) ») : relancer (chantier 16, §18.3) |
+| `attente-limite` | alerte | `live/<chemin>.attente.json` au pid vivant : l'instance attend l'heure limite d'une attente 429 (chantier 16, §18.3) |
+| `job-orphelin` | alerte | job `mission/.holarch/jobs/<id>.json` non terminal au superviseur mort : `holarch-job reprendre` (chantier 16, §18.4) |
+| `job-sans-progres` | alerte | job `en-cours` dont le journal et le fichier `--progression` n'ont pas bougé depuis `job_silence_max_min` (défaut 10) ; `en-file` et `suspendu` exclus (§18.4) |
+| `job-en-file-long` | alerte | job `en-file` depuis plus de 3 × `job_silence_max_min` (30 min par défaut) : jetons machine tenus ou mémoire sous le plus haut plancher vivant (seconde revue n° 55) |
+| `lourd-hors-job` | alerte | processus dont la commande nomme un des `motifs_lourds` (liste à virgules, défaut `ffmpeg, blender, melt, magick`) hors du groupe d'un job vivant de la mission et hors des descendants d'un jeton machine vivant, même d'une autre mission (§18.5, amendement V1 6) — de la visibilité, pas un refus |
+| `budget-services-au-seuil` | alerte | coût des services (`lots/couts.jsonl`, plus les lignes de `COUTS-SERVICES.md` absentes du journal) ≥ 80 % de `budget_services_usd` (§18.6) |
+| `lot-en-cours` | info | verrou de lot vivant : `lot <nom> (<propriétaire>) : n/N élément(s)` (§18.6) |
 | `org-en-retard`, `fiche-en-retard` | info | `ORG.md` ou la fiche registre ne disent pas ce que dit `STATUS.md` |
 | `contexte-orphelin` | info | `.contexte.json` d'une session ni vivante ni journalisée |
 | `contexte-au-seuil` | info | contexte de la session vivante ≥ `seuil_contexte_tokens` |
+| `budget-au-seuil` | info | `live/<chemin>.budget.json` d'une session vivante à ≥ 80 % de son budget, ou dont l'ordre d'hiberner a déjà été émis (chantier 16, §18.2-18.3) |
 | `journal-lanceur-non-committe` | info | `SESSIONS.md` / `REVEILS.md` non committés : normal, la racine les committe |
 | `worktree-non-committe` | info | fichiers non committés dans le worktree d'une instance sans session |
 | `attente-sans-condition` | info | `WAITING_CHILDREN` / `BLOCKED` sans ligne `Réveil` |
@@ -60,6 +69,11 @@ c'est le mode qu'un `Monitor` de session de maintenance consomme sans bruit.
 
 ## Sources et règles de lecture
 
+- Jobs, jetons, lots (chantier 16) : `mission/.holarch/jobs/*.json` et leurs `.log`, jetons machine sous
+  `HOLARCH_CHARGE_DIR` (défaut `~/.cache/holarch/charge/`), processus lus dans `/proc` ; coût des services
+  (`mission.coutServicesUsd`, à côté du coût LLM de `SESSIONS.md`) et `mission.budgetServicesUsd` dans `--json`, ligne « Coût des services » dans le texte dès qu'un coût ou un budget
+  existe ;
+  liste `jobs` (id, propriétaire, état, lourd, vivant). Seams de test : `deps.processus`, `deps.chargeDir`, `deps.now`.
 - Enfant : son worktree `mission/.holarch/worktrees/<chemin-tirets>/` fait foi ; sans worktree, sa branche
   `holarch/<chemin-tirets>` (`git show`) ; l'arbre principal ne donne que la photo `INIT` du spawn.
 - Transcriptions : `~/.claude/projects/<slug du cwd>/<session-id>.jsonl` — le cwd d'un enfant est son

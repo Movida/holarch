@@ -269,8 +269,13 @@ test('T-C4.2 (HOLARCH_FAKE_CLAUDE) : détachement de l\'enfant puis réveil du p
       // chaque session depuis 1.9.0), puis clôt la tâche — « tâche running » couvrait donc une fenêtre où le parent est
       // légitimement vivant (test instable sur un runner lent, CI du modèle 1.11.1). Si le verrou de l'enfant existe
       // encore après la lecture du parent, celle-ci précède le réveil.
+      // Chantier 16, troisième revue n° 74 : le lanceur de l'enfant tient son verrou `live/` jusqu'à sa sortie, donc
+      // après le wakeWaiters de fin de session — ce verrou ne borne plus la fenêtre d'avant réveil. Borne sûre : le
+      // parent attend `enfant:enfant:DELIVERED` ; tant que le STATUS.md de l'enfant, relu APRÈS le parent, n'est pas
+      // DELIVERED, aucun réveil n'a pu avoir lieu (premier échantillon garanti : waitFor appelle pred sans délai).
       const parentVivant = launcher.isLive(root, 'concepteur');
-      if (launcher.isLive(root, 'concepteur/enfant')) liveObserved.push(parentVivant);
+      const statutEnfant = fs.readFileSync(path.join(root, 'mission', 'concepteur', 'enfant', 'STATUS.md'), 'utf8');
+      if (!/\|\s*État\s*\|\s*DELIVERED\s*\|/.test(statutEnfant)) liveObserved.push(parentVivant);
       return t && t.state !== 'running' ? t : false;
     });
     await waitFor(() => {

@@ -28,6 +28,8 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const reveil = require(path.join(__dirname, '..', 'bin', 'reveil.js'));
+let budgetWatchModule = null;
+try { budgetWatchModule = require(path.join(__dirname, 'budget-watch.js')); } catch (_) { budgetWatchModule = null; } // fail-open : un fixture de test peut copier holarch-hooks.js seul, sans budget-watch.js
 
 const STOP_BLOCKS_MAX = 3;
 const WARN_STEP = 20000;
@@ -147,12 +149,28 @@ function isLiveInstance(root, chemin) {
 // son sous-arbre et sa zone shared/ contiennent ceux de l'instance courante.
 function enVolDAutrui(root, instance) {
   const autres = allInstances(root).filter((i) => i !== instance && isLiveInstance(root, i));
-  if (!autres.length) return null;
   const prefixes = [];
   for (const a of autres) {
     prefixes.push(`mission/registry/instances/${a.replace(/\//g, '-')}.md`);
     if (!instance.startsWith(`${a}/`)) prefixes.push(`mission/${a}/`, `mission/shared/${a}/`);
   }
+  // Chantier 16 §18.6 (lots payants) : `mission/registry/COUTS-SERVICES.md` s'ajoute aux fichiers
+  // ignorés tant qu'un verrou de lot vivant appartient à un autre propriétaire — même règle que les
+  // autres instances vivantes ci-dessus (require paresseux : `lots.js` peut être absent tant que ce
+  // paquet n'est pas promu, ou toute autre erreur de lecture — meilleur effort, jamais bloquant).
+  let lotAutrui = false;
+  try {
+    const lots = require('../bin/lots');
+    const jobsMod = require('../bin/jobs');
+    const racinePrincipale = jobsMod.racine(root);
+    // Revue n° 28 : jamais ignoré si mes propres lignes de coût y sont encore non committées.
+    lotAutrui = lots.verrousLotVivants(racinePrincipale).some((v) => v.proprietaire !== instance)
+      && !lots.coutsNonCommitesDe(root, instance);
+  } catch (err) {
+    if (err && err.code !== 'MODULE_NOT_FOUND') { /* meilleur effort : toute autre erreur est ignorée aussi */ }
+  }
+  if (!autres.length && !lotAutrui) return null;
+  if (lotAutrui) prefixes.push('mission/registry/COUTS-SERVICES.md');
   return (rel) => prefixes.some((p) => rel === p || rel.startsWith(p));
 }
 
@@ -286,10 +304,17 @@ function spawnGuard(ctx) {
   // Ne considère que les segments qui INVOQUENT réellement le lanceur (en tête de segment, éventuellement après des
   // affectations de variables d'environnement) — pas toute commande qui mentionne la sous-chaîne "holarch-spawn.js"
   // en passant (ex. `wc -l` sur son propre source, un message qui le cite) — constat A5, audit indépendant.
-  const segments = cmd.split(/[;&|]+/).map((s) => s.trim());
+  // Seconde revue n° 50 : le saut de ligne sépare aussi les commandes, et une commande n'invoque le lanceur qu'une
+  // fois — sinon seul le premier segment (souvent un --dry-run, qui passe sans règle) était contrôlé et le suivant
+  // (`… --dry-run && node … --detach --budget-usd 999`) lançait sans aucune.
+  const segments = cmd.split(/[;&|\n]+/).map((s) => s.trim());
   const invoke = segments.find((s) => /^(?:\S+=\S*\s+)*node\s+\S*holarch-spawn\.js(?:\s|$)/.test(s));
   if (!invoke) return ok();
   const deny = (why) => emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[HOLARCH · fusible spawn] ${why}` } });
+  if ((cmd.match(/holarch-spawn\.js/g) || []).length > 1) return deny('une seule mention du lanceur par commande qui l\'invoque : lance chaque enfant (et son éventuel --dry-run) par une commande Bash distincte.');
+  // Seconde revue n° 63 : --reprendre relance toute tâche au pid mort de la holarchie avec ses surcharges d'origine
+  // (celles du mainteneur comprises) — geste du mainteneur, comme --reveil et --arret, jamais d'une instance.
+  if (/(^|\s)--reprendre(\s|$)/.test(invoke)) return deny("--reprendre est réservé à l'utilisateur : il relance les tâches de toute la holarchie avec leurs surcharges d'origine, jamais depuis une instance.");
   if (/--bootstrap/.test(invoke)) return deny("le bootstrap se lance une seule fois, par l'utilisateur — jamais depuis une instance.");
   if (/(^|\s)--reveil(\s|$)/.test(invoke)) return deny("--reveil est réservé au harnais et à l'utilisateur : une instance ne réveille jamais elle-même le reste de la holarchie.");
   if (/(^|\s)--arret(\s|$)/.test(invoke)) return deny("--arret est réservé au harnais et à l'utilisateur : une instance ne s'arrête ni n'arrête une autre instance par ce biais.");
@@ -332,6 +357,39 @@ function spawnGuard(ctx) {
     }
     const veille = require(path.join(__dirname, '..', 'bin', 'veille.js'));
     const refusVeille = veille.refusVeille(veille.lireVeille(texteFiche), veille.lireProfil(texteFiche) || 'execution');
+  // Chantier 16, §18.2 (docs/IMPLEMENTATION.md) : même refus que le lanceur pour une ligne « Budget USD
+  // / session » de la fiche de l'enfant illisible ou au-delà de budget_usd_session_max — même lecture de
+  // fiche (arbre du parent, worktree de l'enfant, sinon sa branche) que pour Veille juste au-dessus.
+  {
+    const relFiche = path.relative(root, fichePath(root, target)).split(path.sep).join('/');
+    let texteFicheBudget = readIf(fichePath(root, target));
+    if (!texteFicheBudget && gb && gb.isolation === 'worktree') texteFicheBudget = readIf(path.join(worktreeDe(root, target), relFiche));
+    if (!texteFicheBudget && gb) {
+      const r = spawnSync('git', ['-C', root, 'show', `${brancheDe(gb, target)}:${relFiche}`], { encoding: 'utf8' });
+      if (r.status === 0) texteFicheBudget = r.stdout;
+    }
+    const budgetSession = require(path.join(__dirname, '..', 'bin', 'budget-session.js'));
+    const refusBudget = budgetSession.refusBudgetFiche(
+      budgetSession.lireBudgetFiche(texteFicheBudget),
+      budgetSession.plafondEffectif({ budget_usd_session_max: configParam(root, 'budget_usd_session_max'), budget_usd_par_session: configParam(root, 'budget_usd_par_session') }),
+    );
+    // Seconde revue n° 61 : plafond illisible = refus, comme au lanceur (resoudreBudget), jamais 20 en silence.
+    const refusMax = budgetSession.refusPlafond({ budget_usd_session_max: configParam(root, 'budget_usd_session_max') });
+    if (refusMax) return deny(`${refusMax}.`);
+    if (refusBudget) return deny(`fiche registre de \`${target}\` : ${refusBudget}.`);
+    // Revue finale n° 50 : `--budget-usd` passé par une instance est soumis au même plafond que la fiche —
+    // au-delà, seul le mainteneur (hors spawn-guard) le pose (§18.10, écart n° 7).
+    // Seconde revue n° 50 : chaque occurrence est contrôlée — le lanceur garde la dernière, une option répétée
+    // (`--budget-usd 5 --budget-usd 999`) ne passe plus par la première.
+    for (let iBudget = 0; iBudget < tokens.length; iBudget++) {
+      if (!(tokens[iBudget] === '--budget-usd' || tokens[iBudget].startsWith('--budget-usd='))) continue;
+      const brut = tokens[iBudget].includes('=') ? tokens[iBudget].slice('--budget-usd='.length) : (tokens[iBudget + 1] || '');
+      const usd = budgetSession.lireNombre(brut);
+      const plafondCli = budgetSession.plafondEffectif({ budget_usd_session_max: configParam(root, 'budget_usd_session_max'), budget_usd_par_session: configParam(root, 'budget_usd_par_session') });
+      if (!(usd > 0)) return deny(`--budget-usd illisible (« ${brut} ») : un nombre positif attendu (§18.2).`);
+      if (usd > plafondCli) return deny(`--budget-usd ${usd} USD > plafond budget_usd_session_max (${plafondCli} USD, §18.2) : au-delà, geste du mainteneur seul.`);
+    }
+  }
     if (refusVeille) return deny(`fiche registre de \`${target}\` : ${refusVeille}.`);
   }
   const parent = parseFiche(readIf(fichePath(root, instance)));
@@ -1073,6 +1131,32 @@ function contextWatch(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// Chantier 16, §18.1 (docs/IMPLEMENTATION.md) : budgetWatch joue dans la même invocation PostToolUse
+// que contextWatch (une seule lecture de la fin de transcription par appel d'outil), sans changer son
+// comportement quand budgetWatch est inerte — contextWatch émet sa sortie via `emit` (process.stdout),
+// capturée ici pour être fusionnée avec la note éventuelle de budgetWatch, qui s'applique aussi aux
+// sous-agents que contextWatch ignore (early return plus haut dans contextWatch).
+function budgetAndContextWatch(ctx) {
+  const chunks = [];
+  const ecritureOriginale = process.stdout.write.bind(process.stdout);
+  process.stdout.write = (chunk) => { chunks.push(chunk); return true; };
+  try {
+    contextWatch(ctx);
+  } finally {
+    process.stdout.write = ecritureOriginale;
+  }
+  let sortieContexte = {};
+  try { sortieContexte = JSON.parse(chunks.join('')); } catch (_) { sortieContexte = {}; }
+  let noteBudget = null;
+  try {
+    const r = budgetWatchModule.budgetWatch({ input: ctx.input, root: ctx.root, instance: ctx.instance, env: process.env });
+    noteBudget = r && r.note;
+  } catch (_) { noteBudget = null; }
+  const noteContexte = sortieContexte && sortieContexte.hookSpecificOutput && sortieContexte.hookSpecificOutput.additionalContext;
+  const notes = [noteContexte, noteBudget].filter(Boolean);
+  if (!notes.length) return ok();
+  emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: notes.join('\n') } });
+}
 function main() {
   const event = process.argv[2] || '';
   let input = {};
@@ -1091,7 +1175,7 @@ function main() {
     if (event === 'git-guard') return gitGuard(ctx);
     if (event === 'deliver-guard') return deliverGuard(ctx);
     if (event === 'gate-guard') return gateGuard(ctx);
-    if (event === 'context-watch') return contextWatch(ctx);
+    if (event === 'context-watch') return budgetAndContextWatch(ctx);
     return ok();
   } catch (e) {
     process.stderr.write(`holarch-hooks ${event}: ${e && e.message}\n`);

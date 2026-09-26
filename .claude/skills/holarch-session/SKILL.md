@@ -18,7 +18,7 @@ ou le carnet d'idées ne permet de trancher. Sinon, l'état dicte le geste, et l
 
 | État du dépôt (ligne injectée, `npm run etat`) | Geste par défaut, sans demander |
 |---|---|
-| Aucune mission ouverte | Ouvrir la suivante : le chantier que le mainteneur a nommé, sinon la première idée **mesurée** de `docs/IDEES.md` ou la ligne suivante de `ROADMAP.md` §5 ; spécifier (ROADMAP §3, IMPLEMENTATION), `open.js`, OBJECTIVE, catalogue, `--dry-run`, commit |
+| Aucune mission ouverte | Ouvrir la suivante : le chantier que le mainteneur a nommé, sinon la première idée **mesurée** de `docs/IDEES.md` ou la ligne suivante de `ROADMAP.md` §5 ; spécifier (ROADMAP §3, IMPLEMENTATION) sur un `main` à jour de `holon-v2/main` (`git fetch holon-v2` avant d'écrire la spec ; `open.js` refuse ensuite une branche en retard), `open.js`, OBJECTIVE, catalogue, `--dry-run`, commit |
 | Mission ouverte, non démarrée | Lancer soi-même (`--bootstrap`, `--detach`) si la ligne « fournisseurs à variables » dit « présentes » ; sinon donner la commande et guetter les variables (`Monitor` sur `bash -lc env`), lancer dès qu'elles sont là — après avoir vérifié qu'aucune session ne tourne déjà |
 | Mission en cours | `holarch-supervise` ; ne réagir qu'aux gestes du mainteneur ; un `BLOCKER` sans préférence connue se tranche soi-même (`RESPONSE`, commit par le mainteneur si le classifieur refuse) |
 | Racine `DELIVERED` | Vérifier sur clone, promouvoir (`npm run promote`), archiver, fichiers transverses, `VERSION`/`CHANGELOG`, idées du rapport dans `IDEES.md`, écart principal corrigé en patch si sa mesure est faite |

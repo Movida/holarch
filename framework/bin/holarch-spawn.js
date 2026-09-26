@@ -48,6 +48,11 @@ const executeurs = require('./executeurs');
 // rien du lanceur. Tables absentes ⇒ catalogue vide ⇒ comportement d'un CONFIG.md 1.11, inchangé.
 const catalogue = require('./catalogue');
 const gardeGit = require('./gardes/git');
+// Attente interruptible d'une limite 429 (chantier 16, §18.3) : module autonome, testable depuis
+// le paquet promouvable — voir framework/bin/attente-limite.js. Chargé paresseusement, comme
+// budget-session.js : les tests qui recopient holarch-spawn.js dans un bac à sable sans ce module
+// (unites-indexees-*) le chargent sans MODULE_NOT_FOUND tant qu'aucune limite 429 ne survient.
+function attenteLimite() { return require('./attente-limite'); }
 
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const VALID_PERMISSION_MODES = ['acceptEdits', 'default', 'manual', 'plan', 'auto', 'dontAsk', 'bypassPermissions'];
@@ -65,6 +70,7 @@ const DEFAULTS = {
   // 1.11.0 : 5 → 8 USD, 120k → 180k et 180k → 400k. Mesuré sur trois missions (2026-09-11) : un enfant démarre à ~69k,
   // clôt vers seuil + 25k ; à 250k le fusible n'a jamais sonné et c'est le budget qui arbitrait (holarch-delegation).
   budget_usd_par_session: '8',
+  budget_usd_session_max: '20', // chantier 16, §18.2 : plafond de la ligne « Budget USD / session » de la fiche registre
   max_tours_par_session: '200',
   seuil_contexte_tokens: '240000', // 1.13.0 : p90 198 602 mesuré sur holarch-outillage (docs/diagnostics/2026-09-11-seuil-contexte-240k.md)
   autocompact_tokens: '400000',
@@ -283,6 +289,20 @@ function writeGraveyardPatch(root, chemin, dir) {
 function removeWorktree(root, chemin, opts = {}) {
   const dir = worktreeDir(root, chemin);
   if (!fs.existsSync(dir)) return { removed: false, reason: 'absent' };
+  if (!opts.forcer) {
+    try {
+      // require paresseux (chantier 16, U10) : un arbre plus ancien sans jobs.js reste utilisable
+      // (MODULE_NOT_FOUND ignoré) ; toute autre erreur remonte.
+      const { jobsVivantsDans } = require('./jobs');
+      const vivants = jobsVivantsDans(root, dir);
+      if (vivants.length) {
+        const noms = vivants.map((j) => `${j.id} (${j.proprietaire})`).join(', ');
+        return { removed: false, reason: `job vivant dans ce worktree : ${noms}` };
+      }
+    } catch (err) {
+      if (!err || err.code !== 'MODULE_NOT_FOUND') throw err;
+    }
+  }
   const status = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
   const sale = status.status === 0 && !!status.stdout.trim();
   if (sale && !opts.forcer) return { removed: false, reason: 'changements non committés' };
@@ -441,7 +461,14 @@ function moduleActive(cfg, categorie, module) {
 // Résolution modèle / effort / paramètres
 // ---------------------------------------------------------------------------
 function resolveParams(cfg) {
-  return Object.assign({}, DEFAULTS, cfg.params || {});
+  const p = Object.assign({}, DEFAULTS, cfg.params || {});
+  // Troisième revue n° 76 : sans ligne budget_usd_par_session (ou vide), le défaut est min(8, budget_usd_session_max)
+  // — le 8 de DEFAULTS ne dépasse plus un plafond déclaré plus bas (lanceur, dry-run et réveil lisent tous ceci).
+  const declare = cfg.params && cfg.params.budget_usd_par_session;
+  let bs = null;
+  try { bs = require('./budget-session'); } catch (_) { /* lanceur copié seul (fixtures de test) : défaut de DEFAULTS */ }
+  if (bs && (declare === undefined || declare === null || String(declare).trim() === '')) p.budget_usd_par_session = String(bs.budgetParDefaut(p));
+  return p;
 }
 
 function resolveProfile(cfg, fiche, chemin, overrides) {
@@ -1219,7 +1246,17 @@ function prepareLaunch(root, chemin, opts) {
   }
   const permissionMode = opts.permissionMode || params.permission_mode;
   if (!VALID_PERMISSION_MODES.includes(permissionMode)) throw new Error(`permission_mode invalide « ${permissionMode} »`);
-  const budget = opts.budget || params.budget_usd_par_session;
+  // Chantier 16, §18.2 (docs/IMPLEMENTATION.md) : ligne « Budget USD / session » de la fiche registre —
+  // précédence --budget-usd (CLI) > fiche > budget_usd_par_session (CONFIG), bornée par
+  // budget_usd_session_max (refus au-delà du plafond, même politique que veille juste au-dessus : le
+  // dry-run avertit sur stderr, un lancement réel refuse).
+  const budgetInfo = require('./budget-session').resoudreBudget(bootstrap ? null : readIf(fichePath(root, chemin)), opts.budget, params);
+  if (budgetInfo.refus) {
+    if (opts.dryRun) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ${budgetInfo.refus} (un lancement réel serait refusé)\n`);
+    else throw new Error(budgetInfo.refus);
+  }
+  const budget = budgetInfo.usd;
+  process.stderr.write(`HOLARCH ▸ ${chemin} ▸ budget : ${budget} USD (source ${budgetInfo.source})\n`);
   const maxTours = opts.maxTours || params.max_tours_par_session;
   const systemPrompt = buildSystemPrompt(root, cfg, bootstrap);
   const detail = buildUserPromptDetail(root, chemin, meta, Object.assign({}, params, { budget_usd_par_session: budget, max_tours_par_session: maxTours }), bootstrap, cfg, { dryRun: !!opts.dryRun, workspace });
@@ -1276,6 +1313,14 @@ function prepareLaunch(root, chemin, opts) {
     HOLARCH_ROOT: workspace.cwd,
     HOLARCH_INSTANCE: chemin,
     HOLARCH_CONTEXT_LIMIT: String(params.seuil_contexte_tokens),
+    // Paramètre absent ou vide → `undefined`, jamais '' : Node n'exporte pas une clé `undefined` (et retire donc une
+    // valeur héritée de process.env), alors qu'une chaîne vide serait lue comme 0 (MSG-utilisateur-004, point A).
+    HOLARCH_BUDGET_USD: budget != null && String(budget).trim() !== '' ? String(budget) : undefined,
+    // Catalogue (`cout_*`, USD/Mtok) traduit au format lu par budget-watch.js : modèle de la session (et `defaut`) plus
+    // chaque modèle tarifé, pour chiffrer un sous-agent à son propre tarif (revue n° 5).
+    HOLARCH_TARIF: require('./budget-session').tarifsBudget(cat, meta),
+    HOLARCH_SEUIL_BUDGET_PCT: params.seuil_budget_pct != null && String(params.seuil_budget_pct).trim() !== '' ? String(params.seuil_budget_pct) : undefined,
+    HOLARCH_RESERVE_USD: params.reserve_usd != null && String(params.reserve_usd).trim() !== '' && moduleActive(cfg, 'recursion', 'reserve-hibernation') ? String(params.reserve_usd) : undefined,
     HOLARCH_COMMIT: params.commit_par_session,
     HOLARCH_BOOTSTRAP: bootstrap ? '1' : '0',
     // Taille de registry/PROGRESS.md avant ce lancement : baseline de wake-guard (garde-fou ON_ORIENT). Calculée dans
@@ -1284,6 +1329,10 @@ function prepareLaunch(root, chemin, opts) {
     // pour ne pas rater une ligne ON_ORIENT écrite avant toute écriture hors de l'arbre propre de l'instance.
     HOLARCH_PROGRESS_BASELINE: String((readIf(path.join(workspace.cwd, 'mission', 'registry', 'PROGRESS.md')) || '').length),
   });
+  // Seconde revue n° 59 : la session n'hérite pas de la tâche de son lanceur — un lancement fait depuis la session
+  // (enfant synchrone refusé, commande quelconque) ne clôt ni ne réveille jamais au nom de ce lanceur détaché.
+  delete env.HOLARCH_TASK_ID;
+  delete env.HOLARCH_TASK_CHEMIN;
   // Intention de session : tout exécuteur lit `meta`, `permissionMode`, `budget`, `maxTours`,
   // `denied`, `addDirs`, `agents`, `env`, `systemPrompt`, `prompt`, `cwd` — aucun de
   // ces champs ne nomme un fournisseur. Le reste (`cfg`, `blocs`, `branche`, `bootstrap`) est au lanceur.
@@ -1322,7 +1371,7 @@ function ensureSessionsFile(root, missionName) {
   return p;
 }
 
-function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, status, promptChars) {
+function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, status, promptChars, logBase) {
   const p = ensureSessionsFile(root, missionName);
   // `res` est le **Resultat normalisé** rendu par l'exécuteur (volet 1), jamais la sortie brute d'un
   // fournisseur : cette fonction ne connaît plus aucun nom de champ propre à un CLI.
@@ -1347,7 +1396,11 @@ function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, stat
   const fin = [
     !res || res.fin === 'sans_resultat'
       ? 'sans résultat JSON'
-      : `${res.sous_type || '?'}${res.fin === 'erreur' || res.fin === 'limite' ? ' (erreur)' : ''}${res.refus ? ` · ${res.refus} refus` : ''}`,
+      : res.fin === 'limite'
+        ? `limite 429 : ${attenteLimite().motifFin(res.texte)}`
+        : res && res.sous_type === 'error_max_budget_usd'
+          ? `coupée (fusible)${res.refus ? ` · ${res.refus} refus` : ''}`
+          : `${res.sous_type || '?'}${res.fin === 'erreur' ? ' (erreur)' : ''}${res.refus ? ` · ${res.refus} refus` : ''}`,
     // Session de repli (volet 3) : la trace du fournisseur quitté vit ici, pas dans un fichier d'état.
     meta && meta.repli_depuis ? `repli depuis ${meta.repli_depuis}` : '',
   ].filter(Boolean).join(' · ');
@@ -1365,6 +1418,28 @@ function appendSessionLine(root, missionName, chemin, meta, res, elapsedMs, stat
         fs.unlinkSync(cfile);
       }
     } catch (_) { /* pas de mesure disponible : — / — */ }
+  }
+  // Chantier 16, §18.1 écart (a)/(b) (docs/IMPLEMENTATION.md) : mission/.holarch/live/<chemin>.budget.json
+  // (écrit par budget-watch.js) est lu et consommé ici comme l'est déjà .contexte.json ci-dessus ; son
+  // contenu (ou son absence) est répercuté dans le .result.json de la session sous `estimation_budget`,
+  // pour la mesure de 18.8.
+  let estimationBudget = null;
+  if (res && res.session_id) {
+    const bfile = require('../hooks/budget-watch').budgetLivePath(instanceRoot(root, chemin), chemin);
+    try {
+      const data = JSON.parse(fs.readFileSync(bfile, 'utf8'));
+      if (data.session_id === res.session_id) {
+        estimationBudget = data;
+        fs.unlinkSync(bfile);
+      }
+    } catch (_) { /* pas de mesure disponible : estimation_budget absent */ }
+  }
+  if (logBase) {
+    try {
+      const rjson = JSON.parse(fs.readFileSync(`${logBase}.result.json`, 'utf8'));
+      if (estimationBudget) rjson.estimation_budget = estimationBudget;
+      fs.writeFileSync(`${logBase}.result.json`, JSON.stringify(rjson));
+    } catch (_) { /* pas de .result.json exploitable : rien à enrichir */ }
   }
   const line = `| ${nowIso()} | ${chemin} | ${res && res.session_id ? res.session_id : '—'} | ${models || meta.modele}/${meta.effort} | ${res && res.tours !== null && res.tours !== undefined ? res.tours : '?'} | ${u.entree ?? '?'} / ${u.cache_lu ?? '?'} / ${u.cache_ecrit ?? '?'} / ${u.sortie ?? '?'} | ${cost} | ${fmtDuration(elapsedMs)} | ${fin} | ${status || '?'} | ${promptChars ? `${promptChars.systeme} / ${promptChars.utilisateur}` : '—'} | ${contexte} | ${fournisseur} |\n`;
   fs.appendFileSync(p, line);
@@ -1402,12 +1477,12 @@ function runOnce(launch, attempt) {
   const stamp = nowIso().replace(/[:]/g, '').replace('T', '-').replace('Z', '');
   const logBase = path.join(logDir, `${launch.chemin.replace(/\//g, '-')}-${stamp}-${attempt}`);
   fs.mkdirSync(liveDir(launch.root), { recursive: true });
-  fs.writeFileSync(liveLockPath(launch.root, launch.chemin), JSON.stringify({ pid: process.pid, startedAt: nowIso(), attempt }));
+  ecrireVerrouSession(launch.root, launch.chemin, attempt); // troisième revue n° 74 : sous le jeton de la tenue
   let brut;
   try {
     brut = executeur.executer(prep, { timeoutMs: launch.timeoutMs || undefined });
   } finally {
-    try { fs.unlinkSync(liveLockPath(launch.root, launch.chemin)); } catch (_) { /* ignore */ }
+    finVerrouSession(launch.root, launch.chemin); // troisième revue n° 74 : gardé « entre deux sessions » si tenu
     if (prep.nettoyer) { try { prep.nettoyer(); } catch (_) { /* ignore */ } }
   }
   if (brut.stderr) fs.writeFileSync(`${logBase}.stderr.log`, brut.stderr);
@@ -1442,12 +1517,137 @@ function liveLockPath(root, chemin) { return path.join(liveDir(root), `${chemin.
 // Mesure instantanée (module context-budget, volet 8.1) : fichier écrit par contextWatch (holarch-hooks.js),
 // à côté du verrou de vivacité — même convention de nom, suffixe différent.
 function contexteLivePath(root, chemin) { return path.join(liveDir(root), `${chemin.replace(/\//g, '-')}.contexte.json`); }
+// Attente interruptible d'une limite 429 (chantier 16, §18.3) : verrou informatif « le lanceur
+// attend », même répertoire et même convention de nom que liveLockPath/contexteLivePath.
+function attenteLockPath(root, chemin) { return path.join(liveDir(root), `${chemin.replace(/\//g, '-')}.attente.json`); }
 function isLive(root, chemin) {
-  let data;
-  try { data = JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')); } catch (_) { return false; }
+  let brut; let data;
+  try { brut = fs.readFileSync(liveLockPath(root, chemin), 'utf8'); data = JSON.parse(brut); } catch (_) { return false; }
   if (!data || !data.pid) return false;
   try { process.kill(data.pid, 0); return true; }
-  catch (_) { try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* ignore */ } return false; }
+  catch (_) { retirerVerrouMort(liveLockPath(root, chemin), brut); return false; }
+}
+/** lots.js (chantier 16) ou null sur un arbre plus ancien — ses verrous exclusifs servent aussi au verrou live/. */
+function lotsOuNull() {
+  try { return require('./lots'); } catch (err) { if (err && err.code === 'MODULE_NOT_FOUND') return null; throw err; }
+}
+/** Seconde revue n° 51 : un verrou live/ au pid mort n'est retiré que sous la marque de reprise de lots.js
+ *  (`<f>.reprise-<sha16 du contenu mort>`) et s'il porte encore ce contenu — un `unlink` nu effaçait la réservation
+ *  qu'un réveil concurrent venait de poser à sa place (ABA). */
+function retirerVerrouMort(f, brut) {
+  const lots = lotsOuNull();
+  if (!lots) { try { fs.unlinkSync(f); } catch (_) { /* ignore */ } return; }
+  const marque = `${f}.reprise-${lots.sha256Texte(brut).slice(0, 16)}`;
+  const m = lots.acquerirVerrou(marque, { pid: process.pid, starttime: require('./jobs').starttimeDe(process.pid) });
+  if (!m.acquis) return; // un concurrent reprend ce verrou mort : il le retire ou le remplace
+  try { if (readIf(f) === brut) fs.unlinkSync(f); } catch (_) { /* déjà retiré */ } finally { lots.libererVerrou(marque); }
+}
+/** Seconde revue n° 51 : réservation atomique d'une instance avant de la lancer (réveil, reprise) — le verrou live/
+ *  est créé en exclusif au nom de l'appelant (pid vivant : aucun concurrent ne l'obtient), un verrou mort est repris
+ *  sous marque. `null` si l'instance est déjà tenue par un processus vivant. */
+function reserverInstance(root, chemin) {
+  const f = liveLockPath(root, chemin);
+  const lots = lotsOuNull();
+  if (!lots) return isLive(root, chemin) ? null : { jeton: null };
+  const jeton = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  const r = lots.acquerirVerrou(f, { jeton, pid: process.pid, starttime: require('./jobs').starttimeDe(process.pid), startedAt: nowIso(), reservation: true });
+  return r.acquis ? { jeton } : null;
+}
+function reservationEncoreAMoi(root, chemin, resa) {
+  if (!resa || !resa.jeton) return false;
+  try { return JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')).jeton === resa.jeton; } catch (_) { return false; }
+}
+/** Rend une réservation non suivie d'un lancement — seulement si le verrou porte encore notre jeton. */
+function libererReservation(root, chemin, resa) {
+  if (reservationEncoreAMoi(root, chemin, resa)) { try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* ignore */ } }
+}
+/** Passe la réservation au lanceur détaché qu'on vient de créer (il le réécrira au démarrage de sa session) — jamais
+ *  par-dessus le verrou qu'il a déjà posé ou retiré lui-même. */
+function transmettreReservation(root, chemin, resa, donnees) {
+  const f = liveLockPath(root, chemin);
+  if (resa && resa.jeton === null) { try { fs.mkdirSync(liveDir(root), { recursive: true }); fs.writeFileSync(f, JSON.stringify(donnees)); } catch (_) { /* fail-open */ } return; }
+  if (!reservationEncoreAMoi(root, chemin, resa)) return;
+  const tmp = `${f}.${process.pid}.transmis.tmp`;
+  try { fs.writeFileSync(tmp, JSON.stringify(donnees)); fs.renameSync(tmp, f); } catch (_) { try { fs.unlinkSync(tmp); } catch (_e) { /* ignore */ } }
+}
+/** Pid vivant lu dans le verrou `.attente.json` d'un lanceur bloqué dans `attendreInterruptible`
+ *  (chantier 16, §18.3) — `null` si absent, illisible, au pid mort ou au pid réutilisé (starttime différent,
+ *  MSG-utilisateur-004 point 6). `demanderArret` s'en sert pour compter un lanceur en attente comme vivant
+ *  (plus de « rien à arrêter » pendant une attente 429). */
+function pidEnAttente(root, chemin) {
+  const data = attenteLimite().attenteVivante(attenteLockPath(root, chemin));
+  return data ? data.pid : null;
+}
+/** Troisième revue n° 74 : le processus qui joue les sessions d'une instance (lanceur synchrone ou détaché) en tient le
+ *  verrou live/ de son démarrage à sa sortie — `runOnce` le réécrit à son nom pendant la session, puis le rend « entre
+ *  deux sessions » au lieu de le supprimer. Un seul prédicat d'occupation : le verrou exclusif (reserverInstance). */
+let INSTANCE_TENUE = null;
+function lireVerrouLive(root, chemin) { try { return JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')); } catch (_) { return null; } }
+function ecrireVerrouAtomique(root, chemin, donnees) {
+  const f = liveLockPath(root, chemin);
+  const tmp = `${f}.${process.pid}.tenue.tmp`;
+  fs.mkdirSync(liveDir(root), { recursive: true });
+  fs.writeFileSync(tmp, JSON.stringify(donnees)); fs.renameSync(tmp, f);
+}
+function tenueDonnees(jeton, extra) {
+  return Object.assign({ jeton, pid: process.pid, starttime: require('./jobs').starttimeDe(process.pid), startedAt: nowIso(), tenue: true }, extra);
+}
+/** Prend l'instance pour ce lanceur : verrou transmis à son pid (réveil, reprise), ou libre. Un réveilleur encore dans
+ *  sa section critique (`reservation`, qui va transmettre ou rendre) est attendu au plus 2 s. `null` si un autre
+ *  lanceur la tient. */
+function tenirInstance(root, chemin) {
+  const lots = lotsOuNull();
+  const jeton = `${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+  for (let i = 0; i < 100; i++) {
+    const v = lireVerrouLive(root, chemin);
+    if (v && v.pid === process.pid) { ecrireVerrouAtomique(root, chemin, tenueDonnees(jeton, { entreSessions: true })); INSTANCE_TENUE = { chemin, jeton }; return INSTANCE_TENUE; }
+    if (!lots) { if (isLive(root, chemin)) return null; ecrireVerrouAtomique(root, chemin, tenueDonnees(jeton, { entreSessions: true })); INSTANCE_TENUE = { chemin, jeton }; return INSTANCE_TENUE; }
+    const r = lots.acquerirVerrou(liveLockPath(root, chemin), tenueDonnees(jeton, { entreSessions: true }));
+    if (r.acquis) { INSTANCE_TENUE = { chemin, jeton }; return INSTANCE_TENUE; }
+    if (!(r.detenteur && r.detenteur.reservation)) return null;
+    attendre(20);
+  }
+  return null;
+}
+function tenueDe(chemin) { return INSTANCE_TENUE && INSTANCE_TENUE.chemin === chemin ? INSTANCE_TENUE : null; }
+/** runOnce : verrou de session (même jeton si l'instance est tenue), puis rendu « entre deux sessions » à la fin. */
+function ecrireVerrouSession(root, chemin, attempt) {
+  const t = tenueDe(chemin);
+  if (t && reservationEncoreAMoi(root, chemin, t)) { ecrireVerrouAtomique(root, chemin, tenueDonnees(t.jeton, { attempt })); return; }
+  fs.writeFileSync(liveLockPath(root, chemin), JSON.stringify({ pid: process.pid, startedAt: nowIso(), attempt }));
+}
+function finVerrouSession(root, chemin) {
+  const t = tenueDe(chemin);
+  if (t && reservationEncoreAMoi(root, chemin, t)) { try { ecrireVerrouAtomique(root, chemin, tenueDonnees(t.jeton, { entreSessions: true })); } catch (_) { /* ignore */ } return; }
+  try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* ignore */ }
+}
+/** Session réellement en cours (verrou vivant qui n'est pas un lanceur entre deux sessions) — `--arret --immediat`. */
+function sessionEnCours(root, chemin) { return isLive(root, chemin) && !((lireVerrouLive(root, chemin) || {}).entreSessions); }
+/** Rend l'instance à la sortie du lanceur ; true si ce lanceur la tenait encore. */
+function relacherInstance(root, chemin) {
+  const t = tenueDe(chemin);
+  if (!t) return false;
+  INSTANCE_TENUE = null;
+  if (!reservationEncoreAMoi(root, chemin, t)) return false;
+  try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* ignore */ }
+  return true;
+}
+/** Troisième revue n° 72 : un réveilleur qui trouve l'instance occupée laisse une marque, puis retente une fois ; le
+ *  lanceur qui la tenait, instance rendue et tâche close, consomme la marque et réévalue lui-même la condition. L'un des
+ *  deux voit toujours l'autre : jamais un réveil perdu dans la traîne d'un lanceur. */
+function reveilDifferePath(root, chemin) { return path.join(liveDir(root), `${chemin.replace(/\//g, '-')}.reveil-differe`); }
+function marquerReveilDiffere(root, chemin) {
+  try { fs.mkdirSync(liveDir(root), { recursive: true }); fs.writeFileSync(reveilDifferePath(root, chemin), nowIso()); } catch (_) { /* fail-open */ }
+}
+function reprendreReveilDiffere(root, chemin) {
+  try { fs.unlinkSync(reveilDifferePath(root, chemin)); } catch (_) { return []; }
+  for (let i = 0; i < 100; i++) {
+    const r = wakeWaiters(root, '(réveil différé)', chemin);
+    const v = lireVerrouLive(root, chemin);
+    if (r.length || !r.occupes.includes(chemin) || !(v && v.reservation)) return r;
+    attendre(20); // un réveilleur est dans sa section critique : il lance ou rend, puis on réévalue
+  }
+  return [];
 }
 
 function tasksDir(root) { return path.join(root, 'mission', '.holarch', 'tasks'); }
@@ -1485,29 +1685,57 @@ function gitBranchesCtx(cfg) {
   return { prefixe: params.prefixe_branche || 'holarch/' };
 }
 
-function wakeWaiters(root, declencheur) {
+function wakeWaiters(root, declencheur, pour) {
   const waiters = reveil.listWaiters(root);
   const gitBranches = gitBranchesCtx(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))));
   const reveilles = [];
+  // Seconde revue n° 52 : instances écartées parce que leur lanceur tourne encore (session, attente 429, tâche détachée
+  // vivante) — `--reveil --pour` sort alors en code 3 et le guetteur de jobs.js se ré-arme au lieu de s'éteindre.
+  const occupes = [];
+  Object.defineProperty(reveilles, 'occupes', { value: occupes, enumerable: false });
+  const reveillables = ['WAITING_CHILDREN', 'BLOCKED', 'READY'];
   const now = new Date();
   const readStatus = (chemin) => readStatusOf(root, chemin);
   const readInbox = (chemin) => readInboxOf(root, chemin) || '';
-  for (const w of waiters) {
-    if (w.chemin === declencheur) continue;
-    if (!['WAITING_CHILDREN', 'BLOCKED', 'READY'].includes(w.etat)) continue;
-    if (isLive(root, w.chemin)) continue;
-    const sinceIso = lastStatusCommitIso(root, w.chemin);
-    const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox, gitBranches });
-    if (!evalRes.satisfied) continue;
-    const condition = reveil.formatReveil(w.ast);
-    const { id, pid } = detachLaunch(root, w.chemin, {});
-    // Verrou de vivacité posé tout de suite au nom du réveillé (pid du lanceur détaché, qui le réécrira au démarrage
-    // de sa session) : sans lui, une seconde évaluation dans les millisecondes qui suivent — wakeWaiters après la
-    // dernière session d'un enfant, puis finishLaunch — relançait la même instance deux fois (deux sessions concurrentes
-    // du concepteur, constaté le 2026-09-11 sur holarch-delegation).
-    try { fs.mkdirSync(liveDir(root), { recursive: true }); fs.writeFileSync(liveLockPath(root, w.chemin), JSON.stringify({ pid, startedAt: nowIso(), attempt: 0, reveil: id })); } catch (_) { /* fail-open */ }
-    appendReveilsLine(root, w.chemin, declencheur || '--reveil', condition, id);
-    reveilles.push({ chemin: w.chemin, tache: id, condition });
+  for (const w0 of waiters) {
+    if (w0.chemin === declencheur) continue;
+    if (pour && w0.chemin !== pour) continue;
+    if (!reveillables.includes(w0.etat)) continue;
+    // Seconde revue n° 51 : réservation atomique de l'instance AVANT d'évaluer et de lancer — tester `isLive` puis poser
+    // le verrou après `detachLaunch` laissait N réveils simultanés lancer N sessions (--reprendre, jobs groupés).
+    // Troisième revue n° 72 : occupée → marque de réveil différé, puis une seconde tentative — le lanceur qui la tient
+    // consomme la marque après l'avoir rendue (reprendreReveilDiffere) : l'un des deux voit toujours l'autre.
+    let resa = reserverInstance(root, w0.chemin);
+    if (!resa) { marquerReveilDiffere(root, w0.chemin); resa = reserverInstance(root, w0.chemin); }
+    if (!resa) { occupes.push(w0.chemin); continue; }
+    let lance = false;
+    try {
+      // Sous réservation, l'instantané de départ peut être périmé (une session lancée par un concurrent a pu finir et
+      // changer STATUS entre-temps) : on relit l'attente de cette instance.
+      const w = reveil.listWaiters(root).find((v) => v.chemin === w0.chemin);
+      if (!w || !reveillables.includes(w.etat)) continue;
+      // Revue n° 38 : un arrêt reçu pendant une attente laisse son fichier stop — jamais de réveil après un --arret.
+      if (fs.existsSync(stopPath(root, w.chemin))) continue;
+      // Revue n° 8 et seconde revue n° 8 : un lanceur en attente 429 (`.attente.json`) ou entre deux sessions (tâche
+      // détachée « running » au pid vivant, sans verrou live/ pendant quelques dizaines de ms) relancera lui-même.
+      // Troisième revue n° 72 : même marque que ci-dessus, puis second regard — une tâche close entre-temps est évaluée ici.
+      const occupee = () => pidEnAttente(root, w.chemin) || tacheVivantePour(root, w.chemin);
+      if (occupee()) { marquerReveilDiffere(root, w.chemin); if (occupee()) { occupes.push(w.chemin); continue; } }
+      const sinceIso = lastStatusCommitIso(root, w.chemin);
+      const evalRes = reveil.evalReveil(w.ast, { root, chemin: w.chemin, sinceIso, now, readStatus, readInbox, gitBranches });
+      if (!evalRes.satisfied) continue;
+      const condition = reveil.formatReveil(w.ast);
+      const plafondReveil = require('./budget-session').plafondEffectif(resolveParams(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')))));
+      const { id, pid } = detachLaunch(root, w.chemin, { args: argsDerniereTache(root, w.chemin, { reveil: true, plafond: plafondReveil }) });
+      lance = true;
+      // Verrou passé au lanceur détaché (qui le réécrira au démarrage de sa session) : sans lui, une seconde évaluation
+      // dans les millisecondes qui suivent relançait la même instance (holarch-delegation, 2026-09-11).
+      transmettreReservation(root, w.chemin, resa, { pid, startedAt: nowIso(), attempt: 0, reveil: id });
+      appendReveilsLine(root, w.chemin, declencheur || '--reveil', condition, id);
+      reveilles.push({ chemin: w.chemin, tache: id, condition });
+    } finally {
+      if (!lance) libererReservation(root, w0.chemin, resa);
+    }
   }
   return reveilles;
 }
@@ -1531,6 +1759,33 @@ function argsRelance(o) {
   return a;
 }
 
+/** Surcharges de lancement de la dernière tâche de `chemin` (fiche `tasks/*.json`, champ `args`) — reprises par
+ *  `--reprendre` et par un réveil (MSG-utilisateur-004 D : `--budget-usd` perdu à la relance). Seules les options à
+ *  valeur de session passent ; jamais `--bootstrap` ni `--forcer`, qui ne valent que pour le lancement d'origine.
+ *  Revue n° 9 : `--reprendre` continue la même tâche et reprend tout ; un réveil est un lancement neuf — il ne reprend
+ *  que `--budget-usd`, et seulement s'il est lisible et sous `opts.plafond` (sinon la fiche, puis CONFIG, décident).
+ *  Effort, profil, modèle et mode de permission d'un essai ponctuel ne deviennent jamais permanents. */
+const OPTIONS_REPRISES = ['--profil', '--modele', '--effort', '--budget-usd', '--max-tours', '--permission-mode', '--timeout-min', '--add-dir'];
+function argsDerniereTache(root, chemin, opts) {
+  const o = opts || {};
+  const taches = listTaches(root).filter((t) => t.chemin === chemin && Array.isArray(t.args));
+  taches.sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')));
+  const args = taches.length ? taches[taches.length - 1].args : [];
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    if (!OPTIONS_REPRISES.includes(args[i]) || i + 1 >= args.length) continue;
+    const [option, valeur] = [args[i], String(args[i + 1])];
+    i += 1;
+    if (o.reveil) {
+      if (option !== '--budget-usd') continue;
+      // Seconde revue n° 62 : même lecture que le lanceur (virgule décimale), sinon un 16,5 accepté disparaît au réveil.
+      const usd = require('./budget-session').lireNombre(valeur);
+      if (!(usd > 0) || (Number.isFinite(o.plafond) && usd > o.plafond)) continue;
+    }
+    out.push(option, valeur);
+  }
+  return out;
+}
 function detachLaunch(root, chemin, opts) {
   const dir = tasksDir(root);
   fs.mkdirSync(dir, { recursive: true });
@@ -1538,13 +1793,17 @@ function detachLaunch(root, chemin, opts) {
   const logPath = path.join(dir, `${id}.log`);
   const jsonPath = path.join(dir, `${id}.json`);
   const fd = fs.openSync(logPath, 'a');
-  const env = Object.assign({}, process.env, { HOLARCH_TASK_ID: id });
+  // Seconde revue n° 59 : la tâche est liée à son instance (HOLARCH_TASK_CHEMIN, lue par tacheDetachee) — une
+  // variable HOLARCH_TASK_ID héritée ailleurs ne fait jamais d'un lanceur « le lanceur détaché de cette tâche ».
+  // Troisième revue n° 77 : sans HOLARCH_INSTANCE (envSansInstance) — le lancé est relancé par le harnais, pas par
+  // l'instance dont la session a lancé ce processus ; ses options ont été contrôlées ici (refusInstance).
+  const env = envSansInstance({ HOLARCH_TASK_ID: id, HOLARCH_TASK_CHEMIN: chemin });
   const args = (opts && opts.args) || [];
   const child = spawn(process.execPath, [__filename, chemin, ...args], {
     cwd: root, env, detached: true, stdio: ['ignore', fd, fd],
   });
   fs.writeFileSync(jsonPath, JSON.stringify({
-    id, chemin, pid: child.pid, startedAt: nowIso(), state: 'running',
+    id, chemin, pid: child.pid, starttime: require('./jobs').starttimeDe(child.pid), startedAt: nowIso(), state: 'running',
     parent: (opts && opts.parent) || 'utilisateur', opts: opts || {}, args,
   }, null, 2));
   child.unref();
@@ -1552,8 +1811,17 @@ function detachLaunch(root, chemin, opts) {
   return { id, pid: child.pid };
 }
 
-function finishLaunch(root, chemin, code, sessions) {
+/** Seconde revue n° 59 : identifiant de la tâche détachée dont CE lanceur est le processus, sinon null.
+ *  HOLARCH_TASK_ID seul ne suffit pas (une commande qui l'hérite n'est pas ce lanceur) : detachLaunch pose aussi
+ *  HOLARCH_TASK_CHEMIN, qui doit nommer l'instance lancée ; prepareLaunch retire les deux de l'environnement de la
+ *  session. Appelants : garde « instance déjà lancée », refus détaché (revue n° 6), finishLaunch. */
+function tacheDetachee(chemin) {
   const id = process.env.HOLARCH_TASK_ID;
+  return id && process.env.HOLARCH_TASK_CHEMIN === chemin ? id : null;
+}
+
+function finishLaunch(root, chemin, code, sessions) {
+  const id = tacheDetachee(chemin);
   if (id) {
     const jsonPath = path.join(tasksDir(root), `${id}.json`);
     try {
@@ -1568,8 +1836,13 @@ function finishLaunch(root, chemin, code, sessions) {
   // Journal du lanceur committé par le lanceur lui-même (racine seulement) : la dernière ligne de SESSIONS.md et de
   // REVEILS.md d'une racine est écrite après son commit de clôture et restait non committée jusqu'à un geste humain
   // (archivages du 2026-09-11). Enfant : la racine, qui répond de mission/, les committe à sa session suivante.
+  // Troisième revue n° 72 et 74 : instance rendue (tâche déjà close ci-dessus), journal, réveils des autres, puis le
+  // réveil différé qu'un réveilleur a laissé pendant que ce lanceur la tenait (jamais perdu dans sa traîne).
+  const tenait = relacherInstance(root, chemin);
   if (!chemin.includes('/') && !isLive(root, chemin)) commitJournalLanceur(root, chemin);
-  return wakeWaiters(root, chemin);
+  const reveilles = wakeWaiters(root, chemin);
+  if (tenait || id) reveilles.push(...reprendreReveilDiffere(root, chemin));
+  return reveilles;
 }
 
 function commitJournalLanceur(root, chemin) {
@@ -1747,7 +2020,18 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     // 2026-09-11 : premier 429 réel au bootstrap, repli vers OpenRouter perdu sur cette erreur).
     const bootstrapEncore = !!opts.bootstrap && !fs.existsSync(path.join(root, 'mission', chemin, 'ROLE.md'));
     const tentativeOpts = attempt > 1 ? Object.assign({}, optsCourantes, { bootstrap: bootstrapEncore, relance: true }) : optsCourantes;
-    const launch = prepareLaunch(root, chemin, tentativeOpts);
+    // Chantier 16 (revue du J1, point 4) : une ré-incarnation peut être refusée par prepareLaunch — fiche passée
+    // au-delà de budget_usd_session_max pendant la session, fiche devenue illisible. Arrêt propre : ALERT au parent,
+    // ligne de synthèse, tâche close `failed` par finishLaunch — jamais une exception qui plante le lanceur.
+    let launch;
+    try { launch = prepareLaunch(root, chemin, tentativeOpts); } catch (e) {
+      if (!sessions.length) throw e;
+      const arret = { motif: 'relance-refusee', texte: String(e.message || e).slice(0, 300) };
+      arret.alerte = appendAlertToParent(root, chemin, `**Enfant \`${chemin}\` arrêté par le lanceur** : ré-incarnation refusée (« ${arret.texte} »). Il ne sera plus ré-incarné tout seul : corrige la cause (fiche registre, CONFIG.md), puis relance-le en tâche détachée (\`node framework/bin/holarch-spawn.js ${chemin} --detach\`), recadre-le (\`TASK\`) ou passe-le \`FAILED\`.`);
+      sessions[sessions.length - 1].arret = arret;
+      process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ré-incarnation refusée (${arret.texte})${arret.alerte ? ` — ALERT ${arret.alerte} au parent` : ''}\n`);
+      return sessions;
+    }
     if (opts.timeoutMin > 0) launch.timeoutMs = opts.timeoutMin * 60 * 1000;
     const avant = progressSnapshot(root, chemin);
     const shaAvant = shaInstance(root, chemin, launch.cfg);
@@ -1755,7 +2039,7 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     const status = readStatusOf(root, chemin);
     // Garde a posteriori (§11.4) : avant la ligne de session, qui doit porter le `fin = erreur` d'un écart grave.
     const garde = verifierApresSession(root, chemin, shaAvant, shaInstance(root, chemin, launch.cfg), out);
-    const line = appendSessionLine(root, launch.cfg.nom, chemin, launch.meta, out.res, out.elapsedMs, status.etat || '(absent)', { systeme: launch.systemPrompt.length, utilisateur: launch.prompt.length });
+    const line = appendSessionLine(root, launch.cfg.nom, chemin, launch.meta, out.res, out.elapsedMs, status.etat || '(absent)', { systeme: launch.systemPrompt.length, utilisateur: launch.prompt.length }, out.logBase);
     sessions.push(Object.assign({ status, line, launch, garde }, out));
     // 1.9.0 (maintenance, mission holarch-contexte) : un parent qui attend un message (CLARIFICATION, PROPOSAL, BLOCKER,
     // ALERT) ne doit pas attendre la fin de toute la boucle de ré-incarnation de son enfant — les guetteurs sont évalués
@@ -1784,7 +2068,20 @@ function launchWithRelaunches(root, chemin, opts, runner) {
       attentes429 += 1;
       if (limite.attenteMs !== null && attentes429 <= 3) {
         process.stderr.write(`HOLARCH ▸ ${chemin} ▸ limite de sessions de l'API (429) — la session n'a pas eu lieu ; reprise à ${limite.repriseIso} (attente ${fmtDuration(limite.attenteMs)}, ${attentes429}/3)\n`);
-        attendre(limite.attenteMs);
+        const issue = attenteLimite().attendreInterruptible({
+          ms: limite.attenteMs,
+          stopFile: stopPath(root, chemin),
+          attenteFile: attenteLockPath(root, chemin),
+          info: { motif: attenteLimite().motifFin(limite.texte), tentative: attentes429 },
+        });
+        if (issue === 'arret') {
+          // Revue n° 38 : le fichier stop reste en place — wakeWaiters n'y réveille plus l'instance (READY à la condition
+          // encore vraie) ; seul un lancement explicite (prepareLaunch) le retire.
+          sessions[sessions.length - 1].arretDemande = true;
+          sessions[sessions.length - 1].arret = { motif: 'arret-demande' };
+          process.stderr.write(`HOLARCH ▸ ${chemin} ▸ arrêt demandé (--arret) reçu pendant l'attente d'une limite 429 (${attentes429}/3) — pas de ré-incarnation\n`);
+          return sessions;
+        }
         continue;
       }
       const arret = { motif: 'limite-api', texte: limite.texte };
@@ -1882,11 +2179,15 @@ function summarize(launch, sessions) {
     lines.push(`⚠ aucun résultat exploitable de l'exécuteur (code ${last.exitCode}, signal ${last.signal || '—'})${causeExacte} — voir ${last.logBase}.stderr.log`);
     code = 2;
   }
-  else if ((last.res.fin === 'erreur' || last.res.fin === 'limite') && !(last.arret && last.arret.motif === 'limite-api')) { lines.push(`⚠ fin anormale : ${last.res.sous_type || last.res.fin} — voir ${last.logBase}.result.json`); code = 2; }
+  else if ((last.res.fin === 'erreur' || last.res.fin === 'limite') && !(last.arret && (last.arret.motif === 'limite-api' || last.arret.motif === 'arret-demande'))) { lines.push(`⚠ fin anormale : ${last.res.sous_type || last.res.fin} — voir ${last.logBase}.result.json`); code = 2; }
   if (isArret) { lines.push('ℹ arrêt propre demandé (--arret) : session terminée sans ré-incarnation.'); }
   else if (last.arret && last.arret.motif === 'limite-api') {
     lines.push(`⚠ limite de sessions de l'API (429 : ${last.arret.texte}) — la session n'a pas eu lieu, STATUS inchangé (${status.etat || '(absent)'}) ; ${last.arret.alerte ? `ALERT ${last.arret.alerte} déposé dans l'INBOX du parent` : 'relancer'} après l'heure de remise à zéro (\`node framework/bin/holarch-spawn.js ${launch.chemin} --detach\`).`);
     code = 3;
+  }
+  else if (last.arret && last.arret.motif === 'relance-refusee') {
+    lines.push(`⚠ ré-incarnation refusée par le lanceur (${last.arret.texte}) — ${last.arret.alerte ? `ALERT ${last.arret.alerte} déposé dans l'INBOX du parent, qui décide (correction de la fiche, relance détachée, TASK, FAILED)` : 'corriger la cause puis relancer'}.`);
+    code = 1;
   }
   else if (status.etat === 'WORKING' && !voluntary) { lines.push('⚠ STATUS.md est resté à WORKING : session plantée ou ON_SLEEP non exécuté (direct-spawn : relancer une fois, puis FAILED + recadrage).'); code = 2; }
   else if (voluntary) {
@@ -1924,7 +2225,9 @@ function parseArgs(argv) {
     else if (a === '--profil') o.profil = next();
     else if (a === '--modele' || a === '--model') o.modele = next();
     else if (a === '--effort') o.effort = next();
-    else if (a === '--budget-usd') o.budget = next();
+    // Troisième revue n° 82 : `--budget-usd` sans valeur (fin de ligne) ou vide (`""`) n'est plus ignoré en silence —
+    // la valeur témoin est illisible, donc refusée par resoudreBudget (et par refusInstance pour une instance).
+    else if (a === '--budget-usd') { const v = next(); o.budget = (v === undefined || String(v).trim() === '') ? '(sans valeur)' : v; }
     else if (a === '--max-tours' || a === '--max-turns') o.maxTours = next();
     else if (a === '--permission-mode') o.permissionMode = next();
     else if (a === '--root') o.root = next();
@@ -1933,6 +2236,8 @@ function parseArgs(argv) {
     else if (a === '--detach') o.detach = true;
     else if (a === '--forcer') o.forcer = true;
     else if (a === '--reveil') o.reveil = true;
+    else if (a === '--pour') o.pour = next();
+    else if (a === '--declencheur') o.declencheur = next();
     else if (a === '--taches') o.taches = true;
     else if (a === '--reprendre') o.reprendre = true;
     else if (a === '--arret') o.arret = next();
@@ -2010,7 +2315,9 @@ function listTaches(root) {
 function tacheVivantePour(root, chemin) {
   for (const t of listTaches(root)) {
     if (t.chemin !== chemin || t.state !== 'running' || !t.pid) continue;
-    try { process.kill(t.pid, 0); return t; } catch (_) { /* pid mort : fiche périmée, --reprendre la fermera */ }
+    // Troisième revue n° 73 : pid ET starttime (noté par detachLaunch), comme `.attente.json` — un pid réutilisé après
+    // un redémarrage du conteneur ne tient plus l'instance « occupée » pour toujours.
+    if (attenteLimite().processusVivant(t.pid, t.starttime)) return t;
   }
   return null;
 }
@@ -2025,8 +2332,7 @@ function reprendreTaches(root) {
   const relancees = [];
   for (const t of listTaches(root)) {
     if (t.state !== 'running' || !t.pid) continue;
-    let vivant = true;
-    try { process.kill(t.pid, 0); } catch (_) { vivant = false; }
+    const vivant = attenteLimite().processusVivant(t.pid, t.starttime); // troisième revue n° 73 : pid et starttime
     if (vivant) continue;
     try {
       t.state = 'failed'; t.finishedAt = nowIso(); t.note = 'lanceur mort, fiche close par --reprendre';
@@ -2036,11 +2342,26 @@ function reprendreTaches(root) {
     const arret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
     const reprenable = status.etat === 'READY' || (status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !arret);
     if (!reprenable) { lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — non relancée : STATUS ${status.etat || '(absent)'}${status.note ? ` (${status.note.slice(0, 60)})` : ''}`); continue; }
-    if (relancees.includes(t.chemin) || isLive(root, t.chemin)) { lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — déjà vivante, pas de relance`); continue; }
-    const { id, pid } = detachLaunch(root, t.chemin, { parent: 'reprise' });
-    try { fs.mkdirSync(liveDir(root), { recursive: true }); fs.writeFileSync(liveLockPath(root, t.chemin), JSON.stringify({ pid, startedAt: nowIso(), attempt: 0, reprise: id })); } catch (_) { /* fail-open */ }
+    // Seconde revue n° 51 : même réservation atomique que wakeWaiters — un --reprendre concurrent d'un réveil (guetteur
+    // d'un job orphelin, autre --reprendre) ne lance plus deux sessions de la même instance.
+    const resa = relancees.includes(t.chemin) ? null : reserverInstance(root, t.chemin);
+    if (resa && (tacheVivantePour(root, t.chemin) || pidEnAttente(root, t.chemin))) { libererReservation(root, t.chemin, resa); lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — déjà vivante, pas de relance`); continue; }
+    if (!resa) { lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — déjà vivante, pas de relance`); continue; }
+    let id; let pid;
+    try { ({ id, pid } = detachLaunch(root, t.chemin, { parent: 'reprise', args: argsDerniereTache(root, t.chemin) })); }
+    catch (err) { libererReservation(root, t.chemin, resa); throw err; }
+    transmettreReservation(root, t.chemin, resa, { pid, startedAt: nowIso(), attempt: 0, reprise: id });
     relancees.push(t.chemin);
     lignes.push(`HOLARCH ▸ ${t.chemin} ▸ tâche ${t.id} close (pid ${t.pid} mort) — relancée en détaché : tâche ${id} (pid ${pid})`);
+  }
+  try {
+    // require paresseux (chantier 16, U9) : un arbre plus ancien sans jobs.js reste utilisable
+    // (MODULE_NOT_FOUND ignoré) ; toute autre erreur remonte.
+    const { reprendre: reprendreJobs } = require('./jobs');
+    const resJobs = reprendreJobs(root);
+    if (resJobs && Array.isArray(resJobs.lignes)) lignes.push(...resJobs.lignes);
+  } catch (err) {
+    if (!err || err.code !== 'MODULE_NOT_FOUND') throw err;
   }
   return { lignes, relancees };
 }
@@ -2065,13 +2386,27 @@ function descendants(pid) {
  *  d'abord, SIGKILL après `attenteMs`) — l'état committé reste, ce qui traîne appartient à la session suivante ; sinon
  *  écrit la demande d'arrêt lue par le hook au prochain appel d'outil (ON_SLEEP complet, plusieurs minutes). */
 function demanderArret(root, chemin, opts = {}) {
-  if (!isLive(root, chemin)) return { vivant: false, message: `aucune session vivante pour ${chemin} (verrou périmé nettoyé s'il y en avait un) — rien à arrêter` };
+  const enAttente = pidEnAttente(root, chemin);
+  if (!isLive(root, chemin) && !enAttente) return { vivant: false, message: `aucune session vivante pour ${chemin} (verrou périmé nettoyé s'il y en avait un) — rien à arrêter` };
+  // MSG-utilisateur-004 point 3 : un lanceur en attente 429 n'a aucune session à tuer, et un gestionnaire de SIGTERM
+  // n'y tournerait jamais (lanceur synchrone, Atomics.wait). --immediat lui pose donc d'abord le fichier stop, qu'il
+  // lit entre deux tranches : il sort de lui-même, verrou retiré, ligne SESSIONS.md et tâche closes. Le signal
+  // (plus bas) n'est qu'un repli s'il n'est pas sorti au bout de deux tranches.
+  if (opts.immediat && enAttente && !sessionEnCours(root, chemin)) { // n° 74 : le lanceur garde live/ entre deux sessions
+    const al = attenteLimite();
+    const st = al.starttimeDe(enAttente);
+    writeStopRequest(root, chemin);
+    const delai = opts.attenteSortieMs || 2 * (Number(process.env.HOLARCH_ATTENTE_TRANCHE_MS) || 5000) + 2000;
+    const fin = Date.now() + delai;
+    while (Date.now() < fin && al.processusVivant(enAttente, st)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+    if (!al.processusVivant(enAttente, st)) return { vivant: true, mode: 'immediat', pids: [enAttente], sigkill: [], message: `lanceur en attente d'une limite 429 (pid ${enAttente}) sorti de lui-même sur le fichier stop — verrou retiré, tâche close, aucune ré-incarnation` };
+  }
   if (!opts.immediat) {
     const p = writeStopRequest(root, chemin);
     return { vivant: true, mode: 'propre', chemin: p, message: `arrêt demandé (${p}) — la session hiberne à son prochain appel d'outil, ON_SLEEP compris ; --immediat pour tuer la session tout de suite` };
   }
   let pid = null;
-  try { pid = JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')).pid; } catch (_) { pid = null; }
+  try { pid = JSON.parse(fs.readFileSync(liveLockPath(root, chemin), 'utf8')).pid; } catch (_) { pid = enAttente; }
   writeStopRequest(root, chemin); // au cas où le lanceur survivrait à son enfant : pas de ré-incarnation
   const cibles = descendants(pid).concat([pid]);
   const signaler = (sig) => cibles.filter((p) => { try { process.kill(p, sig); return true; } catch (_) { return false; } });
@@ -2079,6 +2414,23 @@ function demanderArret(root, chemin, opts = {}) {
   const fin = Date.now() + (opts.attenteMs || 5000);
   while (Date.now() < fin && cibles.some((p) => { try { process.kill(p, 0); return true; } catch (_) { return false; } })) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
   const tues = signaler('SIGKILL');
+  // MSG-utilisateur-004 points 3 et 6 : un lanceur tué ne nettoie rien lui-même. Son verrou d'attente est retiré
+  // ici s'il lui appartient encore (pid ET starttime) ; sa tâche est close `failed` avec le motif de l'arrêt, pour
+  // que --reprendre (qui ne reprend que les tâches `running` au pid mort) ne relance pas une instance arrêtée.
+  {
+    let attente = null;
+    try { attente = JSON.parse(fs.readFileSync(attenteLockPath(root, chemin), 'utf8')); } catch (_) { attente = null; }
+    if (attente && cibles.includes(attente.pid) && !attenteLimite().processusVivant(attente.pid, attente.starttime)) {
+      attenteLimite().supprimerSiProprietaire(attenteLockPath(root, chemin), attente.pid, attente.starttime);
+    }
+    for (const t of listTaches(root)) {
+      if (t.state !== 'running' || !cibles.includes(t.pid)) continue;
+      try {
+        t.state = 'failed'; t.finishedAt = nowIso(); t.note = 'arrêtée par --arret --immediat : non reprise par --reprendre';
+        fs.writeFileSync(path.join(tasksDir(root), `${t.id}.json`), JSON.stringify(t, null, 2));
+      } catch (_) { /* fiche illisible : on continue */ }
+    }
+  }
   try { fs.unlinkSync(liveLockPath(root, chemin)); } catch (_) { /* déjà retiré */ }
   return { vivant: true, mode: 'immediat', pids: termes, sigkill: tues, message: `session tuée (SIGTERM ${termes.join(', ') || '—'}${tues.length ? ` ; SIGKILL ${tues.join(', ')}` : ''}) — état committé conservé, fichiers non committés laissés à la session suivante` };
 }
@@ -2089,6 +2441,68 @@ function writeStopRequest(root, chemin) {
   const p = path.join(dir, chemin.replace(/\//g, '-'));
   fs.writeFileSync(p, `${nowIso()}\n`);
   return p;
+}
+
+/** Troisième revue n° 77, 78 : les refus de `spawn-guard` tenus par le lanceur lui-même, sur les options qu'il a
+ *  PARSÉES — une regex sur le texte de la commande ne suit pas bash (guillemets internes, accolades, `\`, ni
+ *  `node -e "…execFileSync('node', [...])"`). Actif seulement quand le lanceur trouve HOLARCH_INSTANCE dans son propre
+ *  environnement, c.-à-d. lancé depuis la session d'une instance ; ses appelants internes (detachLaunch, donc
+ *  wakeWaiters et --reprendre, et le guetteur de jobs.js) la retirent de l'environnement qu'ils passent
+ *  (`envSansInstance`). `spawn-guard` reste la première ligne, celle qui explique avant l'appel.
+ *  Renvoie le motif du refus, ou '' si l'invocation est permise. */
+function refusInstance(root, instance, o) {
+  const inst = String(instance || '').replace(/^mission\//, '').replace(/\/+$/, '');
+  const norm = (c) => String(c || '').replace(/^mission\//, '').replace(/\/+$/, '');
+  if (o.bootstrap) return "--bootstrap : le bootstrap se lance une seule fois, par l'utilisateur";
+  const reserves = [['reveil', '--reveil'], ['arret', '--arret'], ['immediat', '--immediat'], ['reprendre', '--reprendre'],
+    ['forcer', '--forcer'], ['pour', '--pour'], ['declencheur', '--declencheur']];
+  for (const [cle, opt] of reserves) if (o[cle]) return `${opt} est réservé au harnais et à l'utilisateur`;
+  if ((o.addDir || []).length) return "--add-dir est réservé à l'utilisateur";
+  // --dry-run et --taches ne lancent rien : forme seulement, comme spawn-guard. --controle et --nettoyer-worktree
+  // agissent même avec --dry-run : leur cible est contrôlée.
+  const cibles = [o.controle, o.nettoyerWorktree].filter(Boolean).map(norm);
+  if (o.chemin && !o.dryRun) cibles.push(o.chemin);
+  for (const c of cibles) {
+    if (!c.startsWith(`${inst}/`) || c.slice(inst.length + 1).includes('/') || c === `${inst}/`) {
+      return `tu ne peux agir que sur tes propres enfants directs (\`${inst}/<nom>\`) — cible demandée : \`${c}\` (KERNEL §4)`;
+    }
+  }
+  if (!o.chemin || o.dryRun) return '';
+  const params = resolveParams(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))));
+  const pmax = Number(params.profondeur_max);
+  if (pmax > 0 && o.chemin.split('/').length > pmax) return `profondeur ${o.chemin.split('/').length} > profondeur_max ${pmax} (module max-depth)`;
+  if (o.budget !== '' && o.budget !== undefined) {
+    const bs = require('./budget-session');
+    const usd = bs.lireNombre(o.budget);
+    const plafond = bs.plafondEffectif(params);
+    if (!(usd > 0)) return `--budget-usd illisible (« ${o.budget} ») : un nombre positif attendu (§18.2)`;
+    if (usd > plafond) return `--budget-usd ${usd} USD > plafond budget_usd_session_max (${plafond} USD, §18.2) : au-delà, geste du mainteneur seul`;
+  }
+  return '';
+}
+
+/** Vrai si le lanceur agit sur le dépôt de la session qui l'a lancé (HOLARCH_ROOT, son worktree ou l'arbre principal :
+ *  même répertoire Git commun). Un banc de test lancé depuis une session vise une racine jetable, autre dépôt : ses
+ *  lanceurs sont ceux du mainteneur simulé, pas des gestes de l'instance — sans ce filtre, `npm test` lancé par une
+ *  instance rougissait de quatorze tests (--controle, --nettoyer-worktree, permis.js, T-C4.2). HOLARCH_ROOT absent :
+ *  vrai (prudence). */
+function memeDepotQueSession(root, rootSession) {
+  if (!rootSession) return true;
+  const commun = (d) => {
+    const r = spawnSync('git', ['-C', d, 'rev-parse', '--git-common-dir'], { encoding: 'utf8' });
+    const brut = r.status === 0 ? path.resolve(d, r.stdout.trim()) : d;
+    try { return fs.realpathSync(brut); } catch (_) { return path.resolve(brut); }
+  };
+  return commun(root) === commun(rootSession);
+}
+
+/** Environnement d'un lanceur relancé par le harnais lui-même (tâche détachée, réveil, reprise) : sans
+ *  HOLARCH_INSTANCE, que le processus courant a pu hériter de la session qui l'a lancé — sinon le relancé se
+ *  croirait appelé par cette instance et `refusInstance` refuserait un réveil légitime (troisième revue n° 77). */
+function envSansInstance(extra) {
+  const env = Object.assign({}, process.env, extra || {});
+  delete env.HOLARCH_INSTANCE;
+  return env;
 }
 
 function main() {
@@ -2103,6 +2517,16 @@ function main() {
   }
   const root = o.root ? path.resolve(o.root) : findRoot(process.cwd());
   if (!root) { process.stderr.write('Racine introuvable : lance depuis un dépôt contenant framework/KERNEL.md et mission/ (ou --root).\n'); process.exit(1); }
+  // Troisième revue n° 77, 78 : lancé depuis la session d'une instance, le lanceur applique lui-même les refus de
+  // spawn-guard sur ses options parsées, avant toute action (--reprendre, --arret, --reveil, lancement), sur le dépôt
+  // de cette session (worktree ou arbre principal).
+  if (process.env.HOLARCH_INSTANCE && memeDepotQueSession(root, process.env.HOLARCH_ROOT)) {
+    const motif = refusInstance(root, process.env.HOLARCH_INSTANCE, o);
+    if (motif) {
+      process.stderr.write(`HOLARCH ▸ refus du lanceur (instance ${process.env.HOLARCH_INSTANCE}) : ${motif}.\n`);
+      process.exit(1);
+    }
+  }
 
   if (o.reprendre) {
     const r = reprendreTaches(root);
@@ -2150,7 +2574,15 @@ function main() {
       }
       return;
     }
-    const reveilles = wakeWaiters(root, '--reveil');
+    const pourNormalise = (o.pour || '').replace(/^mission\//, '').replace(/\/+$/, '');
+    const reveilles = wakeWaiters(root, o.declencheur || '--reveil', pourNormalise);
+    // Seconde revue n° 52 : code 3 = propriétaire occupé (session, attente 429 ou tâche détachée vivante) — le guetteur
+    // de jobs.js se ré-arme et relance `--reveil --pour` une fois le lanceur sorti, au lieu de s'éteindre sans réveil.
+    if (pourNormalise && !reveilles.length && reveilles.occupes && reveilles.occupes.includes(pourNormalise)) {
+      process.stdout.write(`HOLARCH ▸ ${pourNormalise} ▸ occupée (lanceur vivant) : réveil différé\n`);
+      process.exitCode = 3;
+      return;
+    }
     if (!reveilles.length) process.stdout.write('aucun réveil déclenché.\n');
     for (const r of reveilles) process.stdout.write(`HOLARCH ▸ ${r.chemin} ▸ réveillée · tâche ${r.tache} · condition ${r.condition}\n`);
     return;
@@ -2161,7 +2593,19 @@ function main() {
   // 1.19.4 : jamais deux lanceurs pour la même instance — même entre deux sessions d'une ré-incarnation.
   // Pas pour un lanceur déjà détaché (HOLARCH_TASK_ID) : son verrou live/ et sa fiche « running » sont les siens, écrits par
   // detachLaunch avant son démarrage — le contrôle vaut pour la main qui lance, pas pour le processus lancé.
-  const deja = (o.dryRun || o.forcer || process.env.HOLARCH_TASK_ID) ? null : (isLive(root, o.chemin) ? { id: 'verrou live/', pid: '?' } : tacheVivantePour(root, o.chemin));
+  let deja = (o.dryRun || o.forcer || tacheDetachee(o.chemin)) ? null : (isLive(root, o.chemin) ? { id: 'verrou live/', pid: '?' } : tacheVivantePour(root, o.chemin));
+  // Troisième revue n° 74 : le processus qui jouera les sessions (synchrone ou détaché) prend le verrou live/ dès son
+  // démarrage et le garde jusqu'à sa sortie (runOnce, finishLaunch) — plus de fenêtre au démarrage, ni entre deux
+  // sessions ou pendant une attente 429, où un --reveil lançait un second lanceur. Pris par un autre : refus.
+  if (!deja && !o.dryRun && !o.detach && !o.forcer && !tenirInstance(root, o.chemin)) {
+    const v = lireVerrouLive(root, o.chemin) || {};
+    deja = { id: v.reveil || v.reprise || 'verrou live/', pid: v.pid || '?' };
+    if (tacheDetachee(o.chemin)) {
+      process.stderr.write(`HOLARCH ▸ ${o.chemin} ▸ refus : instance déjà lancée (tâche ${deja.id}, pid ${deja.pid} vivant) — lanceur détaché sans session, tâche close\n`);
+      finishLaunch(root, o.chemin, 1, []);
+      process.exit(1);
+    }
+  }
   if (deja) {
     process.stderr.write(`HOLARCH ▸ ${o.chemin} ▸ refus : instance déjà lancée (tâche ${deja.id}, pid ${deja.pid} vivant) — \`--arret ${o.chemin}\` d'abord, ou \`--forcer\` en connaissance de cause\n`);
     process.exit(1);
@@ -2173,7 +2617,20 @@ function main() {
   }
 
   let launch;
-  try { launch = prepareLaunch(root, o.chemin, o); } catch (e) { process.stderr.write(`holarch-spawn : ${e.message}\n`); process.exit(1); }
+  try { launch = prepareLaunch(root, o.chemin, o); } catch (e) {
+    process.stderr.write(`holarch-spawn : ${e.message}\n`);
+    // Revue n° 6 : un lanceur détaché (--detach ou réveil) refusé par prepareLaunch (budget de fiche au-delà du plafond,
+    // fiche illisible) ne laisse ni tâche « running » au pid mort, ni parent sans nouvelles : ALERT au parent, tâche
+    // close `failed` par finishLaunch (qui réveille le parent sur message:ALERT).
+    // Seconde revue n° 59 : seulement le lanceur de CETTE tâche (tacheDetachee), jamais une variable héritée.
+    if (tacheDetachee(o.chemin) && !o.dryRun) {
+      const texte = String(e.message || e).slice(0, 300);
+      const alerte = appendAlertToParent(root, o.chemin, `**Enfant \`${o.chemin}\` non lancé** : lancement détaché refusé par le lanceur (« ${texte} »). Corrige la cause (fiche registre, CONFIG.md), puis relance-le (\`node framework/bin/holarch-spawn.js ${o.chemin} --detach\`), recadre-le (\`TASK\`) ou passe-le \`FAILED\`.`);
+      if (alerte) process.stderr.write(`HOLARCH ▸ ${o.chemin} ▸ lancement détaché refusé — ALERT ${alerte} au parent\n`);
+      finishLaunch(root, o.chemin, 1, []);
+    } else if (relacherInstance(root, o.chemin)) reprendreReveilDiffere(root, o.chemin); // troisième revue n° 74
+    process.exit(1);
+  }
 
   if (o.detach && o.dryRun) {
     process.stdout.write(`HOLARCH ▸ ${launch.chemin} ▸ détaché (dry-run) · lancerait : node ${__filename} ${launch.chemin} (HOLARCH_TASK_ID=<id>)\n`);
@@ -2196,6 +2653,13 @@ function main() {
       `commande      : ${apercu.bin} ${apercu.args.map((a) => (/\s/.test(a) && !a.startsWith('"') ? `'${a}'` : a)).join(' ')} < <prompt sur stdin>`,
       '',
     ].join('\n'));
+    // Chantier 16, §18.1 (docs/IMPLEMENTATION.md) : sans tarif résolu au catalogue pour ce modèle, et
+    // hors de l'exécuteur claude-code (seul à produire un rappel « USD budget » dans sa transcription),
+    // budget-watch ne peut jamais s'activer — le dry-run le dit, comme pour tout autre fusible inerte.
+    const tarifResolu = !!(launch.meta.tarif && typeof launch.meta.tarif.cout_entree === 'number' && typeof launch.meta.tarif.cout_sortie === 'number');
+    if (!tarifResolu && apercu.executeur !== 'claude-code') {
+      process.stdout.write('budget-watch inerte : ni rappel CLI ni tarif\n');
+    }
     if (o.json) process.stdout.write(`${JSON.stringify({ root, chemin: launch.chemin, meta: launch.meta, params: launch.params, executeur: apercu.executeur, bin: apercu.bin, args: apercu.args }, null, 2)}\n`);
     // Chantier 15, §16.4 : au dry-run d'une racine (bootstrap, ou chemin sans '/'), répète l'avertissement
     // de brief incomplet que le hook session-start donnera au réveil réel — visible avant tout lancement.
@@ -2229,6 +2693,7 @@ module.exports = {
   worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree, writeGraveyardPatch, relayInboxFromParent,
   ensureSessionsFile, lastContexteDepart, contexteLivePath,
   verifierEnv,
+  argsDerniereTache,
   controle, resolveSourceControle,
 };
 

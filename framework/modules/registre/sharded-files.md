@@ -1,6 +1,6 @@
 # Module : sharded-files
 > Catégorie : registre
-> Version : 1.3.0
+> Version : 1.4.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : instance-budget, dependency-graph, direct-spawn, git-branches
@@ -28,6 +28,7 @@ Pour chaque enfant créé, crée sa fiche `registry/instances/<chemin-avec-tiret
 | Dépend de | <chemins déclarés, ou "—"> |
 | Profil | <conception, execution, relecture ou exploration — politique de modèle du module d'orchestration> |
 | Effort | <optionnel : low, medium, high, xhigh ou max, jugé pour la tâche (module d'orchestration) ; absent = effort par défaut du profil> |
+| Budget USD / session | <optionnel : nombre positif ≤ budget_usd_session_max ; précédence --budget-usd > fiche > budget_usd_par_session (§18.2)> |
 | Livrables | <vide au départ> |
 | Créée / Archivée | <ISO 8601> / — |
 ```

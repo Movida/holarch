@@ -4,6 +4,9 @@ Garantit : aucun appel payant lancé sans devis affiché et comparé au budget ;
 repayer ce qui est fait ni sauter ce qui a changé.
 Vérifier : `python3 verificateurs/lot-plans.py --a-sec`, puis `lot-plans.py <plans.json> <sortie> --budget <usd>`
 avant chaque lot réel (code 1 si le devis dépasse le budget).
+Sous HOLARCH (module `jobs-et-lots`) : `node framework/bin/holarch-job.js lot <fichier> --devis` puis `lot <fichier>`
+(`framework/templates/LOT.template.json`) portent devis contre `budget_services_usd`, verrou de lot, reprise par
+empreinte et registre `COUTS-SERVICES.md` ; `lot-plans.py` reste l'outil hors HOLARCH.
 
 ## Avant le lot
 1. **Échantillon d'abord** : un ou deux plans, relus sur pièces (planche, pas description), validés par qui décide

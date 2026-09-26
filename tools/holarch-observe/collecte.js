@@ -20,8 +20,24 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const reveil = require('../../framework/bin/reveil.js');
-const messageLint = require('../message-lint/message-lint.js');
+// Racine du dépôt par remontée jusqu'à `framework/KERNEL.md` (et non par chemin relatif figé) : ce
+// fichier doit rester exécutable depuis le bac à sable d'un paquet promouvable (`mission/shared/
+// concepteur/cible-tools/tools/holarch-observe/`, U7 §18.1-18.3), où sa profondeur sous la racine du
+// dépôt diffère de sa destination finale `tools/holarch-observe/` — même raison que `racineHolarch`
+// dans `tools/config-lint/config-lint.test.js`.
+function _racineDepuis(depart) {
+  let d = path.resolve(depart);
+  for (let i = 0; i < 12; i++) {
+    if (fs.existsSync(path.join(d, 'framework', 'KERNEL.md'))) return d;
+    const p = path.dirname(d);
+    if (p === d) break;
+    d = p;
+  }
+  return null;
+}
+const _racine = _racineDepuis(__dirname) || path.resolve(__dirname, '..', '..');
+const reveil = require(path.join(_racine, 'framework', 'bin', 'reveil.js'));
+const messageLint = require(path.join(_racine, 'tools', 'message-lint', 'message-lint.js'));
 
 /** Seuils des alertes de blocage (2026-09-12) : sessions consécutives sans unité close ; durée d'une session vivante. */
 const SESSIONS_SANS_PROGRES = 4;
@@ -37,6 +53,8 @@ function run(cmd, args, opts) {
 }
 function tirets(chemin) { return String(chemin).replace(/\//g, '-'); }
 function num(x) { const n = Number(String(x || '').replace(',', '.')); return Number.isFinite(n) ? n : null; }
+/** HH:MM UTC d'un horodatage ISO 8601 (budget-watch, U7 §18.3) : jamais une exception sur une date illisible. */
+function horaireUTC(iso) { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(11, 16); }
 
 /** Racine du dépôt : remonte jusqu'à framework/KERNEL.md (même règle que tools/holarch-session/etat.js). */
 function findRoot(start) {
@@ -103,7 +121,11 @@ function parseSessions(t) {
     rows.push({
       date: c[1], instance: c[2], session: c[3] === '—' ? '' : c[3], modele: c[4], tours: num(c[5]),
       tokens: { entree: tok[0], cacheLu: tok[1], cacheEcrit: tok[2], sortie: tok[3] },
-      usd: num(String(c[7] || '').replace('≈', '')), duree: c[8] || '', // « ≈ » = coût calculé au catalogue (1.16.0), compté comme les autres fin: c[9] || '', status: c[10] || '', reveil: c[11] || '', contexte: c[12] || '',
+      // « ≈ » = coût calculé au catalogue (1.16.0), compté comme les autres.
+      usd: num(String(c[7] || '').replace('≈', '')), duree: c[8] || '',
+      // U7 (§18.3) : `fin` était jusque-là avalé par le commentaire ci-dessus (jamais peuplé) —
+      // corrigé ici, nécessaire à `session-coupee-fusible`.
+      fin: c[9] || '', status: c[10] || '', reveil: c[11] || '', contexte: c[12] || '',
     });
   }
   return rows;
@@ -205,8 +227,26 @@ function depsParDefaut(root) {
     git: (args, cwd) => run('git', ['-C', cwd || root, ...args]),
     ps: () => (process.env.HOLARCH_OBSERVE_PS !== undefined ? process.env.HOLARCH_OBSERVE_PS : run('ps', ['-eo', 'pid,ppid,etimes,args']) || ''),
     pidVivant: (pid) => { if (!pid) return false; try { process.kill(pid, 0); return true; } catch (e) { return e && e.code === 'EPERM'; } },
+    // Champ 22 de /proc/<pid>/stat (même lecture que framework/bin/attente-limite.js) ; null si illisible.
+    starttimeDe: (pid) => { try { const c = fs.readFileSync(`/proc/${pid}/stat`, 'utf8'); return c.slice(c.lastIndexOf(')') + 2).split(' ')[19] || null; } catch (_) { return null; } },
     transcriptionsDir: (cwd) => process.env.HOLARCH_OBSERVE_TRANSCRIPTS || path.join(os.homedir(), '.claude', 'projects', String(cwd || root).replace(/[^A-Za-z0-9]/g, '-')),
     now: () => new Date(),
+    // Chantier 16 : répertoire des jetons machine et processus `{pid, ppid, pgid, commande}` (/proc), seams de test.
+    chargeDir: () => process.env.HOLARCH_CHARGE_DIR || path.join(os.homedir(), '.cache', 'holarch', 'charge'),
+    processus: () => {
+      const out = [];
+      let pids = [];
+      try { pids = fs.readdirSync('/proc').filter((p) => /^\d+$/.test(p)); } catch (_) { return out; }
+      for (const p of pids) {
+        try {
+          const stat = fs.readFileSync(`/proc/${p}/stat`, 'utf8');
+          const champs = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+          const commande = fs.readFileSync(`/proc/${p}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ');
+          if (commande) out.push({ pid: Number(p), ppid: Number(champs[1]), pgid: Number(champs[2]), commande });
+        } catch (_) { /* processus disparu */ }
+      }
+      return out;
+    },
   };
 }
 
@@ -280,9 +320,9 @@ function collecter(root, depsSur) {
     return d.lire(path.join(info.base, 'mission', 'registry', rel)) || lireRel(`mission/registry/${rel}`);
   };
 
-  // --- lanceur : verrous, contextes, tâches, arrêts ---------------------------------------------------
+  // --- lanceur : verrous, contextes, budgets, attentes, tâches, arrêts ------------------------------
   const lireLive = (base) => {
-    const out = { verrous: {}, contextes: {} };
+    const out = { verrous: {}, contextes: {}, budgets: {}, attentes: {} };
     for (const ent of d.lister(path.join(base, 'mission', '.holarch', 'live'))) {
       if (ent.dossier) continue;
       const abs = path.join(base, 'mission', '.holarch', 'live', ent.nom);
@@ -290,12 +330,20 @@ function collecter(root, depsSur) {
       if (!data) continue;
       const st = d.stat(abs);
       if (ent.nom.endsWith('.contexte.json')) out.contextes[ent.nom.replace(/\.contexte\.json$/, '')] = Object.assign({ fichier: abs, modifie: st ? st.modifie : '' }, data);
+      else if (ent.nom.endsWith('.budget.json')) out.budgets[ent.nom.replace(/\.budget\.json$/, '')] = Object.assign({ fichier: abs }, data);
+      else if (ent.nom.endsWith('.attente.json')) out.attentes[ent.nom.replace(/\.attente\.json$/, '')] = Object.assign({ fichier: abs }, data);
       else if (ent.nom.endsWith('.json')) out.verrous[ent.nom.replace(/\.json$/, '')] = Object.assign({ fichier: abs }, data);
     }
     return out;
   };
   const live = lireLive(root);
-  for (const w of e.git.worktrees) { const l = lireLive(w.chemin); Object.assign(live.contextes, l.contextes); for (const [k, v] of Object.entries(l.verrous)) if (!live.verrous[k]) live.verrous[k] = v; }
+  for (const w of e.git.worktrees) {
+    const l = lireLive(w.chemin);
+    Object.assign(live.contextes, l.contextes);
+    Object.assign(live.budgets, l.budgets);
+    Object.assign(live.attentes, l.attentes);
+    for (const [k, v] of Object.entries(l.verrous)) if (!live.verrous[k]) live.verrous[k] = v;
+  }
   for (const ent of d.lister(path.join(holarch, 'tasks'))) {
     if (!ent.nom.endsWith('.json')) continue;
     let t = null; try { t = JSON.parse(d.lire(path.join(holarch, 'tasks', ent.nom)) || 'null'); } catch (_) { t = null; }
@@ -313,6 +361,10 @@ function collecter(root, depsSur) {
   e.processus = parsePs(d.ps());
   const sessionsJournal = parseSessions(lireRel('mission/registry/SESSIONS.md'));
   e.reveils = parseReveils(lireRel('mission/registry/REVEILS.md'));
+  /** Dernier « Fin » connu de chaque instance (U7, §18.3) : construit en une passe, chaque nouvelle
+   *  ligne écrase la précédente, il reste donc la dernière ligne du journal une fois la boucle finie. */
+  const derniereFinParInstance = new Map();
+  for (const s of sessionsJournal) derniereFinParInstance.set(s.instance, s.fin);
 
   // --- sessions : cumul -------------------------------------------------------------------------------
   const cumul = { n: 0, tours: 0, usd: 0, parInstance: {} };
@@ -445,16 +497,26 @@ function collecter(root, depsSur) {
   }
 
   // --- état effectif et anomalies par instance ------------------------------------------------------
+  // Seuil de budget-au-seuil : celui de budget-watch (seuil_budget_pct, défaut 80), jamais 0,8 en dur (MSG-004, point 10).
+  const seuilPct = num(param('seuil_budget_pct', ''));
+  const seuilBudget = seuilPct > 0 && seuilPct < 100 ? seuilPct / 100 : 0.8;
   for (const inst of e.instances) {
     const l = inst.live;
     const hib = /hibernation volontaire/i.test(inst.note);
+    // Attente d'une limite d'API (U7, §18.3) : live/<chemin>.attente.json au pid vivant.
+    const attente = live.attentes[tirets(inst.chemin)];
+    // Point 6 (MSG-utilisateur-004) : un pid réutilisé (starttime noté différent) n'est pas le lanceur.
+    const stAttente = attente && attente.starttime && d.starttimeDe ? d.starttimeDe(attente.pid) : null;
+    const attenteVivante = !!(attente && d.pidVivant(attente.pid) && (stAttente === null || stAttente === attente.starttime));
     let eff;
     if (l.vivant) {
       const ctx = inst.transcription && inst.transcription.contexte ? `${Math.round(inst.transcription.contexte / 1000)}k tokens` : (inst.contexte ? `~${Math.round(inst.contexte.dernier / 1000)}k tokens` : 'contexte inconnu');
       eff = `${inst.etat} · session vivante${l.pidClaude ? ` (pid ${l.pidClaude}` : (l.verrou ? ` (lanceur ${l.verrou.pid}` : ' (')}${l.secondes != null ? `, ${Math.round(l.secondes / 60)} min` : ''}, ${ctx})`;
       if (l.arretDemande) eff += ' · arrêt demandé';
     } else if (inst.etat === 'WORKING') {
-      if (l.tache && l.tache.state === 'running' && l.tache.vivant) eff = 'WORKING · lanceur vivant entre deux sessions (attente 429 ou ré-incarnation)';
+      // Attente vivante : un « relancer » créerait un second lanceur (point 10) — seule attente-limite est émise.
+      if (attenteVivante) eff = 'WORKING · lanceur vivant en attente d\'une limite 429';
+      else if (l.tache && l.tache.state === 'running' && l.tache.vivant) eff = 'WORKING · lanceur vivant entre deux sessions (attente 429 ou ré-incarnation)';
       else if (hib) eff = 'WORKING · hibernation volontaire, relance attendue';
       else { eff = 'WORKING · aucune session vivante (session tuée ou plantée ?)'; anomalie('alerte', 'working-sans-session', inst.chemin, `STATUS WORKING sans verrou ni processus — session tuée ou plantée : relancer (node framework/bin/holarch-spawn.js ${inst.chemin})`); }
     } else if (inst.etat === 'WAITING_CHILDREN' || inst.etat === 'BLOCKED') {
@@ -468,6 +530,30 @@ function collecter(root, depsSur) {
     else eff = inst.etat || '(STATUS illisible)';
     inst.effectif = eff;
     if (l.verrou && !l.verrou.vivant) anomalie('alerte', 'verrou-perime', inst.chemin, `verrou live/${tirets(inst.chemin)}.json au pid ${l.verrou.pid} mort — nettoyé au prochain appel du lanceur pour cette instance`);
+    // Session coupée par le fusible de budget (U7, §18.3) : dernière ligne SESSIONS.md de l'instance.
+    const derniereFin = derniereFinParInstance.get(inst.chemin) || '';
+    // MSG-utilisateur-004 D : déjà relancée (verrou ou tâche vivants) → plus rien à relancer, l'alerte se tait.
+    const relancee = !!((l.verrou && l.verrou.vivant) || (l.tache && l.tache.state === 'running' && l.tache.vivant));
+    if (derniereFin.startsWith('coupée (fusible)') && !relancee) anomalie('alerte', 'session-coupee-fusible', inst.chemin, 'session coupée par le fusible de budget, relancer.');
+    // Budget au seuil (U7, §18.2/18.3) : live/<chemin>.budget.json d'une session vivante, ordre d'hiberner
+    // déjà émis (ordre_a est un nombre) ou ratio ≥ seuil_budget_pct.
+    const budget = live.budgets[tirets(inst.chemin)];
+    if (budget && l.vivant) {
+      // Revue n° 36 : ratio_total (principal + sous-agents) et réserve franchie par un sous-agent comptent aussi.
+      const ordreEmis = (typeof budget.ordre_a === 'number' && Number.isFinite(budget.ordre_a))
+        || (Array.isArray(budget.consigne_sous_agents) && budget.consigne_sous_agents.length > 0);
+      const avecTotal = typeof budget.ratio_total === 'number' && budget.ratio_total > (budget.ratio || 0);
+      const ratioEff = avecTotal ? budget.ratio_total : budget.ratio;
+      const ratioAuSeuil = typeof ratioEff === 'number' && ratioEff >= seuilBudget;
+      if (ordreEmis || ratioAuSeuil) {
+        const pct = Math.round((ratioEff || 0) * 100);
+        const depense = avecTotal ? `${Math.round(budget.depense_totale * 100) / 100} dont sous-agents` : budget.depense;
+        anomalie('info', 'budget-au-seuil', inst.chemin, `${inst.chemin} à ${pct}% de son budget (${depense}/${budget.plafond} USD)`);
+      }
+    }
+    if (attenteVivante) {
+      anomalie('alerte', 'attente-limite', inst.chemin, `${inst.chemin} attend la limite jusqu'à ${horaireUTC(attente.jusqua)} (${attente.motif})`);
+    }
     if (inst.org && inst.etat && inst.org !== inst.etat) anomalie('info', 'org-en-retard', inst.chemin, `ORG.md dit ${inst.org}, STATUS.md dit ${inst.etat} (ORG est tenu par le parent à ses unités)`);
     if (inst.fiche.statut && inst.etat && inst.fiche.statut !== inst.etat && !(inst.fiche.statut === 'INIT' && inst.etat === 'WORKING' && l.vivant)) anomalie('info', 'fiche-en-retard', inst.chemin, `fiche registre à ${inst.fiche.statut}, STATUS.md à ${inst.etat}`);
     if (inst.git.nonCommittes && inst.git.nonCommittes.length && !l.vivant) anomalie('info', 'worktree-non-committe', inst.chemin, `${inst.git.nonCommittes.length} fichier(s) non committé(s) dans son worktree sans session vivante (repris à sa prochaine incarnation)`);
@@ -480,10 +566,96 @@ function collecter(root, depsSur) {
     if (l.vivant && l.secondes && l.secondes >= SESSION_LONGUE_S) anomalie('alerte', 'session-longue', inst.chemin, `session vivante depuis ${Math.round(l.secondes / 60)} min (pid ${l.pidClaude || '?'}) — vérifier la transcription (\`node tools/holarch-transcript/analyse.js <session>\`) avant qu'un fusible ne parle`);
     if (l.vivant && inst.transcription && inst.transcription.contexte && e.mission.seuilContexteTokens && inst.transcription.contexte >= e.mission.seuilContexteTokens) anomalie('info', 'contexte-au-seuil', inst.chemin, `contexte ${Math.round(inst.transcription.contexte / 1000)}k ≥ seuil ${Math.round(e.mission.seuilContexteTokens / 1000)}k : hibernation imminente`);
   }
+  // MSG-utilisateur-004 D : un --bootstrap bloqué par un 429 attend avant que la racine n'existe (pas encore
+  // d'instance à parcourir) — son attente vivante est signalée quand même, sous le nom du verrou.
+  const connues = new Set(e.instances.map((i) => tirets(i.chemin)));
+  for (const [nom, attente] of Object.entries(live.attentes)) {
+    if (connues.has(nom) || !attente || !d.pidVivant(attente.pid)) continue;
+    const st = attente.starttime && d.starttimeDe ? d.starttimeDe(attente.pid) : null;
+    if (st !== null && st !== attente.starttime) continue;
+    anomalie('alerte', 'attente-limite', nom, `${nom} (pas encore d'instance : bootstrap ?) attend la limite jusqu'à ${horaireUTC(attente.jusqua)} (${attente.motif})`);
+  }
   for (const inst of e.instances) {
     for (const p of e.processus) if (p.role === 'claude' && p.chemin === inst.chemin && !inst.live.verrou) anomalie('info', 'processus-sans-verrou', inst.chemin, `claude -p (pid ${p.pid}) sans verrou live/ : lancé hors lanceur ?`);
   }
   for (const p of e.processus) if (p.chemin && !parChemin.has(p.chemin) && p.chemin !== 'bootstrap') anomalie('info', 'processus-inconnu', p.chemin, `processus ${p.role} (pid ${p.pid}) pour une instance sans STATUS.md`);
+
+  // --- jobs, charge machine, lots payants (chantier 16, §18.4-18.6) ---------------------------------
+  const lireJson = (abs) => { try { return JSON.parse(d.lire(abs) || ''); } catch (_) { return null; } };
+  const jobsDir = path.join(holarch, 'jobs');
+  const jobs = d.lister(jobsDir).filter((f) => !f.dossier && f.nom.endsWith('.json')).map((f) => lireJson(path.join(jobsDir, f.nom))).filter((j) => j && j.id);
+  const TERMINAUX_JOB = new Set(['fini', 'echoue', 'arrete', 'interrompu']);
+  const silenceMs = (num(param('job_silence_max_min', '')) || 10) * 60 * 1000;
+  const superviseurs = new Set();
+  const pgidsJobs = new Set();
+  e.jobs = [];
+  for (const j of jobs) {
+    const vivant = !TERMINAUX_JOB.has(j.etat) && d.pidVivant(j.pid_superviseur);
+    e.jobs.push({ id: j.id, proprietaire: j.proprietaire, etat: j.etat, lourd: !!j.lourd, vivant });
+    if (TERMINAUX_JOB.has(j.etat)) continue;
+    if (!vivant) { anomalie('alerte', 'job-orphelin', j.proprietaire, `job ${j.id} (${j.proprietaire}) ${j.etat}, superviseur mort — \`node framework/bin/holarch-job.js reprendre\``); continue; }
+    superviseurs.add(j.pid_superviseur);
+    if (j.pgid) pgidsJobs.add(j.pgid);
+    // Seconde revue n° 55 : un job en file au-delà de 3 × job_silence_max_min (jetons tenus, mémoire sous le plus haut
+    // plancher vivant) le dit, au lieu d'une file bloquée sans personne pour le voir.
+    if (j.etat === 'en-file') {
+      const st = d.stat(path.join(jobsDir, `${j.id}.json`));
+      const depuis = st ? Date.parse(st.modifie) : NaN;
+      if (Number.isFinite(depuis) && nowMs - depuis > 3 * silenceMs) anomalie('alerte', 'job-en-file-long', j.proprietaire, `job ${j.id} en file depuis ${Math.round((nowMs - depuis) / 60000)} min : jetons machine tenus ou mémoire sous le plancher (memoire_libre_min_mo)`);
+    }
+    if (j.etat !== 'en-cours') continue; // en-file et suspendu n'ont pas à progresser
+    // Revue n° 30 : --progression relatif se lit depuis le cwd du job, jamais depuis celui d'observe.
+    const progression = j.progression ? path.resolve(j.cwd || root, j.progression) : null;
+    const battements = [path.join(jobsDir, `${j.id}.log`), progression].filter(Boolean).map((p) => d.stat(p)).filter(Boolean).map((s) => Date.parse(s.modifie));
+    const battement = battements.length ? Math.max(...battements) : Date.parse(j.debut || '') || nowMs;
+    if (nowMs - battement > silenceMs) anomalie('alerte', 'job-sans-progres', j.proprietaire, `job ${j.id} sans progrès depuis ${Math.round((nowMs - battement) / 60000)} min (journal et progression immobiles)`);
+  }
+  // Jetons machine vivants (amendement 6) : leurs superviseurs, même d'une autre mission, couvrent leurs groupes.
+  const chargeDir = d.chargeDir();
+  for (const f of d.lister(chargeDir)) {
+    if (f.dossier || !/^jeton-\d+$/.test(f.nom)) continue;
+    const jt = lireJson(path.join(chargeDir, f.nom));
+    if (jt && d.pidVivant(jt.pid)) superviseurs.add(jt.pid);
+  }
+  const motifs = String(param('motifs_lourds', '') || 'ffmpeg, blender, melt, magick').replace(/^`|`$/g, '').split(',').map((m) => m.trim()).filter(Boolean);
+  let reLourd = null;
+  try { reLourd = new RegExp(`(^|[/\\s])(${motifs.join('|')})(\\s|$)`); } catch (_) { reLourd = null; }
+  if (reLourd) {
+    const procs = d.processus();
+    const parPid = new Map(procs.map((p) => [p.pid, p]));
+    const couvert = (p) => {
+      if (pgidsJobs.has(p.pgid)) return true;
+      for (let q = p, n = 0; q && n < 64; q = parPid.get(q.ppid), n++) if (superviseurs.has(q.pid) || superviseurs.has(q.ppid)) return true;
+      return false;
+    };
+    for (const p of procs) if (reLourd.test(p.commande) && !couvert(p)) anomalie('alerte', 'lourd-hors-job', '', `processus lourd hors job (pid ${p.pid}) : ${p.commande.slice(0, 80)} — \`holarch-job lancer --lourd\` le mettrait sous jetons machine`);
+  }
+  // Lots : coût des services (couts.jsonl fait foi, amendement 1 ; lignes de COUTS-SERVICES.md absentes ajoutées).
+  const couts = (d.lire(path.join(holarch, 'lots', 'couts.jsonl')) || '').split('\n').map((l) => { try { return JSON.parse(l); } catch (_) { return null; } }).filter(Boolean);
+  const vusCout = new Set(couts.map((c) => `${String(c.empreinte || '').slice(0, 12)}|${c.date}`));
+  let coutServices = couts.reduce((s, c) => s + (num(c.cout_usd) || 0), 0);
+  for (const l of (lireRel('mission/registry/COUTS-SERVICES.md') || '').split('\n')) {
+    const c = l.split(/(?<!\\)\|/).slice(1, -1).map((x) => x.trim()); // revue n° 21 : « \| » échappé
+    if (c.length < 9 || !/^\d{4}-/.test(c[0]) || vusCout.has(`${c[4]}|${c[0]}`)) continue;
+    coutServices += num(c[5].replace(/[≈$\s]/g, '')) || 0;
+  }
+  const budgetServices = num(param('budget_services_usd', '')) || 0;
+  e.mission.coutServicesUsd = Math.round(coutServices * 10000) / 10000;
+  e.mission.budgetServicesUsd = budgetServices;
+  if (budgetServices > 0 && coutServices >= 0.8 * budgetServices) anomalie('alerte', 'budget-services-au-seuil', '', `services : ${coutServices.toFixed(2)} USD sur ${budgetServices} (${Math.round((coutServices / budgetServices) * 100)} %)`);
+  const lotsDir = path.join(holarch, 'lots');
+  for (const f of d.lister(lotsDir)) {
+    if (f.dossier || !f.nom.endsWith('.lock') || f.nom === 'budget.lock') continue;
+    const v = lireJson(path.join(lotsDir, f.nom));
+    if (!v || !d.pidVivant(v.pid)) continue;
+    const job = jobs.find((j) => j.id === v.job);
+    const idx = job && Array.isArray(job.commande) ? job.commande.indexOf('jouer-lot') : -1;
+    const lot = idx >= 0 ? lireJson(path.resolve(job.cwd || root, job.commande[idx + 1])) : null;
+    const nomLot = (lot && lot.nom) || (job && job.nom) || f.nom.slice(0, 12);
+    const total = lot && Array.isArray(lot.elements) ? lot.elements.length : '?';
+    const faits = couts.filter((c) => c.lot === nomLot && (!v.debut || String(c.date) >= v.debut)).length;
+    anomalie('info', 'lot-en-cours', v.proprietaire || '', `lot ${nomLot} (${v.proprietaire || '?'}) : ${faits}/${total} élément(s)`);
+  }
 
   // --- messages : ce qui attend une réponse, ce qui attend le mainteneur ----------------------------
   const repondus = new Set(messages.filter((m) => m.type === 'RESPONSE' && m.ref && m.ref !== '—').map((m) => m.ref));

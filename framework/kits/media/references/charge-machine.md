@@ -4,6 +4,9 @@ Garantit : les rendus locaux (ffmpeg, super-résolution, synthèse vocale) ralen
 et de forcer un redémarrage qui tue toutes les sessions en cours.
 Vérifier : `python3 verificateurs/garde-charge.py --a-sec` (décisions sur états simulés), puis
 `garde-charge.py --une-fois` en réel : une ligne par processus de rendu vu et l'action décidée.
+Sous HOLARCH (module `jobs-et-lots`) : `node framework/bin/holarch-job.js lancer <nom> --lourd -- <commande>` porte déjà
+l'admission par jetons machine (`jobs_lourds_max`) et la suspension sous `memoire_libre_min_mo` ; `garde-charge.py`
+reste l'outil hors HOLARCH et le contrôle des processus lancés sans job.
 
 ## Ce qui arrive sans garde
 Trois rendus ffmpeg et une super-résolution lancés en parallèle par deux instances : la mémoire disponible tombe à

@@ -286,6 +286,72 @@ test('autocompact_tokens (§9.3) : doit rester strictement au-dessus de seuil_co
   assert.ok(contient(inferieur.erreurs, '"autocompact_tokens" (90000) doit être strictement supérieur à "seuil_contexte_tokens" (120000)'));
 });
 
+// ------------------------------------- chantier 16, §18.1-18.2 — paramètres de budget-watch
+
+test('seuil_budget_pct (§18.1) : entier 50 à 95 accepté, absence tolérée, hors bornes ou illisible → erreur', () => {
+  assert.deepStrictEqual(run(config()).erreurs, [], 'absence tolérée');
+  for (const v of ['50', '80', '95']) {
+    assert.deepStrictEqual(run(config({ parametres: { seuil_budget_pct: v } })).erreurs, [], `seuil_budget_pct=${v}`);
+  }
+  assert.ok(contient(run(config({ parametres: { seuil_budget_pct: '49' } })).erreurs, '"seuil_budget_pct"'), '49 hors bornes');
+  assert.ok(contient(run(config({ parametres: { seuil_budget_pct: '96' } })).erreurs, '"seuil_budget_pct"'), '96 hors bornes');
+  assert.ok(contient(run(config({ parametres: { seuil_budget_pct: '80.5' } })).erreurs, '"seuil_budget_pct"'), 'non entier');
+  assert.ok(contient(run(config({ parametres: { seuil_budget_pct: 'beaucoup' } })).erreurs, '"seuil_budget_pct"'), 'texte illisible');
+});
+
+test('budget_usd_session_max (§18.2) : nombre positif ≥ budget_usd_par_session, absence tolérée', () => {
+  assert.deepStrictEqual(run(config()).erreurs, [], 'absence tolérée');
+  assert.deepStrictEqual(run(config({ parametres: { budget_usd_session_max: '10' } })).erreurs, [], 'sans budget_usd_par_session : juste positif suffit');
+  assert.deepStrictEqual(run(config({ parametres: { budget_usd_par_session: '5', budget_usd_session_max: '10' } })).erreurs, []);
+  assert.deepStrictEqual(run(config({ parametres: { budget_usd_par_session: '5', budget_usd_session_max: '5' } })).erreurs, [], 'égal accepté (>=)');
+  assert.ok(contient(run(config({ parametres: { budget_usd_session_max: '0' } })).erreurs, '"budget_usd_session_max"'), 'zéro refusé');
+  assert.ok(contient(run(config({ parametres: { budget_usd_session_max: '-3' } })).erreurs, '"budget_usd_session_max"'), 'négatif refusé');
+  assert.ok(contient(run(config({ parametres: { budget_usd_session_max: 'beaucoup' } })).erreurs, '"budget_usd_session_max"'), 'texte refusé');
+  assert.ok(contient(run(config({ parametres: { budget_usd_par_session: '5', budget_usd_session_max: '3' } })).erreurs, '"budget_usd_session_max"'), 'max < par_session refusé');
+});
+
+test('troisième revue n° 81 : lint et lanceur jugent pareil les montants USD (« 1e2 », vide, « 8,5 »)', () => {
+  assert.ok(contient(run(config({ parametres: { budget_usd_session_max: '1e2' } })).erreurs, '"budget_usd_session_max"'), 'max « 1e2 » : le lanceur le refuse, le lint aussi');
+  assert.deepStrictEqual(run(config({ parametres: { budget_usd_session_max: '' } })).erreurs, [], 'max vide : absent pour le lanceur (défaut 20), toléré');
+  assert.deepStrictEqual(run(config({ parametres: { budget_usd_par_session: '' } })).erreurs, [], 'par_session vide : absent pour le lanceur, toléré');
+  assert.deepStrictEqual(run(config({ parametres: { budget_usd_par_session: '8,5' } })).erreurs, [], 'par_session « 8,5 » : le lanceur prend 8,5, le lint l\'accepte');
+  assert.ok(contient(run(config({ parametres: { budget_usd_par_session: '1e1' } })).erreurs, '"budget_usd_par_session"'), 'par_session « 1e1 » refusé comme par le lanceur');
+  assert.ok(contient(run(config({ parametres: { budget_usd_par_session: '8,5', budget_usd_session_max: '8' } })).erreurs, '"budget_usd_session_max"'), 'max 8 < par_session 8,5 refusé');
+  const bs = path.join(__dirname, '..', '..', 'framework', 'bin', 'budget-session.js');
+  if (fs.existsSync(bs)) {
+    const { lireNombre, refusPlafond } = require(bs);
+    for (const v of ['1e2', '8,5', '', ' 12 ', '0x10', '.5', 'Infinity']) {
+      const lanceurRefuse = refusPlafond({ budget_usd_session_max: v }) !== null;
+      const lintRefuse = contient(run(config({ parametres: { budget_usd_session_max: v } })).erreurs, '"budget_usd_session_max"');
+      assert.equal(lintRefuse, lanceurRefuse, `max « ${v} » : lint ${lintRefuse}, lanceur ${lanceurRefuse} (lireNombre → ${lireNombre(v)})`);
+    }
+  }
+});
+
+// ------------------------------------- chantier 16, §18.4-18.7 — jobs, charge machine, lots
+
+test('paramètres jobs et lots (§18.4-18.7) : valeurs valides acceptées sans avertissement, invalides → erreur nommée', () => {
+  const valides = {
+    jobs_lourds_max: '2', memoire_libre_min_mo: '0', job_silence_max_min: '10', job_duree_min: '2',
+    budget_services_usd: '12.5', motifs_lourds: 'ffmpeg, blender, melt, magick',
+  };
+  const r = run(config({ parametres: valides }));
+  assert.deepStrictEqual(r.erreurs, []);
+  for (const nom of Object.keys(valides)) {
+    assert.ok(!contient(r.avertissements, `"${nom}" présent dans CONFIG.md`), `${nom} reconnu : aucun avertissement`);
+  }
+  assert.deepStrictEqual(run(config({ parametres: { budget_services_usd: '0' } })).erreurs, [], 'budget 0 accepté (défaut)');
+  const invalides = [
+    ['jobs_lourds_max', '0'], ['jobs_lourds_max', '1.5'], ['memoire_libre_min_mo', '-1'],
+    ['job_silence_max_min', '0'], ['job_duree_min', 'deux'], ['budget_services_usd', '-1'],
+    ['budget_services_usd', 'beaucoup'], ['motifs_lourds', '—'], ['motifs_lourds', 'ffmpeg, ('],
+    ['motifs_lourds', 'ffmpeg,,blender'],
+  ];
+  for (const [nom, v] of invalides) {
+    assert.ok(contient(run(config({ parametres: { [nom]: v } })).erreurs, `"${nom}"`), `${nom}=${v} refusé`);
+  }
+});
+
 // --------------------------------------------- 1.1 / 1.2 — contrôles bootstrap
 
 test('--bootstrap-check sur un dépôt portant déjà une mission → erreurs (étape 1.2)', () => {
@@ -320,7 +386,7 @@ test('sans --bootstrap-check, aucun contrôle de système de fichiers n\'est fai
 
 // ------------------------------------------------------------ parsing unitaire
 
-test('parseManifest lit 22 modules, leurs catégories et leurs incompatibilités', () => {
+test('parseManifest lit 23 modules (22 avant promotion du chantier 16), leurs catégories et leurs incompatibilités', () => {
   // 20 = 14 côté framework public + `milestone-reviews`/`git-branches` (propres à cette mission)
   // - `activity-log` (non synchronisé, cf. registry/DECISIONS.md 2026-09-04T15:20:00Z)
   // + `reserve-hibernation`/`delegation-budget`/`role-personality` (mission holon-v2, itération 5-6,
@@ -329,7 +395,10 @@ test('parseManifest lit 22 modules, leurs catégories et leurs incompatibilités
   // + `unites-indexees` (chantier 1, promu le 2026-09-10, framework 1.2.0).
   // + `delegation-intra-session` (chantier 7, `docs/IMPLEMENTATION.md` §9.1, 2026-09-11) = 21.
   const m = lint.parseManifest(MANIFEST);
-  assert.strictEqual(m.size, 22); // + `regles-du-metier` (chantier 17, §17.1)
+  // + `regles-du-metier` (chantier 17, §17.1) = 22 ; + `jobs-et-lots` (chantier 16, §18.7) = 23 une fois promu —
+  // ce test tourne aussi depuis le paquet, contre le MANIFEST.md du dépôt qui ne le catalogue pas encore.
+  assert.strictEqual(m.size, 22 + (m.has('jobs-et-lots') ? 1 : 0));
+  if (m.has('jobs-et-lots')) assert.strictEqual(m.get('jobs-et-lots').categorie, 'extensions');
   assert.strictEqual(m.get('direct-spawn').categorie, 'orchestration');
   assert.deepStrictEqual(m.get('fork-join').incompatible, ['dependency-graph']);
   assert.deepStrictEqual(m.get('sharded-files').incompatible, []);

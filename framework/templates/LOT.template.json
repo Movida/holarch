@@ -1,0 +1,24 @@
+{
+  "_doc": "Gabarit de lot payant (chantier 16 §18.6, docs/IMPLEMENTATION.md ; conception mission/shared/concepteur/CONCEPTION-JOBS.md §4). Lancé par `holarch-job lot <ce-fichier> [--devis] [--plafond <usd>]`. Chemins (entrees, sortie) relatifs à ce fichier, jamais absolus. `commande` et `valider` sont des tableaux d'argv, jamais un shell : `{entree:n}` (n-ième entrée de l'élément), `{sortie}` et `{param:cle}` sont résolus avant l'appel ; `{param:cle}` absent des `parametres` d'un élément est un refus avant tout devis. `paralleles` (défaut 2) borne le nombre d'éléments joués en même temps. La commande doit imprimer, sur sa dernière ligne de sortie standard, `{\"cout_usd\": <nombre>}` pour déclarer son coût réel (sinon l'estimation `cout_estime_usd` est reprise, marquée '≈' dans le registre). `valider` (optionnel) reçoit `{fichier}` = la sortie produite ; code de sortie non nul ⇒ élément en échec.",
+  "nom": "exemple-sous-titrage",
+  "service": "sous-titrage-ia",
+  "paralleles": 2,
+  "commande": ["sous-titreur", "{entree:0}", "--langue", "{param:langue}", "-o", "{sortie}"],
+  "valider": ["ffprobe", "{fichier}"],
+  "elements": [
+    {
+      "id": "scene-01",
+      "entrees": ["sources/scene-01.mp4"],
+      "parametres": { "langue": "fr" },
+      "sortie": "sortie/scene-01.srt",
+      "cout_estime_usd": 0.05
+    },
+    {
+      "id": "scene-02",
+      "entrees": ["sources/scene-02.mp4"],
+      "parametres": { "langue": "fr" },
+      "sortie": "sortie/scene-02.srt",
+      "cout_estime_usd": 0.05
+    }
+  ]
+}

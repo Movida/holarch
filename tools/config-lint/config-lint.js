@@ -24,13 +24,28 @@ const PERMISSION_MODES = ['acceptEdits', 'default', 'manual', 'plan', 'auto', 'd
 const FORMATS_RAPPORT = ['simple', 'executive-summary'];
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const PROFILS = ['conception', 'execution', 'relecture', 'exploration'];
-const ENTIERS_POSITIFS = ['budget_usd_par_session', 'max_tours_par_session', 'seuil_contexte_tokens', 'autocompact_tokens'];
+const ENTIERS_POSITIFS = ['max_tours_par_session', 'seuil_contexte_tokens', 'autocompact_tokens'];
+// Troisième revue n° 81 : les montants USD (budget_usd_par_session, budget_usd_session_max) sont lus par la même
+// fonction que le lanceur (framework/bin/budget-session.js, lireNombre) — « 1e2 » refusé, « 8,5 » accepté, vide = absent.
+let lireMontant;
+try { lireMontant = require(path.join(__dirname, '..', '..', 'framework', 'bin', 'budget-session.js')).lireNombre; } catch {
+  // Repli (outil copié sans framework/, paquet non promu) : même règle, recopiée de budget-session.lireNombre.
+  lireMontant = (v) => (typeof v === 'string' && /^[+-]?(\d+([.,]\d*)?|[.,]\d+)$/.test(v.trim()) ? Number(v.trim().replace(',', '.')) : undefined);
+}
 
 // Paramètres transverses reconnus, non portés par un module en particulier
 // (`CONFIG.md` de référence + BOOTSTRAP.md étape 1.3 + étape 3).
 const PARAMETRES_TRANSVERSES = [
   'budget_instances_total', 'langue_de_travail', 'commit_par_session',
   'permission_mode', 'format_rapport_final',
+];
+
+// Chantier 16 (§18.1-18.7) : paramètres lus par le harnais (budget-watch, lanceur, holarch-job,
+// observe) ou par le module `jobs-et-lots`, tous facultatifs — reconnus même si aucun module actif ne
+// les déclare (pas d'avertissement « réclamé par aucun module »), validés s'ils sont présents.
+const PARAMETRES_CHANTIER_16 = [
+  'seuil_budget_pct', 'budget_usd_session_max', 'jobs_lourds_max', 'memoire_libre_min_mo',
+  'job_silence_max_min', 'budget_services_usd', 'motifs_lourds', 'job_duree_min',
 ];
 
 // Chemins pré-bootstrap dont l'existence signale une mission déjà en cours (BOOTSTRAP.md étape 1.2).
@@ -352,7 +367,7 @@ function lintConfig(entree) {
   }
 
   // 1.3.d — paramètres requis par les modules actifs présents dans CONFIG.md.
-  const attendus = new Set(PARAMETRES_TRANSVERSES);
+  const attendus = new Set([...PARAMETRES_TRANSVERSES, ...PARAMETRES_CHANTIER_16]);
   for (const m of connus) {
     const texte = moduleTexts.get(m.nom);
     if (texte === undefined) {
@@ -518,6 +533,60 @@ function lintConfig(entree) {
     if (Number.isFinite(auto) && Number.isFinite(seuil) && auto <= seuil) {
       err(`paramètre "autocompact_tokens" (${auto}) doit être strictement supérieur à "seuil_contexte_tokens" (${seuil}).`);
     }
+  }
+  // Chantier 16, §18.1 : seuil_budget_pct (budget-watch) — entier entre 50 et 95 inclus, absence
+  // tolérée (le hook applique alors son propre défaut).
+  if (config.parametres.has('seuil_budget_pct')) {
+    const v = config.parametres.get('seuil_budget_pct');
+    const n = Number(v);
+    if (!/^\d+$/.test(v) || !Number.isInteger(n) || n < 50 || n > 95) {
+      err(`paramètre "seuil_budget_pct" : "${v}" doit être un entier entre 50 et 95 inclus.`);
+    }
+  }
+  // Chantier 16, §18.2 : budget_usd_session_max (plafond dérogatoire d'une fiche) — nombre
+  // strictement positif, et si `budget_usd_par_session` est présent, supérieur ou égal à lui
+  // (un plafond maximal en-dessous du plafond par défaut n'aurait aucun effet).
+  const montantPresent = (nom) => config.parametres.has(nom) && String(config.parametres.get(nom)).trim() !== '';
+  if (montantPresent('budget_usd_par_session')) {
+    const v = config.parametres.get('budget_usd_par_session');
+    if (!(lireMontant(v) > 0)) err(`paramètre "budget_usd_par_session" : "${v}" n'est pas un nombre positif.`);
+  }
+  if (montantPresent('budget_usd_session_max')) {
+    const v = config.parametres.get('budget_usd_session_max');
+    const n = lireMontant(v);
+    if (!(n > 0)) {
+      err(`paramètre "budget_usd_session_max" : "${v}" doit être un nombre strictement positif.`);
+    } else if (montantPresent('budget_usd_par_session')) {
+      const base = lireMontant(config.parametres.get('budget_usd_par_session'));
+      if (base > 0 && n < base) {
+        err(`paramètre "budget_usd_session_max" (${n}) doit être supérieur ou égal à "budget_usd_par_session" (${base}).`);
+      }
+    }
+  }
+  // Chantier 16, §18.4-18.7 : jobs, charge machine, lots — tous facultatifs (défauts du harnais :
+  // 2, 3000, 10, 0, `ffmpeg|blender|melt|magick`, 2).
+  const entierMin = (nom, min) => {
+    if (!config.parametres.has(nom)) return;
+    const v = String(config.parametres.get(nom));
+    if (!/^\d+$/.test(v) || Number(v) < min) err(`paramètre "${nom}" : "${v}" doit être un entier ≥ ${min}.`);
+  };
+  entierMin('jobs_lourds_max', 1);
+  entierMin('memoire_libre_min_mo', 0);
+  entierMin('job_silence_max_min', 1);
+  entierMin('job_duree_min', 1);
+  if (config.parametres.has('budget_services_usd')) {
+    const v = config.parametres.get('budget_services_usd');
+    const n = Number(String(v).replace(',', '.'));
+    if (estVide(v) || !Number.isFinite(n) || n < 0) err(`paramètre "budget_services_usd" : "${v}" doit être un nombre ≥ 0.`);
+  }
+  // `motifs_lourds` : liste séparée par des virgules (une cellule de table markdown ne peut pas
+  // porter `|`), jointe en alternative par le harnais — écart §18.10 au défaut `ffmpeg|blender|…`.
+  if (config.parametres.has('motifs_lourds')) {
+    const v = String(config.parametres.get('motifs_lourds'));
+    const motifs = v.split(',').map((m) => m.trim());
+    let valide = !estVide(v) && motifs.every((m) => m !== '');
+    try { if (valide) new RegExp(motifs.join('|')); } catch (_e) { valide = false; }
+    if (!valide) err(`paramètre "motifs_lourds" : "${v}" doit être une liste de motifs non vides séparés par des virgules (ex. \`ffmpeg, blender\`).`);
   }
 
   // Chantier 15, §16.4 — brief structuré d'OBJECTIVE.md, TOUJOURS vérifié (pas seulement avec

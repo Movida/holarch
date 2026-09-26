@@ -33,6 +33,21 @@ il découle) :
 - politique de modèle (profil/modèle/effort) valide, paramètres du harnais
   entiers positifs, `haiku` jamais utilisé pour une instance quand
   `direct-spawn` est actif (1.3.f) ;
+- `seuil_budget_pct` (optionnel, `budget-watch`) : entier entre 50 et 95
+  inclus (chantier 16, §18.1) ;
+- `budget_usd_session_max` (optionnel) : nombre strictement positif, et
+  supérieur ou égal à `budget_usd_par_session` si présent (chantier 16, §18.2) ;
+  `budget_usd_par_session` : nombre strictement positif (virgule décimale acceptée) ; les deux
+  montants sont lus par `framework/bin/budget-session.js` (`lireNombre`), comme le lanceur —
+  « 1e2 » refusé, « 8,5 » accepté, valeur vide = paramètre absent ;
+- jobs, charge machine et lots (optionnels, chantier 16, §18.4-18.7) :
+  `jobs_lourds_max` entier ≥ 1, `memoire_libre_min_mo` entier ≥ 0,
+  `job_silence_max_min` et `job_duree_min` entiers ≥ 1, `budget_services_usd`
+  nombre ≥ 0, `motifs_lourds` liste de motifs non vides séparés par des
+  virgules (une cellule de table ne peut porter `|`), expression régulière
+  valide une fois jointe ; ces huit paramètres du chantier 16 sont reconnus
+  même sans module qui les déclare (aucun avertissement « réclamé par aucun
+  module ») ;
 - colonne facultative « Permis » du catalogue de modèles (U5, permis de
   protocole obtenu par `framework/bin/permis.js`) : absente ou vide → aucun
   contrôle (colonne facultative) ; présente mais illisible (attendu

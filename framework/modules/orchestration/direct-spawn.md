@@ -1,6 +1,6 @@
 # Module : direct-spawn
 > Catégorie : orchestration
-> Version : 1.9.0
+> Version : 1.10.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : fork-join, dependency-graph, instance-budget, max-depth, context-budget
@@ -100,6 +100,8 @@ Pour chaque enfant que tu décides de créer, applique d'abord la mécanique str
 Pour chaque livrable de la table Livrables du `ROLE.md` de l'enfant, le parent remplit la colonne « Contrôle » (commande exécutable depuis la racine de travail de l'enfant, code 0 = conforme) ou écrit `—` en motivant l'absence dans la cellule Critères (« lecture sur pièces par le parent : <motif> ») ; un `ROLE.md` sans colonne Contrôle est un défaut de cadrage qui appartient au parent, le hook `deliver-guard` de l'enfant restant inerte ; à `ON_CHILD_DONE`, ces commandes sont ce que le parent rejoue (`--controle`, volet 2).
 
 Technique ou service qu'aucun kit ne couvre, enfant `conception`/`exploration` : ligne `| Veille | <n> |` à sa fiche (≤ n lectures par `outils_veille`, consignées en U0) ; jamais en `execution` (`spawn-guard` refuse).
+
+Exécution lourde (volume, durée) : ligne `| Budget USD / session | <n> |` (12 à 15 USD), racine au défaut ; plafond `budget_usd_session_max` (§18.2).
 
 Tâche couverte par un kit (`framework/kits/<domaine>/`, §17.2) : ligne `- Kits : <domaine>, …` au « Contexte hérité » du `ROLE.md` — `INDEX.md` injecté à chaque réveil (bloc `<kits>`), kit absent refusé ; n'attache que l'utile.
 

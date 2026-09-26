@@ -1,7 +1,7 @@
 # Preset : artefacts
 
-> Usage : mission qui produit des fichiers pour un tiers (média, documents, code livré, données). Socle `solo-light`, plus la spécialisation avant production (`regles-du-metier` : fichier de règles relu en jalon J0), la revue par jalons (`milestone-reviews`) et un arbre de travail par instance (`git-branches`, `isolation = worktree`).
-> En clair : quelqu'un d'autre va regarder, lire ou utiliser ce que la mission fabrique. Avant de produire, l'instance écrit les règles du métier et les fait relire ; à chaque étape, le travail est vérifié sur pièces.
+> Usage : mission qui produit des fichiers pour un tiers (média, documents, code livré, données). Socle `solo-light`, plus la spécialisation avant production (`regles-du-metier` : fichier de règles relu en jalon J0), la revue par jalons (`milestone-reviews`), un arbre de travail par instance (`git-branches`, `isolation = worktree`) et les travaux longs, lourds ou payants hors session (`jobs-et-lots` : `holarch-job`, jetons machine, lots devisés).
+> En clair : quelqu'un d'autre va regarder, lire ou utiliser ce que la mission fabrique. Avant de produire, l'instance écrit les règles du métier et les fait relire ; à chaque étape, le travail est vérifié sur pièces ; un rendu ou un lot payant survit à la session qui l'a lancé et n'est jamais payé deux fois. Sans ligne `budget_services_usd`, tout lot payant est refusé : ajoute-la, avec le montant que tu acceptes de dépenser en services.
 
 Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (sans les balises de bloc) vers `framework/CONFIG.md`, en remplaçant `<nom de la mission>` par un intitulé court. Pour attacher un kit de domaine (`framework/kits/<domaine>/`), ajoute une ligne « Kits » à la section « Contexte hérité » de `mission/OBJECTIVE.md`.
 
@@ -26,6 +26,7 @@ Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (
 | 12 | extensions | git-branches |
 | 13 | extensions | milestone-reviews |
 | 14 | extensions | regles-du-metier |
+| 15 | extensions | jobs-et-lots |
 
 ## Paramètres
 | Paramètre | Valeur |

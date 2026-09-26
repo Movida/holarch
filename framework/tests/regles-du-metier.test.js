@@ -11,7 +11,10 @@
 // MESURE = contrat réduit du preset mesuré le 2026-09-26 sur un clone où tout le paquet du chantier 17 est
 // appliqué (milestone-reviews 1.1.0, fragments kits et veille de direct-spawn ; integration.js), contre 48 167
 // pour solo-light ; MARGE = une ou deux puces de règle ajoutées par un chantier suivant avant remesure.
-const MESURE_ARTEFACTS = 64947;
+// Chantier 16 (§18.7, « mesure avant réglage ») : 15 modules avec `jobs-et-lots` ; mesuré sur un clone où tout
+// le paquet du chantier 16 est appliqué (integration.js, 2026-09-26) : 65 243 avant le module (J1 : +296),
+// 67 424 après (+2 181), 67 533 après la revue finale (n° 44, +109) ; solo-light 48 464, inchangé par le module.
+const MESURE_ARTEFACTS = 67533;
 const MARGE_EVOLUTION = 2000;
 const BORNE_ARTEFACTS = MESURE_ARTEFACTS + MARGE_EVOLUTION;
 const test = require('node:test');
@@ -60,6 +63,13 @@ function manifestTexte() {
     texte = texte.replace('| [milestone-reviews](modules/extensions/milestone-reviews.md) | extensions | 1.0.0 |',
       fs.readFileSync(version, 'utf8').trimEnd());
   }
+  // Chantier 16 (§18.7) : ligne `jobs-et-lots`, fragment du paquet inséré après `regles-du-metier`.
+  const jobs = path.join(CIBLE, 'MANIFEST.fragment-jobs-et-lots.md');
+  const ancreJobs = '| [regles-du-metier](modules/extensions/regles-du-metier.md) | extensions | 1.0.0 |';
+  if (!texte.includes('| [jobs-et-lots]') && fs.existsSync(jobs) && texte.includes(ancreJobs)) {
+    const fin = texte.indexOf('\n', texte.indexOf(ancreJobs)) + 1;
+    texte = texte.slice(0, fin) + fs.readFileSync(jobs, 'utf8') + texte.slice(fin);
+  }
   const fragment = path.join(CIBLE, 'MANIFEST.regles-du-metier.fragment.md');
   if (texte.includes('| [regles-du-metier]') || !fs.existsSync(fragment)) return texte;
   const ancre = texte.indexOf('| [delegation-intra-session]');
@@ -75,7 +85,7 @@ function makeRoot() {
   fs.mkdirSync(fw, { recursive: true });
   fs.copyFileSync(pick('KERNEL.md'), path.join(fw, 'KERNEL.md'));
   fs.cpSync(path.join(DEPOT, 'framework', 'modules'), path.join(fw, 'modules'), { recursive: true });
-  for (const m of ['regles-du-metier.md', 'milestone-reviews.md']) {
+  for (const m of ['regles-du-metier.md', 'milestone-reviews.md', 'jobs-et-lots.md']) {
     fs.copyFileSync(pick(path.join('modules', 'extensions', m)), path.join(fw, 'modules', 'extensions', m));
   }
   fs.writeFileSync(path.join(fw, 'MANIFEST.md'), manifestTexte());
@@ -110,10 +120,10 @@ test('composition du preset artefacts valide : config-lint et validate-module co
   assert.equal(rValidate.status, 0, rValidate.stdout + rValidate.stderr);
 });
 
-test('preset artefacts : 14 modules dont les 4 attendus, paramètres attendus', () => {
+test('preset artefacts : 15 modules dont les 5 attendus, paramètres attendus', () => {
   const cfg = LANCEUR.parseConfig(CONFIG_ARTEFACTS);
-  assert.equal(cfg.modules.length, 14);
-  for (const m of ['regles-du-metier', 'milestone-reviews', 'git-branches', 'delegation-intra-session']) {
+  assert.equal(cfg.modules.length, 15);
+  for (const m of ['regles-du-metier', 'milestone-reviews', 'git-branches', 'delegation-intra-session', 'jobs-et-lots']) {
     assert.ok(cfg.modules.some((x) => x.module === m), `module ${m} attendu dans le preset artefacts`);
   }
   const params = LANCEUR.resolveParams(cfg);
@@ -153,7 +163,7 @@ test('MANIFEST.md : ligne regles-du-metier présente, version alignée avec l\'e
     manifest,
     /\| \[regles-du-metier\]\(modules\/extensions\/regles-du-metier\.md\) \| extensions \| 1\.0\.0 \| — \| — \|/,
   );
-  const moduleText = fs.readFileSync(path.join(CIBLE, 'modules', 'extensions', 'regles-du-metier.md'), 'utf8');
+  const moduleText = fs.readFileSync(pick(path.join('modules', 'extensions', 'regles-du-metier.md')), 'utf8');
   const versionModule = moduleText.match(/^>\s*Version\s*:\s*(.+)$/m)[1].trim();
   const ligne = manifest.match(/\[regles-du-metier\]\([^)]*\)\s*\|\s*extensions\s*\|\s*([^\s|]+)\s*\|/);
   assert.ok(ligne, 'ligne regles-du-metier absente du MANIFEST.md');

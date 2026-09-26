@@ -44,6 +44,8 @@ function formater(e, opts) {
   const t = e.sessions.total;
   const par = Object.entries(e.sessions.parInstance).map(([c, v]) => `${c} ${v.n}×/${usd(v.usd)}`).join(', ');
   l.push(`Coût (SESSIONS.md, tarif liste) : ${t.n} session(s), ${t.tours} tours, ${usd(t.usd)} USD${par ? ` — ${par}` : ''}${e.sessions.sansResultat ? ` · ${e.sessions.sansResultat} sans résultat JSON` : ''}${e.transcriptions.sansJournal.length ? ` · ${e.transcriptions.sansJournal.length} session(s) sans journal (${e.transcriptions.sansJournal.map((x) => `${x.chemin} ${x.tours} tours`).join(', ')})` : ''}`);
+  const cs = e.mission.coutServicesUsd; const bs = e.mission.budgetServicesUsd;
+  if (cs || bs) l.push(`Coût des services (lots, couts.jsonl) : ${usd(cs || 0)} USD${bs ? ` sur ${bs} (${Math.round(((cs || 0) / bs) * 100)} %)` : ' · aucun budget_services_usd'}`);
   if (e.taches.length) l.push(`Tâches détachées : ${e.taches.slice(-5).map((x) => `${x.id} ${x.state}${x.state === 'running' ? (x.vivant ? ' (pid vivant)' : ' (PID MORT)') : ''}${x.arretLanceur ? ' ARRÊT' : ''}`).join(' ; ')}`);
   const pm = e.messagesPourMainteneur.filter((m) => !m.repondu);
   l.push(`Messages : pour le mainteneur ${pm.length ? pm.map((m) => `${m.type} ${m.id} de ${m.from} (${m.date.slice(0, 16)})`).join(' ; ') : 'aucun'} · sans réponse entre instances ${e.messagesSansReponse.length}${e.reveils.length ? ` · dernier réveil ${e.reveils[e.reveils.length - 1].chemin} ${e.reveils[e.reveils.length - 1].date.slice(0, 16)}` : ''}`);

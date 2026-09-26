@@ -258,3 +258,91 @@ test('--sans-commit laisse les modifications non committées', () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** Branche la fixture sur un dépôt nu `amont` (branche amont de HEAD, comme holon-v2/main ici) ; `avancer()` y pousse un
+ *  commit depuis un second clone, sans que la fixture le sache avant son prochain fetch. */
+function brancherAmont(root) {
+  const nu = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-open-amont-'));
+  executer('git', ['init', '-q', '--bare', nu], { doitReussir: true });
+  const branche = executer('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root }).stdout.trim();
+  executer('git', ['remote', 'add', 'amont', nu], { cwd: root, doitReussir: true });
+  executer('git', ['push', '-q', '-u', 'amont', branche], { cwd: root, doitReussir: true });
+  const avancer = () => {
+    const autre = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-open-autre-'));
+    try {
+      executer('git', ['clone', '-q', nu, autre], { doitReussir: true });
+      executer('git', ['config', 'user.email', 'test@example.com'], { cwd: autre, doitReussir: true });
+      executer('git', ['config', 'user.name', 'Test'], { cwd: autre, doitReussir: true });
+      fs.writeFileSync(path.join(autre, 'AILLEURS.md'), 'poussé depuis une autre session\n');
+      executer('git', ['add', 'AILLEURS.md'], { cwd: autre, doitReussir: true });
+      executer('git', ['commit', '-q', '-m', 'ailleurs'], { cwd: autre, doitReussir: true });
+      executer('git', ['push', '-q', 'origin', branche], { cwd: autre, doitReussir: true });
+    } finally {
+      fs.rmSync(autre, { recursive: true, force: true });
+    }
+  };
+  return { nu, avancer };
+}
+
+test('refus : branche en retard sur son amont fraîchement relu (fetch), rien écrit', () => {
+  const { root } = creerFixture();
+  const { nu, avancer } = brancherAmont(root);
+  try {
+    avancer();
+    const r = executer('node', [CHEMIN_OPEN, 'test-mission', '--chantier', '8'], { cwd: root });
+    assert.equal(r.code, 1, `code attendu 1, stdout : ${r.stdout}`);
+    assert.match(r.stderr, /en retard de 1 commit\(s\) sur amont\/\S+, refus.*git pull --ff-only/);
+    assert.equal(fs.existsSync(path.join(root, 'mission', 'OBJECTIVE.md')), false);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(nu, { recursive: true, force: true });
+  }
+});
+
+test('refus : branches divergées, le geste est laissé au mainteneur', () => {
+  const { root } = creerFixture();
+  const { nu, avancer } = brancherAmont(root);
+  try {
+    avancer();
+    fs.writeFileSync(path.join(root, 'ICI.md'), 'commit local non poussé\n');
+    executer('git', ['add', 'ICI.md'], { cwd: root, doitReussir: true });
+    executer('git', ['commit', '-q', '-m', 'ici'], { cwd: root, doitReussir: true });
+    const r = executer('node', [CHEMIN_OPEN, 'test-mission', '--chantier', '8'], { cwd: root });
+    assert.equal(r.code, 1);
+    assert.match(r.stderr, /divergées \(\+1\/-1\).*mainteneur/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(nu, { recursive: true, force: true });
+  }
+});
+
+test('amont à jour (commit local en avance seulement) : ouverture, écart annoncé', () => {
+  const { root } = creerFixture();
+  const { nu } = brancherAmont(root);
+  try {
+    fs.writeFileSync(path.join(root, 'ICI.md'), 'commit local non poussé\n');
+    executer('git', ['add', 'ICI.md'], { cwd: root, doitReussir: true });
+    executer('git', ['commit', '-q', '-m', 'ici'], { cwd: root, doitReussir: true });
+    const r = executer('node', [CHEMIN_OPEN, 'test-mission', '--chantier', '8'], { cwd: root });
+    assert.equal(r.code, 0, `code attendu 0, stderr : ${r.stderr}`);
+    assert.match(r.stdout, /Amont amont\/\S+ relu : 0 commit en retard, 1 à pousser\./);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(nu, { recursive: true, force: true });
+  }
+});
+
+test('amont injoignable : avertissement, ouverture sur la dernière copie locale', () => {
+  const { root } = creerFixture();
+  const { nu } = brancherAmont(root);
+  try {
+    executer('git', ['remote', 'set-url', 'amont', path.join(nu, 'inexistant')], { cwd: root, doitReussir: true });
+    const r = executer('node', [CHEMIN_OPEN, 'test-mission', '--chantier', '8'], { cwd: root });
+    assert.equal(r.code, 0, `code attendu 0, stderr : ${r.stderr}`);
+    assert.match(r.stderr, /Amont amont\/\S+ non relu \(fetch : /);
+    assert.match(r.stdout, /non relu \(dernière copie locale\)/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(nu, { recursive: true, force: true });
+  }
+});

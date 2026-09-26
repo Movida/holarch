@@ -17,11 +17,11 @@ const SOLO = {
   reussite: 'Le clip est validé par le commanditaire.', ampleur: 'solo', dependances: false, audit: false, suivi: true,
 };
 
-test('références non vides (solo) : preset artefacts, trois extensions et paramètres du preset', () => {
+test('références non vides (solo) : preset artefacts, quatre extensions et paramètres du preset', () => {
   const d = init.deriver({ ...SOLO, references: 'Veut : sobre. Ne veut pas : de musique criarde.' });
   assert.strictEqual(d.preset, 'artefacts');
   const noms = d.modules.map((m) => m.nom);
-  for (const n of ['git-branches', 'milestone-reviews', 'regles-du-metier']) assert.ok(noms.includes(n), `${n} absent`);
+  for (const n of ['git-branches', 'milestone-reviews', 'regles-du-metier', 'jobs-et-lots']) assert.ok(noms.includes(n), `${n} absent`);
   assert.ok(noms.indexOf('regles-du-metier') < noms.indexOf('heartbeat-log'), 'extensions avant observabilite');
   assert.strictEqual(d.parametres.mode_attente, 'detache');
   assert.strictEqual(d.parametres.isolation, 'worktree');

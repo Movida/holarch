@@ -1,6 +1,10 @@
 'use strict';
 // Tests du collecteur sur une mission fabriquée dans un dossier temporaire (git réel, worktree réel, transcriptions
 // fabriquées, `ps` injecté). Aucun LLM, aucune écriture hors du dossier temporaire.
+//
+// U7 (chantier 16, §18.1-18.3) : ce fichier tourne depuis ce paquet (`cible-tools/tools/holarch-observe/`) comme
+// après application dans `tools/holarch-observe/` : `collecte.js` voisin ; `observe.js` voisin (livré par ce paquet
+// depuis U21), sinon celui du dépôt (remontée jusqu'à `framework/KERNEL.md`).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -8,7 +12,13 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const collecte = require('./collecte.js');
-const observe = require('./observe.js');
+const OBSERVE_JS = (() => {
+  if (fs.existsSync(path.join(__dirname, 'observe.js'))) return path.join(__dirname, 'observe.js');
+  let d = __dirname;
+  while (!fs.existsSync(path.join(d, 'framework', 'KERNEL.md'))) { const p = path.dirname(d); if (p === d) throw new Error('observe.js introuvable'); d = p; }
+  return path.join(d, 'tools', 'holarch-observe', 'observe.js');
+})();
+const observe = require(OBSERVE_JS);
 
 const ENV_GIT = Object.assign({}, process.env, { GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 't@t', HOME: os.tmpdir(), GIT_CONFIG_GLOBAL: '/dev/null' });
 function git(cwd, args) { const r = spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', env: ENV_GIT }); if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`); return r.stdout; }
@@ -50,7 +60,7 @@ function fabriquer() {
   return { root, wt, tdir };
 }
 function nettoyer(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) { /* ignore */ } }
-function deps(f, sur) { return Object.assign({ ps: () => '', transcriptionsDir: () => f.tdir, pidVivant: (pid) => pid === process.pid }, sur || {}); }
+function deps(f, sur) { return Object.assign({ ps: () => '', transcriptionsDir: () => f.tdir, pidVivant: (pid) => pid === process.pid, processus: () => [], chargeDir: () => path.join(f.root, 'charge-vide') }, sur || {}); }
 const ligneAssistant = (ctx) => JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage: { input_tokens: 2, cache_read_input_tokens: ctx - 2, cache_creation_input_tokens: 0, output_tokens: 10 } } });
 const ligneUser = (contenu) => JSON.stringify({ type: 'user', message: { role: 'user', content: contenu } });
 
@@ -231,11 +241,11 @@ test('observe.js : formatage texte, résumé stable, différence, dossiers obser
     const dossiers = observe.dossiersAObserver(f.root, e);
     assert.ok(dossiers.includes(path.join(f.root, 'mission', '.holarch', 'live')));
     assert.ok(dossiers.includes(path.join(f.wt, 'mission', 'concepteur', 'enfant')));
-    const r = spawnSync(process.execPath, [path.join(__dirname, 'observe.js'), '--root', f.root, '--json'], { encoding: 'utf8', env: Object.assign({}, process.env, { HOLARCH_OBSERVE_PS: '', HOLARCH_OBSERVE_TRANSCRIPTS: f.tdir }) });
+    const r = spawnSync(process.execPath, [OBSERVE_JS, '--root', f.root, '--json'], { encoding: 'utf8', env: Object.assign({}, process.env, { HOLARCH_OBSERVE_PS: '', HOLARCH_OBSERVE_TRANSCRIPTS: f.tdir }) });
     assert.equal(r.status, 0, r.stderr);
     const j = JSON.parse(r.stdout);
     assert.equal(j.mission.nom, 'test-observe'); assert.equal(j.instances.length, 2);
-    const t = spawnSync(process.execPath, [path.join(__dirname, 'observe.js'), '--root', f.root], { encoding: 'utf8', env: Object.assign({}, process.env, { HOLARCH_OBSERVE_PS: '', HOLARCH_OBSERVE_TRANSCRIPTS: f.tdir }) });
+    const t = spawnSync(process.execPath, [OBSERVE_JS, '--root', f.root], { encoding: 'utf8', env: Object.assign({}, process.env, { HOLARCH_OBSERVE_PS: '', HOLARCH_OBSERVE_TRANSCRIPTS: f.tdir }) });
     assert.equal(t.status, 0); assert.match(t.stdout, /Anomalies/);
   } finally { nettoyer(f.root); }
 });
@@ -253,7 +263,7 @@ test('parseurs : ORG indenté, SESSIONS, STATUS, fiche, worktrees porcelain', ()
 });
 
 test('observe --mainteneur : ne garde d\'un résumé que ce qui appelle un geste du mainteneur', () => {
-  const { pourMainteneur } = require('./observe.js');
+  const { pourMainteneur } = observe;
   const r = ['arbre main', 'concepteur WAITING_CHILDREN · attend U7/7 c12', 'concepteur/a WORKING · session vivante U3/5 c4',
     'concepteur/b DELIVERED U6/6 c9', 'concepteur/c FAILED U1/4 c1', 'sessions 9 42.69 USD', 'tâche x-1 running', 'tâche x-2 failed',
     'tâche x-3 done (exit 2)', 'tâche x-4 done ARRÊT', 'mainteneur CLARIFICATION MSG-concepteur-2', 'sans réponse TASK MSG-1 → concepteur/a',
@@ -281,3 +291,190 @@ test('sans-progres : ≥ 4 sessions et aucune unité close = alerte ; session-lo
   } finally { nettoyer(f.root); }
 });
 
+// --------------------------------------------------------------------------------------- U7 (§18.1-18.3)
+
+test('session-coupee-fusible : dernière ligne SESSIONS.md « coupée (fusible) » → alerte ; une ligne normale ultérieure l\'efface', () => {
+  const f = fabriquer();
+  try {
+    let e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((a) => a.code === 'session-coupee-fusible'), 'fixture par défaut : dernière ligne end_turn, pas d\'anomalie');
+    fs.appendFileSync(path.join(f.root, 'mission/registry/SESSIONS.md'), '| 2026-09-12T09:00:00Z | concepteur | s-4444 | opus/high | 10 | 1 / 2 / 3 / 4 | 0.3000 | 2 min | coupée (fusible) | WORKING | — / — | — / — |\n');
+    e = collecte.collecter(f.root, deps(f));
+    const a = e.anomalies.find((x) => x.code === 'session-coupee-fusible' && x.chemin === 'concepteur');
+    assert.ok(a, JSON.stringify(e.anomalies));
+    assert.equal(a.niveau, 'alerte');
+    assert.equal(a.texte, 'session coupée par le fusible de budget, relancer.');
+    // MSG-utilisateur-004 D : session déjà relancée (verrou live vivant) → l'alerte se tait.
+    ecrire(f.root, 'mission/.holarch/live/concepteur.json', JSON.stringify({ pid: process.pid, startedAt: '2026-09-12T09:05:00Z', attempt: 1 }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((x) => x.code === 'session-coupee-fusible'), `relancée : ${JSON.stringify(e.anomalies.map((x) => x.code))}`);
+    fs.unlinkSync(path.join(f.root, 'mission/.holarch/live/concepteur.json'));
+    fs.appendFileSync(path.join(f.root, 'mission/registry/SESSIONS.md'), '| 2026-09-12T09:10:00Z | concepteur | s-5555 | opus/high | 10 | 1 / 2 / 3 / 4 | 0.3000 | 2 min | end_turn | WORKING | — / — | — / — |\n');
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((x) => x.code === 'session-coupee-fusible'), 'une ligne ultérieure normale efface l\'alerte : seule la dernière ligne compte');
+  } finally { nettoyer(f.root); }
+});
+
+test('budget-au-seuil : session vivante avec ratio ≥ 0.8 ou ordre_a émis → info ; sans session vivante ou sous le seuil, aucune anomalie', () => {
+  const f = fabriquer();
+  try {
+    let e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((a) => a.code === 'budget-au-seuil'), 'aucun fichier budget : rien');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's-b1', plafond: 8, depense: 6.4, ratio: 0.8, source: 'catalogue', ordre_a: null }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((a) => a.code === 'budget-au-seuil'), 'ratio au seuil mais pas de session vivante : rien');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.json', JSON.stringify({ pid: process.pid, startedAt: '2026-09-12T09:00:00Z', attempt: 1 }));
+    e = collecte.collecter(f.root, deps(f));
+    const a = e.anomalies.find((x) => x.code === 'budget-au-seuil' && x.chemin === 'concepteur');
+    assert.ok(a, JSON.stringify(e.anomalies));
+    assert.equal(a.niveau, 'info');
+    assert.equal(a.texte, 'concepteur à 80% de son budget (6.4/8 USD)');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's-b1', plafond: 8, depense: 2, ratio: 0.25, source: 'catalogue', ordre_a: null }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((x) => x.code === 'budget-au-seuil'), 'ratio sous le seuil et pas d\'ordre_a : aucune anomalie');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's-b1', plafond: 8, depense: 2, ratio: 0.25, source: 'catalogue', ordre_a: 3 }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(e.anomalies.some((x) => x.code === 'budget-au-seuil' && x.chemin === 'concepteur'), 'ordre_a émis (nombre) déclenche l\'anomalie même sous 0.8');
+  } finally { nettoyer(f.root); }
+});
+
+test('attente-limite : pid vivant → alerte avec heure UTC et motif ; pid mort → aucune anomalie', () => {
+  const f = fabriquer();
+  try {
+    let e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((a) => a.code === 'attente-limite'), 'aucun fichier attente : rien');
+    const pidMort = 2 ** 22 - 3;
+    let vraimentMort = false;
+    try { process.kill(pidMort, 0); } catch (err) { vraimentMort = err && err.code === 'ESRCH'; }
+    assert.ok(vraimentMort, 'le pid choisi pour ce test doit être réellement mort sur cette machine');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.attente.json', JSON.stringify({ pid: pidMort, jusqua: '2026-09-12T14:30:00Z', motif: '429', tentative: 1 }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((a) => a.code === 'attente-limite'), 'pid mort : aucune anomalie');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.attente.json', JSON.stringify({ pid: process.pid, jusqua: '2026-09-12T14:30:00Z', motif: '429', tentative: 1 }));
+    e = collecte.collecter(f.root, deps(f));
+    const a = e.anomalies.find((x) => x.code === 'attente-limite' && x.chemin === 'concepteur');
+    assert.ok(a, JSON.stringify(e.anomalies));
+    assert.equal(a.niveau, 'alerte');
+    assert.equal(a.texte, "concepteur attend la limite jusqu'à 14:30 (429)");
+    // MSG-utilisateur-004, point 10 : pas de « relancer » (working-sans-session) pendant une attente vivante.
+    assert.ok(!e.anomalies.some((x) => x.code === 'working-sans-session' && x.chemin === 'concepteur'), JSON.stringify(e.anomalies));
+    assert.match(e.instances[0].effectif, /attente d'une limite 429/);
+    // Point 6 : même pid vivant, starttime noté différent (pid réutilisé) → pas d'attente vivante.
+    ecrire(f.root, 'mission/.holarch/live/concepteur.attente.json', JSON.stringify({ pid: process.pid, starttime: 'noté', jusqua: '2026-09-12T14:30:00Z', motif: '429', tentative: 1 }));
+    e = collecte.collecter(f.root, deps(f, { starttimeDe: () => 'actuel' }));
+    assert.ok(!e.anomalies.some((x) => x.code === 'attente-limite'), 'pid réutilisé : aucune attente-limite');
+    e = collecte.collecter(f.root, deps(f, { starttimeDe: () => 'noté' }));
+    assert.ok(e.anomalies.some((x) => x.code === 'attente-limite'), 'même starttime : attente-limite');
+    // D : --bootstrap bloqué par un 429 — verrou d'attente sans instance correspondante → signalé quand même.
+    fs.unlinkSync(path.join(f.root, 'mission/.holarch/live/concepteur.attente.json'));
+    ecrire(f.root, 'mission/.holarch/live/racine-neuve.attente.json', JSON.stringify({ pid: process.pid, jusqua: '2026-09-12T14:30:00Z', motif: '429', tentative: 1 }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(e.anomalies.some((x) => x.code === 'attente-limite' && x.chemin === 'racine-neuve'), JSON.stringify(e.anomalies));
+  } finally { nettoyer(f.root); }
+});
+
+test('budget-au-seuil suit seuil_budget_pct (point 10) : 60 % → info à 0,65, rien à 0,55', () => {
+  const f = fabriquer();
+  try {
+    const cfg = fs.readFileSync(path.join(f.root, 'framework/CONFIG.md'), 'utf8');
+    ecrire(f.root, 'framework/CONFIG.md', `${cfg}| seuil_budget_pct | 60 |\n`);
+    ecrire(f.root, 'mission/.holarch/live/concepteur.json', JSON.stringify({ pid: process.pid, startedAt: '2026-09-12T09:00:00Z', attempt: 1 }));
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's', plafond: 10, depense: 6.5, ratio: 0.65, source: 'cli', ordre_a: null }));
+    let e = collecte.collecter(f.root, deps(f));
+    assert.ok(e.anomalies.some((x) => x.code === 'budget-au-seuil'), 'ratio 0,65 ≥ seuil 60 %');
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's', plafond: 10, depense: 5.5, ratio: 0.55, source: 'cli', ordre_a: null }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((x) => x.code === 'budget-au-seuil'), 'ratio 0,55 < seuil 60 %');
+  } finally { nettoyer(f.root); }
+});
+
+// -- chantier 16, §18.4-18.6 : jobs, charge machine, lots ------------------------------------------
+
+test('jobs et lots : job-orphelin, job-sans-progres (horloge simulée), lourd-hors-job (jetons exclus), lot-en-cours, coût et budget des services', () => {
+  const f = fabriquer();
+  try {
+    const cfg = fs.readFileSync(path.join(f.root, 'framework/CONFIG.md'), 'utf8');
+    ecrire(f.root, 'framework/CONFIG.md', `${cfg}| budget_services_usd | 10 |\n| job_silence_max_min | 10 |\n| motifs_lourds | ffmpeg, blender |\n`);
+    const mort = 2 ** 22 - 5;
+    const job = (id, etat, pid, extra) => ecrire(f.root, `mission/.holarch/jobs/${id}.json`, JSON.stringify(Object.assign({ id, proprietaire: 'concepteur', etat, pid_superviseur: pid, pgid: 900, debut: '2026-09-11T10:00:00Z' }, extra || {})));
+    job('orph-1', 'en-cours', mort);
+    job('fini-1', 'fini', mort);
+    job('vif-1', 'en-cours', process.pid, { pgid: 901 });
+    ecrire(f.root, 'mission/.holarch/jobs/vif-1.log', 'x');
+    const logStat = fs.statSync(path.join(f.root, 'mission/.holarch/jobs/vif-1.log'));
+    const charge = path.join(f.root, 'charge');
+    ecrire(f.root, 'charge/jeton-0', JSON.stringify({ pid: 4242, mission: 'autre' }));
+    const procs = [
+      { pid: 10, ppid: 1, pgid: 10, commande: 'ffmpeg -i a.mp4 b.mp4' },
+      { pid: 11, ppid: 4242, pgid: 11, commande: '/usr/bin/blender -b x' },
+      { pid: 12, ppid: 1, pgid: 901, commande: 'ffmpeg -i c.mp4' },
+      { pid: 13, ppid: 1, pgid: 13, commande: 'node ffmpeg-notes.js' },
+    ];
+    ecrire(f.root, 'mission/lots/plans.json', JSON.stringify({ nom: 'plans', elements: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }));
+    job('lot-1', 'en-cours', process.pid, { pgid: 902, cwd: f.root, nom: 'plans', commande: ['node', 'holarch-job.js', 'jouer-lot', 'mission/lots/plans.json', '--cle', 'k'] });
+    ecrire(f.root, 'mission/.holarch/jobs/lot-1.log', 'x');
+    ecrire(f.root, 'mission/.holarch/lots/k.lock', JSON.stringify({ proprietaire: 'concepteur', pid: process.pid, job: 'lot-1', debut: '2026-09-11T10:00:00Z' }));
+    ecrire(f.root, 'mission/.holarch/lots/couts.jsonl', `${JSON.stringify({ date: '2026-09-11T10:05:00Z', lot: 'plans', empreinte: 'aaaaaaaaaaaa1', cout_usd: 5, etat: 'fait' })}\n${JSON.stringify({ date: '2026-09-11T10:06:00Z', lot: 'plans', empreinte: 'bbbbbbbbbbbb1', cout_usd: 2, etat: 'fait' })}\n`);
+    ecrire(f.root, 'mission/registry/COUTS-SERVICES.md', '| Date | Lot | Élément | Service | Empreinte (12) | Coût | Source | Propriétaire | État |\n|---|---|---|---|---|---|---|---|---|\n| 2026-09-11T10:05:00Z | plans | a | s | aaaaaaaaaaaa | 5 | réel | concepteur | fait |\n| 2026-09-11T09:00:00Z | autre \\| 1/2 | z | s | cccccccccccc | ≈1.5 | estimé | concepteur | fait |\n');
+    const now = () => new Date(logStat.mtimeMs + 11 * 60 * 1000);
+    const e = collecte.collecter(f.root, deps(f, { now, chargeDir: () => charge, processus: () => procs, pidVivant: (pid) => pid === process.pid || pid === 4242 }));
+    const codes = (c) => e.anomalies.filter((a) => a.code === c);
+    assert.equal(codes('job-orphelin').length, 1);
+    assert.match(codes('job-orphelin')[0].texte, /orph-1/);
+    assert.deepEqual(codes('job-sans-progres').map((a) => a.texte.includes('vif-1') || a.texte.includes('lot-1')), [true, true]);
+    assert.deepEqual(codes('lourd-hors-job').map((a) => a.texte.match(/pid (\d+)/)[1]), ['10'], JSON.stringify(codes('lourd-hors-job')));
+    assert.equal(codes('lot-en-cours').length, 1);
+    assert.equal(codes('lot-en-cours')[0].texte, 'lot plans (concepteur) : 2/3 élément(s)');
+    assert.equal(e.mission.coutServicesUsd, 8.5, 'revue n° 21 : « \\| » échappé dans le nom du lot ne décale pas le coût');
+    assert.equal(codes('budget-services-au-seuil').length, 1);
+    assert.match(observe.formater(e), new RegExp(`Coût des services \\(lots, couts\\.jsonl\\) : 8\\.50 USD sur ${e.mission.budgetServicesUsd} \\(`));
+    const tot = collecte.collecter(f.root, deps(f, { now: () => new Date(logStat.mtimeMs + 60 * 1000), chargeDir: () => charge, processus: () => procs, pidVivant: (pid) => pid === process.pid || pid === 4242 }));
+    assert.equal(tot.anomalies.filter((a) => a.code === 'job-sans-progres').length, 0, 'journal récent : aucun job-sans-progres');
+  } finally { nettoyer(f.root); }
+});
+
+test('revue n° 30 : --progression relatif lu depuis le cwd du job, pas celui d\'observe (aucune fausse alerte)', () => {
+  const f = fabriquer();
+  try {
+    const cfg = fs.readFileSync(path.join(f.root, 'framework/CONFIG.md'), 'utf8');
+    ecrire(f.root, 'framework/CONFIG.md', `${cfg}| job_silence_max_min | 10 |\n`);
+    const wt = path.join(f.root, 'wt');
+    ecrire(f.root, 'mission/.holarch/jobs/rendu-1.json', JSON.stringify({ id: 'rendu-1', proprietaire: 'concepteur', etat: 'en-cours', pid_superviseur: process.pid, pgid: 903, debut: '2026-09-11T10:00:00Z', cwd: wt, progression: 'out/prog.txt' }));
+    ecrire(f.root, 'mission/.holarch/jobs/rendu-1.log', 'x');
+    ecrire(f.root, 'wt/out/prog.txt', '42 %');
+    const vieux = new Date(Date.now() - 30 * 60 * 1000);
+    fs.utimesSync(path.join(f.root, 'mission/.holarch/jobs/rendu-1.log'), vieux, vieux);
+    const e = collecte.collecter(f.root, deps(f, { now: () => new Date(), pidVivant: (pid) => pid === process.pid }));
+    assert.deepEqual(e.anomalies.filter((a) => a.code === 'job-sans-progres').map((a) => a.texte), []);
+  } finally { nettoyer(f.root); }
+});
+
+test('revue n° 36 : budget-au-seuil lit ratio_total et la réserve franchie par un sous-agent', () => {
+  const f = fabriquer();
+  try {
+    ecrire(f.root, 'mission/.holarch/live/concepteur.json', JSON.stringify({ pid: process.pid, startedAt: '2026-09-12T09:00:00Z', attempt: 1 }));
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's', plafond: 15, depense: 10.5, ratio: 0.7, source: 'cli', ordre_a: null, ratio_total: 13 / 15, depense_totale: 13 }));
+    let e = collecte.collecter(f.root, deps(f));
+    const a = e.anomalies.find((x) => x.code === 'budget-au-seuil');
+    assert.ok(a, 'ratio_total 0,87 ≥ 80 %');
+    assert.match(a.message || a.texte || JSON.stringify(a), /87%.*13 dont sous-agents\/15/);
+    ecrire(f.root, 'mission/.holarch/live/concepteur.budget.json', JSON.stringify({ session_id: 's', plafond: 15, depense: 10.5, ratio: 0.7, source: 'cli', ordre_a: null, ratio_total: 0.75, consigne_sous_agents: ['/t/sa/subagents/a.jsonl'] }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(e.anomalies.some((x) => x.code === 'budget-au-seuil'), 'consigne donnée à un sous-agent = réserve franchie');
+  } finally { nettoyer(f.root); }
+});
+
+test('seconde revue n° 55 : job en file au-delà de 3 × job_silence_max_min → anomalie job-en-file-long', () => {
+  const f = fabriquer();
+  try {
+    const cfg = fs.readFileSync(path.join(f.root, 'framework/CONFIG.md'), 'utf8');
+    ecrire(f.root, 'framework/CONFIG.md', `${cfg}| job_silence_max_min | 10 |\n`);
+    ecrire(f.root, 'mission/.holarch/jobs/file-1.json', JSON.stringify({ id: 'file-1', proprietaire: 'concepteur', etat: 'en-file', pid_superviseur: process.pid, debut: null }));
+    const st = fs.statSync(path.join(f.root, 'mission/.holarch/jobs/file-1.json'));
+    const voir = (min) => collecte.collecter(f.root, deps(f, { now: () => new Date(st.mtimeMs + min * 60 * 1000), pidVivant: (pid) => pid === process.pid }))
+      .anomalies.filter((a) => a.code === 'job-en-file-long');
+    assert.equal(voir(25).length, 0, '25 min < 30 : file normale');
+    assert.equal(voir(31).length, 1);
+    assert.match(voir(31)[0].texte, /file-1 en file depuis 31 min/);
+  } finally { nettoyer(f.root); }
+});
