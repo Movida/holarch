@@ -74,9 +74,9 @@ Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous
 | Profil | Modèle | Effort |
 |---|---|---|
 | conception | opus | high |
-| execution | sonnet | medium |
+| execution | opus | low |
 | relecture | opus | medium |
-| exploration | fable | xhigh |
+| exploration | opus | xhigh |
 
 ## Valeurs organisationnelles
 - La mission a exactement un livrable : un module HOLARCH prêt à être proposé

@@ -70,6 +70,7 @@ function makeRoot() {
   w('framework/bin/reveil.js', fs.readFileSync(REVEIL_SRC, 'utf8'));
   fs.cpSync(EXECUTEURS_SRC, path.join(root, 'framework', 'bin', 'executeurs'), { recursive: true });
   w('framework/bin/catalogue.js', fs.readFileSync(CATALOGUE_SRC, 'utf8'));
+  w('framework/bin/kits.js', fs.readFileSync(path.join(path.dirname(CATALOGUE_SRC), 'kits.js'), 'utf8')); // chantier 17 : require('./kits') au réveil
   fs.cpSync(GARDES_SRC, path.join(root, 'framework', 'bin', 'gardes'), { recursive: true });
   w('tools/message-lint/message-lint.js', fs.readFileSync(MESSAGE_LINT_SRC, 'utf8'));
   w('mission/x/MEMORY.md', '# Mémoire\n## État courant\nOK.\n');

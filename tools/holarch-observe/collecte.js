@@ -388,8 +388,51 @@ function collecter(root, depsSur) {
         } catch (_) { inst.reveilEval = null; }
       }
     }
+    // Livrable sans rejeu (chantier 15, §16.2) : un enfant DELIVERED dont l'OUTBOX contient un
+    // DELIVERABLE mais qu'aucun fichier de mission/.holarch/controles/ n'atteste un `--controle`
+    // postérieur — le parent a pu accepter sans rejouer la colonne Contrôle.
+    if (chemin.includes('/') && st.etat === 'DELIVERED') {
+      const dernier = outbox.filter((m) => m.type === 'DELIVERABLE').sort((a, b) => (Date.parse(a.date) || 0) - (Date.parse(b.date) || 0)).pop();
+      if (dernier) {
+        const dateLivraison = Date.parse(dernier.date) || 0;
+        const dirControles = path.join(root, 'mission', '.holarch', 'controles');
+        const prefixeFichier = `${tirets(chemin)}-`;
+        const rejoueApres = d.lister(dirControles).some((f) => {
+          if (f.dossier || !f.nom.startsWith(prefixeFichier) || !f.nom.endsWith('.json')) return false;
+          const abs = path.join(dirControles, f.nom);
+          let dateControle = null;
+          const contenu = d.lire(abs);
+          if (contenu) { try { dateControle = Date.parse(JSON.parse(contenu).date); } catch (_) { /* ignore */ } }
+          if (!dateControle) { const s = d.stat(abs); dateControle = s ? Date.parse(s.modifie) : 0; }
+          return dateControle >= dateLivraison;
+        });
+        if (!rejoueApres) anomalie('info', 'livrable-sans-rejeu', chemin, `DELIVERED sans fichier de contrôle postérieur à son dernier DELIVERABLE (${dernier.date}) — node framework/bin/holarch-spawn.js --controle ${chemin}`);
+      }
+    }
     parChemin.set(chemin, inst);
     e.instances.push(inst);
+  }
+  // Jalon sans relecture (chantier 17, §17.4, milestone-reviews 1.1.0) : un jalon d'artefact (ROLE.md avec une section
+  // « Validations requises ») accepté — RESPONSE qui le référence, ou dernier DELIVERABLE d'une instance DELIVERED —
+  // sans DELIVERABLE postérieur de sa relecture (`<chemin>-relecture`, ou `<chemin>/relecture` pour un producteur qui
+  // est le parent de sa relecture). Seulement si milestone-reviews figure parmi les modules actifs de CONFIG.md.
+  if (/\|\s*milestone-reviews\s*\|/.test(lireRel('framework/CONFIG.md') || '')) {
+    for (const [chemin, info] of chemins) {
+      if (/(^|[-/])relecture$/.test(chemin)) continue;
+      if (!/^##\s+Validations requises/m.test(lireInstance(info, chemin, 'ROLE.md') || '')) continue;
+      const livres = parseMessages(lireInstance(info, chemin, 'OUTBOX.md')).filter((m) => m.type === 'DELIVERABLE');
+      if (!livres.length) continue;
+      const reponses = new Set(parseMessages(lireInstance(info, chemin, 'INBOX.md')).filter((m) => m.type === 'RESPONSE').map((m) => m.ref));
+      const livre = parChemin.get(chemin) && parChemin.get(chemin).etat === 'DELIVERED';
+      const dernier = livres.reduce((a, b) => ((Date.parse(b.date) || 0) >= (Date.parse(a.date) || 0) ? b : a));
+      const relecteur = [`${chemin}-relecture`, `${chemin}/relecture`].find((c) => chemins.has(c));
+      const relus = relecteur ? parseMessages(lireInstance(chemins.get(relecteur), relecteur, 'OUTBOX.md')).filter((m) => m.type === 'DELIVERABLE').map((m) => Date.parse(m.date) || 0) : [];
+      for (const m of livres) {
+        if (!reponses.has(m.id) && !(livre && m === dernier)) continue;
+        if (relus.some((t) => t >= (Date.parse(m.date) || 0))) continue;
+        anomalie('info', 'jalon-sans-relecture', chemin, `${m.id}${m.ref && m.ref !== '—' ? ` (ref ${m.ref})` : ''} accepté sans DELIVERABLE de relecture postérieur ${relecteur ? `de ${relecteur}` : '(aucune instance de relecture)'} — milestone-reviews 1.1.0`);
+      }
+    }
   }
   // Évaluation des réveils dans un second temps (les états des frères sont connus)
   for (const inst of e.instances) {

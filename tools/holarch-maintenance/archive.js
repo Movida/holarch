@@ -14,7 +14,7 @@ const {
 } = require('./lib/commun.js');
 
 function usage() {
-  return 'usage : node archive.js [--residus <dir>] [--sans-commit]';
+  return 'usage : node archive.js [--residus <dir>] [--sans-commit]\n        node archive.js --kit <domaine> [--source <dir>] [--appliquer]';
 }
 
 function analyserArgs(argv) {
@@ -23,6 +23,9 @@ function analyserArgs(argv) {
     const a = argv[i];
     if (a === '--residus') { args.residus = argv[++i]; }
     else if (a === '--sans-commit') { args.sansCommit = true; }
+    else if (a === '--kit') { args.kit = argv[++i] || ''; }
+    else if (a === '--source') { args.source = argv[++i]; }
+    else if (a === '--appliquer') { args.appliquer = true; }
     else if (a === '--help' || a === '-h') { process.stdout.write(`${usage()}\n`); process.exit(0); }
   }
   return args;
@@ -60,6 +63,12 @@ function fichiersTransverses(cheminDepot, nom) {
 function main() {
   const args = analyserArgs(process.argv.slice(2));
   const cheminDepot = process.cwd();
+  // Chantier 17, §17.2 : `--kit <domaine>` propose (ou, avec --appliquer, copie) règles et vérificateurs vers un kit,
+  // sans archiver ni committer — geste du mainteneur, avant l'archivage (ou après, avec --source docs/archive/…).
+  if (args.kit !== undefined) {
+    process.exitCode = require('./lib/kit.js').executerKit({ depot: cheminDepot, domaine: args.kit, source: args.source, appliquer: args.appliquer });
+    return;
+  }
 
   const { propre, sales } = arbrePropre(cheminDepot, ['mission/registry/']);
   if (!propre) {

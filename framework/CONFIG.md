@@ -34,9 +34,9 @@
 | Profil | Modèle | Effort |
 |---|---|---|
 | conception | opus | high |
-| execution | sonnet | medium |
+| execution | opus | low |
 | relecture | opus | medium |
-| exploration | fable | xhigh |
+| exploration | opus | xhigh |
 
 ## Fournisseurs
 <!-- Catalogue (chantier 9, volet 2 — docs/IMPLEMENTATION.md §11.2). Ce commentaire est placé sous le titre,
@@ -48,7 +48,7 @@ restent vides tant qu'un seul fournisseur est configuré : le repli sur limite (
 et le lanceur garde son comportement d'attente. Pour l'activer : mettre « openrouter » dans la colonne
 Secours d'« anthropic » et déclarer les identifiants équivalents, soit une ligne de catalogue de la forme
 (pipes omis ici : une ligne de table dans un commentaire serait lue comme une ligne de la table précédente)
-  opus@openrouter · openrouter · anthropic/claude-opus-5 · — · 15 / 75 · conception · opus -->
+  opus@openrouter · openrouter · anthropic/claude-opus-5.5 · — · 4 / 20 / 5 / 0,2 · conception · opus -->
 | Nom | Exécuteur | URL (variable) | Jeton (variable) | Secours |
 |---|---|---|---|---|
 | anthropic | claude-code | — | — | — |
@@ -57,7 +57,7 @@ Secours d'« anthropic » et déclarer les identifiants équivalents, soit une l
 ## Catalogue de modèles
 | Identifiant | Fournisseur | Modèle réel | Efforts | Coût entrée / sortie [/ cache écrit / cache lu] (USD par Mtok) | Aptitudes | Équivalent | Fenêtre (tokens) |
 |---|---|---|---|---|---|---|---|
-| opus | anthropic | claude-opus-5 | low…max | 5 / 25 / 6,25 / 0,5 | conception, relecture | — | — |
+| opus | anthropic | claude-opus-5-5 | low…max | 4 / 20 / 5 / 0,2 | conception, execution, relecture, exploration | — | — |
 | sonnet | anthropic | claude-sonnet-5 | low…high | 2 / 10 / 2,5 / 0,2 | execution | — | — |
 | haiku | anthropic | claude-haiku-4-5-20251001 | — | 1 / 5 | — | — | — |
 | fable | anthropic | claude-fable-5-1 | low…max | 10 / 50 / 12,50 / 0,25 | exploration | — | — |

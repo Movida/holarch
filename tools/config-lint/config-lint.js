@@ -257,6 +257,39 @@ function parseModuleParams(texte) {
 }
 
 /**
+ * Vérifie qu'`OBJECTIVE.md` (chantier 15, §16.4) porte les sections attendues du brief structuré
+ * produit par `tools/holarch-init`. Un brief libre (sans ces sections) reste un `OBJECTIVE.md`
+ * valide — cette fonction ne produit que des manques à signaler en avertissement, jamais une erreur.
+ * @param {string} texte contenu d'OBJECTIVE.md
+ * @returns {{manquants: string[]}}
+ */
+function verifierBriefObjective(texte) {
+  const t = String(texte || '');
+  const manquants = [];
+  if (!/^#{2,3}\s*Échéance\s*$/m.test(t)) manquants.push('Échéance');
+  if (!/^#{2,3}\s*Validations requises\s*$/m.test(t)) manquants.push('Validations requises');
+  if (!/^#{2,3}\s*Ressources\s*$/m.test(t)) manquants.push('Ressources');
+  // Table Livrables, où qu'elle soit dans le document : doit porter une colonne Contrôle (chantier
+  // 14, §15.1). Son absence pure et simple n'est PAS un manque : un brief libre (sans table
+  // Livrables) reste valide. On repère l'en-tête de chaque table (première ligne `|…|` d'un bloc,
+  // c'est-à-dire non précédée d'une autre ligne de table) plutôt que de dépendre d'un titre de
+  // section précis : la table peut vivre sous « Critères d'acceptation » ou tout autre intitulé.
+  const lignes = t.split('\n');
+  for (let i = 0; i < lignes.length; i++) {
+    const ligne = lignes[i].trim();
+    if (!ligne.startsWith('|') || /^\|[\s:|-]+\|?$/.test(ligne)) continue;
+    const precedente = i > 0 ? lignes[i - 1].trim() : '';
+    if (precedente.startsWith('|')) continue; // pas la première ligne du bloc : pas un en-tête
+    const cellules = ligne.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => normaliser(c));
+    if (cellules.some((c) => c.includes('livrable')) && !cellules.some((c) => c.includes('controle'))) {
+      manquants.push('colonne Contrôle');
+      break;
+    }
+  }
+  return { manquants };
+}
+
+/**
  * Cœur du lint.
  * @param {{configText:string, manifestText:string, moduleTexts?:Map<string,string>, racine?:string, bootstrapCheck?:boolean}} entree
  * @returns {{erreurs:string[], avertissements:string[], config:object}}
@@ -487,6 +520,20 @@ function lintConfig(entree) {
     }
   }
 
+  // Chantier 15, §16.4 — brief structuré d'OBJECTIVE.md, TOUJOURS vérifié (pas seulement avec
+  // --bootstrap-check) : c'est un avertissement, jamais une erreur, un brief libre reste valide.
+  const racineBrief = entree.racine || process.cwd();
+  const objectiveTexte = (() => {
+    try { return fs.readFileSync(path.join(racineBrief, 'mission', 'OBJECTIVE.md'), 'utf8'); }
+    catch (_e) { return null; }
+  })();
+  if (objectiveTexte !== null) {
+    const { manquants } = verifierBriefObjective(objectiveTexte);
+    if (manquants.length) {
+      avert(`brief incomplet : ${manquants.join(', ')} absentes (mission/OBJECTIVE.md, chantier 15 §16.4) — avertissement seulement, un brief libre reste valide.`);
+    }
+  }
+
   // 1.1 / 1.2 — contrôles pré-bootstrap, uniquement sur demande explicite.
   if (entree.bootstrapCheck) {
     const racine = entree.racine || process.cwd();
@@ -535,6 +582,8 @@ function parseArgs(argv) {
     else if (a === '--racine') o.racine = argv[++i];
     else if (a === '--bootstrap-check') o.bootstrapCheck = true;
     else if (a === '--json') o.json = true;
+    // Chantier 17, §17.2 : forme des kits de domaine (kits-lint.js) ; répertoire facultatif, défaut framework/kits.
+    else if (a === '--kits') o.kits = (argv[i + 1] && !argv[i + 1].startsWith('--')) ? argv[++i] : 'framework/kits';
     else if (a.startsWith('--')) throw new Error(`option inconnue : ${a}`);
     else positionnels.push(a);
   }
@@ -553,6 +602,7 @@ function main(argv) {
     process.stderr.write(`config-lint : ${e.message}\n`);
     return 1;
   }
+  if (options.kits) return mainKits(options);
   let resultat;
   try {
     resultat = lintDepuisDisque(options);
@@ -571,8 +621,21 @@ function main(argv) {
   return resultat.erreurs.length > 0 ? 1 : 0;
 }
 
+function mainKits(options) {
+  const r = require('./kits-lint').lintKits(path.resolve(options.kits));
+  if (options.json) {
+    process.stdout.write(JSON.stringify({ kits: r.kits, erreurs: r.erreurs, avertissements: r.avertissements }, null, 2) + '\n');
+  } else {
+    process.stdout.write(`config-lint · kits ${options.kits} (${r.kits.length} kit(s) : ${r.kits.join(', ') || '—'})\n`);
+    for (const m of r.erreurs) process.stdout.write(`  ERREUR        ${m}\n`);
+    for (const m of r.avertissements) process.stdout.write(`  AVERTISSEMENT ${m}\n`);
+    process.stdout.write(`  → ${r.erreurs.length} erreur(s), ${r.avertissements.length} avertissement(s)\n`);
+  }
+  return r.erreurs.length > 0 ? 1 : 0;
+}
+
 module.exports = { parseManifest, parseConfig, parseModuleParams, lintConfig, lintDepuisDisque, parseArgs, main,
-  effortsDeCellule, permisDeCellule,
+  effortsDeCellule, permisDeCellule, verifierBriefObjective,
   CATEGORIES_OBLIGATOIRES, PERMISSION_MODES, FORMATS_RAPPORT, EFFORTS, PROFILS };
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));

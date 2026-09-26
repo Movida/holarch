@@ -23,6 +23,17 @@ const REPONSES_EQUIPE = {
   reussite: '', ampleur: 'equipe', dependances: true, audit: true, suivi: true,
 };
 
+// Chantier 15, §16.4 : les six questions ajoutées, toutes renseignées (fixture bout en bout).
+const REPONSES_BRIEF_COMPLET = {
+  ...REPONSES_SOLO,
+  echeance: 'Vendredi 17h, devant le comité de pilotage.',
+  decideur: 'Alice (product owner), joignable jusqu\'à jeudi soir.',
+  references: 'Veut : sobre et rapide. Ne veut surtout pas : un carrousel en page d\'accueil.',
+  faits_a_valider: 'Le nom exact du partenaire cité en page d\'accueil.',
+  services: 'Hébergement Vercel, budget 20 USD/mois.',
+  ressources_lourdes: 'Rendu vidéo de la page d\'accueil (~10 minutes).',
+};
+
 function tmp() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-init-'));
 }
@@ -127,6 +138,13 @@ test('validerReponses rejette les formes interactives brutes (\'o\'/\'N\', numé
   assert.ok(init.validerReponses(manquant).some((e) => e.includes('objectif')), 'une clé non facultative absente doit être signalée');
 });
 
+test('les six clés facultatives du chantier 15 (§16.4) sont acceptées absentes, vides ou renseignées', () => {
+  assert.deepStrictEqual(init.validerReponses(REPONSES_SOLO), [], 'anciennes fixtures, sans les six nouvelles clés : toujours valides');
+  const vides = { ...REPONSES_SOLO, echeance: '', decideur: '', references: '', faits_a_valider: '', services: '', ressources_lourdes: '' };
+  assert.deepStrictEqual(init.validerReponses(vides), [], 'chaînes vides acceptées');
+  assert.deepStrictEqual(init.validerReponses(REPONSES_BRIEF_COMPLET), [], 'chaînes renseignées acceptées');
+});
+
 test('le CLI non interactif refuse (code 2) un fichier de réponses aux formes interactives, sans dériver de configuration', () => {
   const dir = tmp();
   const f = path.join(dir, 'reponses.json');
@@ -167,4 +185,34 @@ test('une config sciemment cassée est bien rejetée (le test précédent n\'est
   fs.writeFileSync(fConfig, casse);
   const v = init.validerConfigProduite(fConfig, {});
   assert.ok(v.erreurs.length > 0, 'retirer une catégorie obligatoire doit produire une erreur');
+});
+
+// ---------------------------------------------- chantier 15, §16.4 — brief structuré
+
+test('OBJECTIVE.md — fichier de réponses complet (13 clés) : les trois sections et la porte V1 amorcée', () => {
+  const dir = tmp();
+  const f = path.join(dir, 'reponses.json');
+  fs.writeFileSync(f, JSON.stringify(REPONSES_BRIEF_COMPLET));
+  execFileSync('node', [OUTIL, '--reponses', f, '--out', dir], { encoding: 'utf8' });
+  const objectif = fs.readFileSync(path.join(dir, 'OBJECTIVE.md'), 'utf8');
+  assert.ok(objectif.includes('## Échéance'), 'section Échéance absente');
+  assert.ok(objectif.includes('Vendredi 17h, devant le comité de pilotage.'), 'texte de l\'échéance absent');
+  assert.ok(objectif.includes('## Commanditaire et validations'), 'section Commanditaire et validations absente');
+  assert.ok(objectif.includes('### Validations requises'), 'sous-section Validations requises absente');
+  assert.ok(objectif.includes('| V1 |'), 'porte V1 non amorcée alors qu\'un artefact est déclaré (références/faits à valider)');
+  assert.ok(objectif.includes('## Ressources'), 'section Ressources absente');
+});
+
+test('OBJECTIVE.md — les six clés du chantier 15 vides ou absentes : sections présentes, aucune porte amorcée', () => {
+  const dir = tmp();
+  const f = path.join(dir, 'reponses.json');
+  fs.writeFileSync(f, JSON.stringify(REPONSES_SOLO)); // aucune des six clés n'est fournie
+  execFileSync('node', [OUTIL, '--reponses', f, '--out', dir], { encoding: 'utf8' });
+  const objectif = fs.readFileSync(path.join(dir, 'OBJECTIVE.md'), 'utf8');
+  assert.ok(objectif.includes('## Échéance'));
+  assert.ok(objectif.includes('## Commanditaire et validations'));
+  assert.ok(objectif.includes('### Validations requises'));
+  assert.ok(objectif.includes('## Ressources'));
+  assert.ok(objectif.includes('| — | — | — | — |'), 'ligne de table neutre attendue sans artefact déclaré');
+  assert.ok(!objectif.includes('| V1 |'), 'aucune porte ne doit être amorcée sans référence ni fait à valider');
 });

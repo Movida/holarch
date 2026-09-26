@@ -41,9 +41,9 @@ Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (
 | Profil | Modèle | Effort |
 |---|---|---|
 | conception | opus | high |
-| execution | sonnet | medium |
+| execution | opus | low |
 | relecture | opus | medium |
-| exploration | fable | xhigh |
+| exploration | opus | xhigh |
 
 ## Valeurs organisationnelles
 - La qualité d'un livrable d'enfant prime sur la vitesse : ne jamais accepter un livrable non conforme pour "avancer".

@@ -7,7 +7,7 @@
 
 L'objectif O6 du projet — « un utilisateur non expert démarre via un preset en moins de 5 minutes » — n'est aujourd'hui vrai que pour qui sait déjà quoi écrire dans un tableau markdown de `CONFIG.md` : quelles catégories sont obligatoires, lesquelles sont cumulables, quelles paires de modules sont incompatibles, quels paramètres existent. Un utilisateur non expert n'a aucune raison de savoir que `fork-join` et `dependency-graph` s'excluent, ni qu'oublier une catégorie obligatoire produit une configuration invalide.
 
-`holarch-init.js` pose **7 questions en langue naturelle** et produit les deux fichiers de démarrage — `OBJECTIVE.md` et `CONFIG.md` — puis **les valide mécaniquement**. L'utilisateur ne nomme jamais un module ; il décrit son travail.
+`holarch-init.js` pose **13 questions en langue naturelle** et produit les deux fichiers de démarrage — `OBJECTIVE.md` et `CONFIG.md` — puis **les valide mécaniquement**. L'utilisateur ne nomme jamais un module ; il décrit son travail.
 
 Node pur, aucune dépendance.
 
@@ -45,7 +45,7 @@ Codes de sortie : **0** succès · **1** configuration produite non conforme · 
 
 L'outil écrit dans le répertoire `--out` **uniquement**, et refuse d'écraser un fichier existant sans `--force`. Il ne touche jamais `framework/` ni `mission/OBJECTIVE.md` : il affiche en fin de dialogue les deux copies à faire, qui restent un geste délibéré de l'utilisateur (cohérent avec KERNEL §4, où ces fichiers ne sont écrits par personne en cours de mission).
 
-## Les 7 questions, et ce qu'elles décident
+## Les 13 questions, et ce qu'elles décident
 
 | Question | Ce qu'elle décide |
 |---|---|
@@ -56,22 +56,51 @@ L'outil écrit dans le répertoire `--out` **uniquement**, et refuse d'écraser 
 | Les tâches dépendent-elles les unes des autres ? | `dependency-graph` si oui, `fork-join` sinon |
 | Besoin d'un audit fin a posteriori ? | `journal-synthesis` si oui, `unites-indexees` sinon (mémoire adressée, défaut des presets depuis le framework 1.4.0 ; `monolithic` reste au catalogue, à la main) |
 | Suivre l'avancement en direct ? | `heartbeat-log` |
+| Échéance et heure de vérité | section `## Échéance` de `OBJECTIVE.md` |
+| Décideur et disponibilité | section `## Commanditaire et validations` |
+| Références (veut / ne veut pas) | idem, et amorce la porte `V1` si non vide |
+| Faits à faire valider avant de produire | idem, et amorce la porte `V1` si non vide |
+| Services externes et budget | section `## Ressources` |
+| Ressources lourdes | idem |
 
 `direct-spawn`, `self-assessment`, `max-depth`, `context-budget`, `typed-escalation` et `sharded-files` sont posés sans question : ce sont soit le seul choix de leur catégorie, soit des garde-fous qu'il n'y a pas lieu de proposer de désactiver à un utilisateur qui découvre le système.
 
 Le `CONFIG.md` produit contient une section **« Pourquoi ces modules (trace du setup guidé) »** : une ligne de justification par module. Le fichier reste un fichier markdown ordinaire, éditable à la main ensuite — l'outil est une rampe d'accès, pas une couche d'abstraction permanente.
 
+## Six questions de plus (chantier 15, §16.4)
+
+Après les 7 questions d'origine, six questions **facultatives** de plus (Entrée pour passer) alimentent
+trois sections de `OBJECTIVE.md` :
+
+- `echeance` — « Échéance et heure de vérité : quand, et devant qui, le résultat est-il jugé ? » → `## Échéance`.
+- `decideur` — « Qui décide (commanditaire), et jusqu'à quand est-il joignable ? »,
+  `references` — « Références : ce que le commanditaire veut, et ce qu'il ne veut surtout pas ? »,
+  `faits_a_valider` — « Faits à faire valider par le commanditaire avant de produire (identités, noms, dates…) ? »
+  → `## Commanditaire et validations`, avec la sous-section `### Validations requises` amorcée d'une porte
+  `V1` (« échantillon validé avant tout livrable complet ») dès que `references` ou `faits_a_valider` est
+  renseigné — sinon la table reste neutre (`| — | — | — | — |`).
+- `services` — « Services externes utilisés et budget associé ? »,
+  `ressources_lourdes` — « Ressources lourdes (rendus, calculs longs, gros volumes) ? »
+  → `## Ressources`.
+
+Une clé vide ou absente dans `reponses.json` reste valide (`validerReponses` accepte l'absence ou la
+chaîne vide pour toute question `facultatif: true`) : les fixtures antérieures au chantier 15 (sans ces
+six clés) continuent de produire un `OBJECTIVE.md` conforme, sections neutres comprises.
+
+`tools/config-lint` avertit (jamais une erreur) quand `mission/OBJECTIVE.md` manque de ces sections ; le
+hook `session-start` et `holarch-spawn --dry-run` répètent l'avertissement au réveil de la racine.
+
 ## Vérification
 
-**11 tests, tous passants** (branché sur `npm test`/CI) :
+**13 tests, tous passants** (branché sur `npm test`/CI) :
 
 ```bash
 node --test tools/holarch-init/test-holarch-init.js
 ```
 
-Ce qu'ils couvrent réellement : dérivation solo et équipe ; **exactement un module par catégorie obligatoire sur les 16 combinaisons de réponses** ; **aucune paire incompatible produite**, quelles que soient les réponses ; présence d'une justification par module ; signalement honnête d'un critère de réussite vide ; normalisation des saisies (défauts, choix hors liste refusé et non deviné, kebab-case) ; refus d'écrasement sans `--force` ; **bout en bout via le CLI** ; et les **8 configurations générées validées à 0 erreur par `module-forge`**. Un dernier test casse volontairement une config générée pour vérifier que le test précédent n'est pas vide — un test de validation qui ne sait pas échouer ne prouve rien.
+Ce qu'ils couvrent réellement : dérivation solo et équipe ; **exactement un module par catégorie obligatoire sur les 16 combinaisons de réponses** ; **aucune paire incompatible produite**, quelles que soient les réponses ; présence d'une justification par module ; signalement honnête d'un critère de réussite vide ; normalisation des saisies (défauts, choix hors liste refusé et non deviné, kebab-case) ; refus d'écrasement sans `--force` ; **bout en bout via le CLI** ; les **8 configurations générées validées à 0 erreur par `module-forge`** ; et, chantier 15 (§16.4), les six clés facultatives acceptées absentes/vides/renseignées, et les trois sections de `OBJECTIVE.md` (dont la porte `V1`) produites correctement dans les deux cas (brief complet, brief vide). Un dernier test casse volontairement une config générée pour vérifier que le test précédent n'est pas vide — un test de validation qui ne sait pas échouer ne prouve rien.
 
-**Dialogue interactif éprouvé pour de vrai** : trace complète dans [`docs/examples/holon-init-demo/`](../../docs/examples/holon-init-demo/) — `transcription-demo.txt` est la transcription d'une exécution réelle du mode interactif, avec deux erreurs de saisie volontaires (nom non kebab-case, puis choix hors liste) pour montrer les relances. Résultat : configuration solo-light à 9 modules, validée à 0 erreur, code de sortie 0. Exemples produits : `exemple-CONFIG.md` et `exemple-OBJECTIVE.md`.
+**Dialogue interactif éprouvé pour de vrai** : trace complète dans [`docs/examples/holon-init-demo/`](../../docs/examples/holon-init-demo/) — `transcription-demo.txt` est la transcription d'une exécution réelle du mode interactif, avec deux erreurs de saisie volontaires (nom non kebab-case, puis choix hors liste) pour montrer les relances. Résultat : configuration solo-light à 9 modules, validée à 0 erreur, code de sortie 0. Exemples produits : `exemple-CONFIG.md` et `exemple-OBJECTIVE.md`. Cette trace date d'avant le chantier 15 (§16.4) et ne montre donc pas les six questions ajoutées.
 
 Note de lecture de la transcription : les réponses tapées n'y apparaissent pas après les `>`, parce que l'entrée était redirigée (pas de terminal, donc pas d'écho des frappes). Les relances qui suivent prouvent que les saisies ont bien été reçues et évaluées. Les frappes exactes sont dans `docs/examples/holon-init-demo/demo-rh.js`.
 
@@ -80,8 +109,8 @@ Note de lecture de la transcription : les réponses tapées n'y apparaissent pas
 - **Il ne lance pas la mission.** Il produit les deux fichiers de démarrage ; le bootstrap (`framework/BOOTSTRAP.md`) reste une étape distincte et explicite.
 - **Il ne juge pas la qualité de l'objectif.** Il vérifie qu'une phrase a été écrite, pas qu'elle soit un bon objectif — c'est le travail de l'instance racine à `ON_ORIENT`, et de l'utilisateur.
 - **Il ne couvre pas tout le catalogue.** Les questions ne donnent accès qu'aux compositions courantes ; une configuration exotique (ou un module d'`extensions`) s'écrit à la main, ou s'ajoute ici en une entrée de la fonction `deriver`.
-- **Le seuil des 5 minutes n'est pas mesuré sur un vrai utilisateur non expert.** Sept questions sans jargon rendent l'affirmation plausible ; seul un test avec une personne réelle la démontrerait, et cela n'a pas été fait.
+- **Le seuil des 5 minutes n'est pas mesuré sur un vrai utilisateur non expert.** Treize questions sans jargon, dont six facultatives, rendent l'affirmation plausible ; seul un test avec une personne réelle la démontrerait, et cela n'a pas été fait.
 
 ## Promotion
 
-Fait le 2026-09-03 (décision humaine, `framework/` restant en lecture seule pour toute instance, KERNEL §4) : relogé de `docs/archive/mission-holon-v2/shared/concepteur/v2/session-rh/` vers `tools/holarch-init/`, suite branchée sur `npm test`/CI (`.github/workflows/test.yml`).
+Fait le 2026-09-03 (décision humaine, `framework/` restant en lecture seule pour toute instance, KERNEL §4) : relogé de `docs/archive/mission-holon-v2/shared/concepteur/v2/session-rh/` vers `tools/holarch-init/`, suite branchée sur `npm test`/CI (`.github/workflows/test.yml`). Six questions et trois sections d'`OBJECTIVE.md` ajoutées par le chantier 15, §16.4 (`docs/IMPLEMENTATION.md`).

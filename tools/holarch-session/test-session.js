@@ -86,7 +86,9 @@ test('etat : fournisseurs à variables — absentes du shell signalées par leur
 test('etat --hook-prompt : réinjecte seulement quand la clé stable change ; --hook note la clé au départ', () => {
   const root = makeRoot();
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-home-'));
-  const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root, HOME: home });
+  // ps simulé : les autres fichiers de test, lancés en parallèle par npm test, font apparaître de vrais holarch-spawn.js
+  // entre deux appels et changeaient la clé (réinjection au lieu de silence, 2026-09-26).
+  const env = Object.assign({}, process.env, { CLAUDE_PROJECT_DIR: root, HOME: home, HOLARCH_GARDE_PS: PS_CALME, HOLARCH_OBSERVE_PS: '' });
   delete env.HOLARCH_INSTANCE;
   const sid = JSON.stringify({ session_id: 'sess-test' });
   const depart = JSON.parse(spawnSync('node', [ETAT, '--hook'], { encoding: 'utf8', env, input: sid }).stdout);

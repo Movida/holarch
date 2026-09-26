@@ -51,7 +51,8 @@ function processusMission(psText) {
 function collecter(root, deps) {
   const d = Object.assign({
     git: (args) => run('git', ['-C', root, ...args]),
-    ps: () => run('ps', ['-eo', 'pid,args']) || '',
+    // HOLARCH_GARDE_PS (même variable que garde.js et holarch-upgrade) remplace `ps` réel, pour les tests de l'exécutable.
+    ps: () => (process.env.HOLARCH_GARDE_PS !== undefined ? process.env.HOLARCH_GARDE_PS : run('ps', ['-eo', 'pid,args']) || ''),
     versionClaude: () => run('claude', ['--version']),
     versionNode: () => process.version,
     lire: (rel) => readIf(path.join(root, rel)),

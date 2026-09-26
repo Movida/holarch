@@ -32,6 +32,14 @@ const RACINE = racineHolarch(__dirname);
 const OUTIL = path.join(__dirname, 'config-lint.js');
 const MANIFEST = fs.readFileSync(path.join(RACINE, 'framework/MANIFEST.md'), 'utf8');
 
+/** Répertoire vide (sans `mission/OBJECTIVE.md`), pour isoler du brief réel de CETTE mission (chantier
+ *  15, §16.4) les tests qui ne portent pas sur lui — sinon `entree.racine` retomberait sur `RACINE`
+ *  (le dépôt réel) via `process.cwd()`, et le brief réel de `mission/OBJECTIVE.md` (qui ne porte pas
+ *  encore de section « Validations requises » en titre, seulement en prose) polluerait des tests qui ne
+ *  veulent mesurer que CONFIG.md. */
+const RACINE_SANS_BRIEF = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-lint-sans-brief-'));
+test.after(() => { fs.rmSync(RACINE_SANS_BRIEF, { recursive: true, force: true }); });
+
 /** Construit un CONFIG.md minimal et valide, que chaque test dégrade à sa façon. */
 function config({ modules, parametres, politique, sansPolitique } = {}) {
   const mods = modules || [
@@ -54,9 +62,10 @@ function config({ modules, parametres, politique, sansPolitique } = {}) {
   return texte;
 }
 
-/** Lint sur fixture ; `moduleTexts` vide par défaut (les paramètres de modules ne sont alors pas vérifiés). */
+/** Lint sur fixture ; `moduleTexts` vide par défaut (les paramètres de modules ne sont alors pas
+ *  vérifiés) ; `racine` par défaut = RACINE_SANS_BRIEF (voir plus haut). */
 function run(configText, opts = {}) {
-  return lint.lintConfig(Object.assign({ configText, manifestText: MANIFEST, moduleTexts: new Map() }, opts));
+  return lint.lintConfig(Object.assign({ configText, manifestText: MANIFEST, moduleTexts: new Map(), racine: RACINE_SANS_BRIEF }, opts));
 }
 
 const contient = (liste, motif) => liste.some((m) => m.includes(motif));
@@ -68,6 +77,7 @@ test('le CONFIG.md réel du dépôt passe sans erreur, modules et paramètres co
     config: path.join(RACINE, 'framework/CONFIG.md'),
     manifest: path.join(RACINE, 'framework/MANIFEST.md'),
     modulesDir: path.join(RACINE, 'framework/modules'),
+    racine: RACINE_SANS_BRIEF, // isolé du brief réel de mission/OBJECTIVE.md, hors du champ de ce test
   });
   assert.deepStrictEqual(r.erreurs, [], 'aucune erreur attendue sur le CONFIG.md de la mission');
   assert.deepStrictEqual(r.avertissements, [], 'aucun avertissement attendu sur le CONFIG.md de la mission');
@@ -310,7 +320,7 @@ test('sans --bootstrap-check, aucun contrôle de système de fichiers n\'est fai
 
 // ------------------------------------------------------------ parsing unitaire
 
-test('parseManifest lit 21 modules, leurs catégories et leurs incompatibilités', () => {
+test('parseManifest lit 22 modules, leurs catégories et leurs incompatibilités', () => {
   // 20 = 14 côté framework public + `milestone-reviews`/`git-branches` (propres à cette mission)
   // - `activity-log` (non synchronisé, cf. registry/DECISIONS.md 2026-09-04T15:20:00Z)
   // + `reserve-hibernation`/`delegation-budget`/`role-personality` (mission holon-v2, itération 5-6,
@@ -319,7 +329,7 @@ test('parseManifest lit 21 modules, leurs catégories et leurs incompatibilités
   // + `unites-indexees` (chantier 1, promu le 2026-09-10, framework 1.2.0).
   // + `delegation-intra-session` (chantier 7, `docs/IMPLEMENTATION.md` §9.1, 2026-09-11) = 21.
   const m = lint.parseManifest(MANIFEST);
-  assert.strictEqual(m.size, 21);
+  assert.strictEqual(m.size, 22); // + `regles-du-metier` (chantier 17, §17.1)
   assert.strictEqual(m.get('direct-spawn').categorie, 'orchestration');
   assert.deepStrictEqual(m.get('fork-join').incompatible, ['dependency-graph']);
   assert.deepStrictEqual(m.get('sharded-files').incompatible, []);
@@ -418,4 +428,75 @@ test('catalogue : tarif écrit mais illisible → erreur, pas un simple avertiss
   assert.ok(contient(r.erreurs, 'coût "dix / cinquante" illisible'), r.erreurs.join(' | '));
   const troisValeurs = run(avecCatalogue('10 / 50 / 12,50'));
   assert.ok(contient(troisValeurs.erreurs, 'illisible'), troisValeurs.erreurs.join(' | '));
+});
+
+// ---------------------------------------- chantier 15, §16.4 — brief OBJECTIVE.md (avertissement)
+
+test('verifierBriefObjective : les trois sections absentes → trois manques nommés', () => {
+  const { manquants } = lint.verifierBriefObjective('# Objectif\n\n## Énoncé\ntexte\n');
+  assert.deepStrictEqual(manquants.sort(), ['Ressources', 'Validations requises', 'Échéance'].sort());
+});
+
+test('verifierBriefObjective : les trois sections présentes (## ou ###) → aucun manque', () => {
+  const texte = '# Objectif\n\n## Échéance\ntexte\n\n### Validations requises\n| Porte | Quoi | Par qui | Protège |\n|---|---|---|---|\n| — | — | — | — |\n\n## Ressources\ntexte\n';
+  assert.deepStrictEqual(lint.verifierBriefObjective(texte).manquants, []);
+});
+
+test('verifierBriefObjective : table Livrables sans colonne Contrôle → manque nommé ; avec colonne → aucun manque', () => {
+  const base = '# Objectif\n\n## Échéance\nx\n\n## Validations requises\n| Porte | Quoi | Par qui | Protège |\n|---|---|---|---|\n| — | — | — | — |\n\n## Ressources\nx\n\n## Critères d\'acceptation\n';
+  const sansControle = `${base}| Livrable | Format | Emplacement |\n|---|---|---|\n| x | y | z |\n`;
+  assert.ok(lint.verifierBriefObjective(sansControle).manquants.includes('colonne Contrôle'));
+  const avecControle = `${base}| Livrable | Format | Emplacement | Contrôle |\n|---|---|---|---|\n| x | y | z | w |\n`;
+  assert.deepStrictEqual(lint.verifierBriefObjective(avecControle).manquants, []);
+});
+
+test('verifierBriefObjective : pas de table Livrables du tout → ce n\'est pas un manque (brief libre valide)', () => {
+  const texte = '# Objectif\n\n## Échéance\nx\n\n## Validations requises\n| Porte | Quoi | Par qui | Protège |\n|---|---|---|---|\n| — | — | — | — |\n\n## Ressources\nx\n';
+  assert.deepStrictEqual(lint.verifierBriefObjective(texte).manquants, []);
+});
+
+test('lintConfig : OBJECTIVE.md sous --racine sans les sections → avertissement "brief incomplet", 0 erreur', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-lint-brief-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'mission'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'mission', 'OBJECTIVE.md'), '# Objectif\n\n## Énoncé\ntexte\n');
+    const r = run(config(), { racine: tmp });
+    assert.deepStrictEqual(r.erreurs, [], 'jamais une erreur : un brief libre reste valide');
+    assert.ok(contient(r.avertissements, 'brief incomplet'), r.avertissements.join(' | '));
+    assert.ok(contient(r.avertissements, 'Échéance'), r.avertissements.join(' | '));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('lintConfig : OBJECTIVE.md sous --racine complet (trois sections + table Livrables avec Contrôle) → aucun "brief incomplet"', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-lint-brief-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'mission'), { recursive: true });
+    const texte = '# Objectif\n\n## Échéance\nx\n\n## Validations requises\n| Porte | Quoi | Par qui | Protège |\n|---|---|---|---|\n| — | — | — | — |\n\n## Ressources\nx\n\n## Critères d\'acceptation\n| Livrable | Format | Emplacement | Contrôle |\n|---|---|---|---|\n| x | y | z | w |\n';
+    fs.writeFileSync(path.join(tmp, 'mission', 'OBJECTIVE.md'), texte);
+    const r = run(config(), { racine: tmp });
+    assert.deepStrictEqual(r.erreurs, []);
+    assert.ok(!contient(r.avertissements, 'brief incomplet'), r.avertissements.join(' | '));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('lintConfig : mission/OBJECTIVE.md absent sous --racine → aucun avertissement de brief, aucun plantage', () => {
+  const r = run(config(), { racine: RACINE_SANS_BRIEF });
+  assert.deepStrictEqual(r.erreurs, []);
+  assert.ok(!contient(r.avertissements, 'brief incomplet'), r.avertissements.join(' | '));
+});
+
+test('lintConfig : l\'avertissement de brief est produit même sans --bootstrap-check (contrôle permanent)', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-lint-brief-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'mission'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'mission', 'OBJECTIVE.md'), '# Objectif\n');
+    const sansFlag = run(config(), { racine: tmp });
+    assert.ok(contient(sansFlag.avertissements, 'brief incomplet'), 'attendu même sans --bootstrap-check');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });

@@ -18,9 +18,28 @@ doit comprendre ce qu'on attend d'elle.>
 - Décisions déjà actées en amont : <liste, ou référence à des entrées de registry/DECISIONS.md>
 
 ## Livrables
-| Livrable | Format | Emplacement | Critères d'acceptation |
+<!--
+Colonne « Contrôle » remplie par le PARENT à ON_SPAWN (module direct-spawn) : le hook deliver-guard
+exige qu'un DELIVERABLE cite chaque commande avec son code réel. Une table sans cette colonne reste
+valide (garde-fou inerte) ; config-lint avertit.
+-->
+| Livrable | Format | Emplacement | Critères d'acceptation | Contrôle |
+|---|---|---|---|---|
+| <nom> | <format> | `shared/<chemin>/...` | <critères vérifiables> | <commande exécutable depuis la racine de travail de l'instance, chemins relatifs, code 0 = conforme, sortie = rapport ; ou « — » avec le motif dans Critères (ex. lecture sur pièces par le parent)> |
+
+## Validations requises
+<!--
+Chantier 15, §16.3 — garde-fou gate-guard. Une porte protège un ou plusieurs chemins (préfixes
+relatifs à la racine de travail de l'instance, ex. `shared/<chemin>/final/`) et/ou des livrables
+nommés (première colonne de la table Livrables ci-dessus, écrits `DELIVERABLE « nom »`), séparés par
+` ; ` dans la colonne Protège. Franchir une porte = recevoir une RESPONSE dont l'en-tête porte
+`porte: V<n>` ; la demander = envoyer une CLARIFICATION ordinaire avec `porte: V<n>` dans son en-tête.
+La préparation (échantillon, plan, règles du métier) reste permise hors des chemins protégés. Laisser
+vide ou « — » si aucune porte.
+-->
+| Porte | Quoi | Par qui | Protège |
 |---|---|---|---|
-| <nom> | <format> | `shared/<chemin>/...` | <critères vérifiables> |
+| <V1> | <ce qui doit être validé> | <qui valide> | `<chemin protégé>` ; DELIVERABLE « <livrable> » |
 
 ## Autorité
 - Décisions autonomes : <périmètre précis>

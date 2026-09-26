@@ -144,6 +144,19 @@ test('réveil : WAITING_CHILDREN avec condition satisfaite et aucune session = r
   } finally { nettoyer(f.root); }
 });
 
+test("livrable-sans-rejeu : enfant DELIVERED avec un DELIVERABLE en OUTBOX sans fichier de contrôle postérieur = anomalie ; un fichier postérieur l'efface", () => {
+  const f = fabriquer();
+  try {
+    ecrire(f.wt, 'mission/concepteur/enfant/STATUS.md', STATUS('DELIVERED', 'livré'));
+    ecrire(f.wt, 'mission/concepteur/enfant/OUTBOX.md', `# OUTBOX\n${MSG('MSG-e-2', 'concepteur/enfant', 'concepteur', 'DELIVERABLE', '—', '2026-09-11T12:00:00Z')}`);
+    let e = collecte.collecter(f.root, deps(f));
+    assert.ok(e.anomalies.some((a) => a.code === 'livrable-sans-rejeu' && a.chemin === 'concepteur/enfant'), JSON.stringify(e.anomalies));
+    ecrire(f.root, 'mission/.holarch/controles/concepteur-enfant-2026-09-11T13-00-00Z.json', JSON.stringify({ date: '2026-09-11T13:00:00Z' }));
+    e = collecte.collecter(f.root, deps(f));
+    assert.ok(!e.anomalies.some((a) => a.code === 'livrable-sans-rejeu'), JSON.stringify(e.anomalies.filter((a) => a.code === 'livrable-sans-rejeu')));
+  } finally { nettoyer(f.root); }
+});
+
 test('arbre principal hors main = alerte ; fichiers du lanceur non committés = info', () => {
   const f = fabriquer();
   try {

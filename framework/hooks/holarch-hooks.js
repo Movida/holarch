@@ -319,6 +319,21 @@ function spawnGuard(ctx) {
   const pmax = Number(configParam(root, 'profondeur_max'));
   const depth = target.split('/').length;
   if (pmax && depth > pmax) return deny(`profondeur ${depth} > profondeur_max ${pmax} (module max-depth) : fais le travail toi-même ou émets un BLOCKER.`);
+  // Chantier 17, §17.3 : une ligne « Veille » de la fiche de l'enfant ne s'accorde qu'à un profil conception ou
+  // exploration (profil absent = execution, défaut d'un enfant). Fiche lue comme `childFileExists` la trouve :
+  // arbre du parent, worktree de l'enfant, sinon sa branche.
+  {
+    const relFiche = path.relative(root, fichePath(root, target)).split(path.sep).join('/');
+    let texteFiche = readIf(fichePath(root, target));
+    if (!texteFiche && gb && gb.isolation === 'worktree') texteFiche = readIf(path.join(worktreeDe(root, target), relFiche));
+    if (!texteFiche && gb) {
+      const r = spawnSync('git', ['-C', root, 'show', `${brancheDe(gb, target)}:${relFiche}`], { encoding: 'utf8' });
+      if (r.status === 0) texteFiche = r.stdout;
+    }
+    const veille = require(path.join(__dirname, '..', 'bin', 'veille.js'));
+    const refusVeille = veille.refusVeille(veille.lireVeille(texteFiche), veille.lireProfil(texteFiche) || 'execution');
+    if (refusVeille) return deny(`fiche registre de \`${target}\` : ${refusVeille}.`);
+  }
   const parent = parseFiche(readIf(fichePath(root, instance)));
   if (parent.alloue !== null) {
     if (parent.alloue <= 0) return deny('ton budget d\'instances alloué est nul (module instance-budget) : spawn interdit — fais le travail toi-même ou émets un BLOCKER motivé.');
@@ -480,6 +495,412 @@ function gitGuard(ctx) {
   return ok();
 }
 
+// --- deliver-guard (chantier 15, §16.1) -------------------------------------------------------
+// Un fichier présent n'est plus jamais pris pour un livrable conforme (docs/diagnostics/
+// 2026-09-20-retex-montage-video-pacs.md) : tout message `type: DELIVERABLE` écrit dans un
+// INBOX.md/OUTBOX.md doit citer, pour chaque livrable exigé par la table « Livrables » de sa
+// source de rôle (ROLE.md d'un enfant, OBJECTIVE.md pour l'instance racine — sans `/` dans son
+// chemin), la commande de contrôle déjà lancée avec un code 0, et une ligne « Regardé : » attestant
+// une inspection humaine sur pièces. Inerte si la source ne porte pas de colonne « Contrôle »
+// (compatibilité avec les missions existantes) ou si le message n'est pas un DELIVERABLE.
+// Un `Write` réécrit tout le fichier (les anciens messages compris) : seul le texte réellement
+// ajouté par l'appel d'outil est jugé, et chaque bloc `type: DELIVERABLE` de cet ajout est jugé
+// séparément, avec sa propre section `## Contrôles` — un ancien DELIVERABLE déjà sur disque ne
+// fait ni passer ni refuser un nouveau bloc à sa place.
+
+/** Découpe une ligne de table markdown `| a | b | c |` en cellules trimées, sans les vides de bord. */
+function splitRow(line) {
+  let l = String(line || '').trim();
+  if (l.startsWith('|')) l = l.slice(1);
+  if (l.endsWith('|')) l = l.slice(0, -1);
+  return l.split('|').map((c) => c.trim());
+}
+function isSeparatorRow(cells) {
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
+}
+
+/**
+ * Table « Livrables » d'un ROLE.md/OBJECTIVE.md : cherche la première ligne d'en-tête portant une
+ * cellule `Livrable`. Sans cellule `Contrôle` dans ce même en-tête → `null` (inerte, compatibilité).
+ * Sinon → tableau `{ livrable, controle }` (`controle` vide pour une cellule vide ou `—`).
+ */
+function parseLivrables(text) {
+  const lines = String(text || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\|/.test(lines[i])) continue;
+    const header = splitRow(lines[i]);
+    const livIdx = header.findIndex((c) => c === 'Livrable');
+    if (livIdx === -1) continue;
+    const ctrlIdx = header.findIndex((c) => c === 'Contrôle');
+    if (ctrlIdx === -1) return null;
+    let j = i + 1;
+    if (j < lines.length && /^\s*\|/.test(lines[j]) && isSeparatorRow(splitRow(lines[j]))) j++;
+    const rows = [];
+    for (; j < lines.length; j++) {
+      if (!/^\s*\|/.test(lines[j])) break;
+      const cells = splitRow(lines[j]);
+      const controle = stripTicks(cells[ctrlIdx]);
+      rows.push({ livrable: stripTicks(cells[livIdx]), controle: controle === '—' ? '' : controle });
+    }
+    return rows;
+  }
+  return null;
+}
+
+/**
+ * Table `| Livrable | Commande | Code | Rapport |` de la section `## Contrôles` (ou `Contrôles :`)
+ * d'un message : de cette ligne jusqu'à la prochaine ligne `## ` ou la fin. `[]` si la section ou la
+ * table est absente.
+ */
+function parseControlesMessage(text) {
+  const lines = String(text || '').split('\n');
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*##\s*Contr[ôo]les\s*$/.test(lines[i]) || /^\s*Contr[ôo]les\s*:/.test(lines[i])) { start = i; break; }
+  }
+  if (start === -1) return [];
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s+/.test(lines[i])) { end = i; break; }
+  }
+  const section = lines.slice(start, end);
+  for (let i = 0; i < section.length; i++) {
+    if (!/^\s*\|/.test(section[i])) continue;
+    const header = splitRow(section[i]);
+    const idx = {};
+    header.forEach((c, k) => { idx[c] = k; });
+    if (idx.Commande === undefined || idx.Code === undefined) continue;
+    let j = i + 1;
+    if (j < section.length && /^\s*\|/.test(section[j]) && isSeparatorRow(splitRow(section[j]))) j++;
+    const rows = [];
+    for (; j < section.length; j++) {
+      if (!/^\s*\|/.test(section[j])) break;
+      const cells = splitRow(section[j]);
+      rows.push({
+        livrable: idx.Livrable !== undefined ? stripTicks(cells[idx.Livrable]) : '',
+        commande: stripTicks(cells[idx.Commande]),
+        code: stripTicks(cells[idx.Code]),
+        rapport: idx.Rapport !== undefined ? stripTicks(cells[idx.Rapport]) : '',
+      });
+    }
+    return rows;
+  }
+  return [];
+}
+
+/** Pour un `Write` dont la cible existe déjà sur disque et dont `content` commence par le contenu
+ *  actuel du fichier : ne retient que la partie ajoutée après cet ancien contenu (une réécriture
+ *  totale du fichier ne doit pas faire rejuger les DELIVERABLE déjà présents). Sinon (fichier absent,
+ *  ou `content` ne commençant pas par l'ancien contenu) retourne `content` en entier. */
+function texteAjouteWrite(chemin, content) {
+  const ancien = readIf(chemin);
+  if (ancien !== null && content.startsWith(ancien)) return content.slice(ancien.length);
+  return content;
+}
+
+/** Cible et texte ajouté par l'appel d'outil en cours, ou `null` si hors périmètre (ni Write/Edit/Bash
+ *  pertinent, ni cible INBOX.md/OUTBOX.md). Pour un `Write`, seul le texte ajouté par rapport au
+ *  contenu déjà sur disque (voir `texteAjouteWrite`) ; pour un `Edit`, `new_string` ; pour un `Bash`,
+ *  la commande entière. */
+function cibleDeliverGuard(input) {
+  const ti = input.tool_input || {};
+  if (input.tool_name === 'Write') {
+    const cible = String(ti.file_path || '');
+    return { cible, contenu: texteAjouteWrite(cible, String(ti.content || '')) };
+  }
+  if (input.tool_name === 'Edit') return { cible: String(ti.file_path || ''), contenu: String(ti.new_string || '') };
+  if (input.tool_name === 'Bash') {
+    const cmd = String(ti.command || '');
+    const re = />>?\s*(\S+)/g;
+    let m;
+    while ((m = re.exec(cmd)) !== null) {
+      const cible = m[1].replace(/^['"]|['"]$/g, '');
+      if (path.basename(cible) === 'INBOX.md' || path.basename(cible) === 'OUTBOX.md') return { cible, contenu: cmd };
+    }
+    return null;
+  }
+  return null;
+}
+
+/** Découpe un texte en blocs de message : un bloc commence à une ligne `---` immédiatement suivie
+ *  d'une ligne `id:` (le texte avant le premier bloc est ignoré) et s'étend jusqu'au bloc suivant ou
+ *  la fin du texte. Retourne tous les blocs, avec leur `type` et leur `porte` (chantier 15, §16.3)
+ *  s'ils en portent un. */
+function blocsMessages(texte) {
+  const lignes = String(texte || '').split('\n');
+  const debuts = [];
+  for (let i = 0; i < lignes.length - 1; i++) {
+    if (/^---\s*$/.test(lignes[i]) && /^id:/.test(lignes[i + 1])) debuts.push(i);
+  }
+  const blocs = [];
+  for (let k = 0; k < debuts.length; k++) {
+    const fin = k + 1 < debuts.length ? debuts[k + 1] : lignes.length;
+    const bloc = lignes.slice(debuts[k], fin).join('\n');
+    const idm = bloc.match(/^id:\s*(\S+)/m);
+    const typem = bloc.match(/^\s*type:\s*(\S+)/m);
+    const portem = bloc.match(/^\s*porte:\s*(\S+)/m);
+    blocs.push({ id: idm ? idm[1] : '?', type: typem ? typem[1] : '', texte: bloc, porte: portem ? portem[1] : '' });
+  }
+  return blocs;
+}
+
+/** Ne retient, parmi tous les blocs de `blocsMessages`, que ceux dont le frontmatter porte
+ *  `type: DELIVERABLE` (compatibilité : forme utilisée par deliver-guard avant §16.3). */
+function blocsDeliverable(texte) {
+  return blocsMessages(texte).filter((b) => b.type === 'DELIVERABLE');
+}
+
+function deliverGuard(ctx) {
+  try {
+    const { root, instance, input } = ctx;
+    const trouve = cibleDeliverGuard(input);
+    if (!trouve) return ok();
+    const base = path.basename(trouve.cible);
+    if (base !== 'INBOX.md' && base !== 'OUTBOX.md') return ok();
+    const blocs = blocsDeliverable(trouve.contenu);
+    if (!blocs.length) return ok();
+
+    const source = instance.includes('/')
+      ? path.join(root, 'mission', instance, 'ROLE.md')
+      : path.join(root, 'mission', 'OBJECTIVE.md');
+    const texteSource = readIf(source);
+    if (texteSource === null) return ok();
+
+    // gate-guard (chantier 15, §16.3) : un livrable protégé par une porte non franchie est refusé
+    // indépendamment de la colonne Contrôle — vérifié avant le `return ok()` de compatibilité.
+    const portes = parseValidationsRequises(texteSource);
+    if (portes) {
+      const franchies = portesFranchies(root, instance);
+      const nomsTable = parseNomsLivrables(texteSource);
+      for (const bloc of blocs) {
+        const couverts = bloc.texte.match(/^Livrables couverts\s*:\s*(.+)$/m);
+        const annonces = couverts
+          ? couverts[1].split(',').map((s) => s.trim()).filter(Boolean)
+          : nomsTable;
+        for (const p of portes) {
+          if (franchies.has(p.porte)) continue;
+          const touche = annonces.find((nom) => p.livrables.some((l) => l.toLowerCase() === nom.toLowerCase()));
+          if (!touche) continue;
+          return emit({
+            hookSpecificOutput: {
+              hookEventName: 'PreToolUse',
+              permissionDecision: 'deny',
+              permissionDecisionReason: `[HOLARCH · garde-fou gate-guard] DELIVERABLE ${bloc.id} refusé : le livrable « ${touche} » est protégé par la porte ${p.porte} (« ${p.quoi} ») non franchie — demande-la à ${p.parQui} (CLARIFICATION avec \`porte: ${p.porte}\`) ; une RESPONSE portant \`porte: ${p.porte}\` la franchit.`,
+            },
+          });
+        }
+      }
+    }
+
+    const livrables = parseLivrables(texteSource);
+    if (!livrables) return ok(); // pas de colonne Contrôle : compatibilité
+
+    for (const bloc of blocs) {
+      const contenu = bloc.texte;
+      let exiges = livrables.filter((l) => l.controle);
+      const couverts = contenu.match(/^Livrables couverts\s*:\s*(.+)$/m);
+      if (couverts) {
+        const noms = couverts[1].split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+        exiges = exiges.filter((l) => noms.includes(l.livrable.trim().toLowerCase()));
+      }
+
+      const lignesMessage = parseControlesMessage(contenu);
+      const etats = exiges.map((l) => {
+        const trouvee = lignesMessage.find((r) => r.commande === l.controle);
+        return { livrable: l.livrable, controle: l.controle, code: trouvee ? trouvee.code : null };
+      });
+      const manques = etats.filter((e) => e.code === null || e.code !== '0');
+      const regardeOk = /^Regard[ée]\s*:\s*\S/m.test(contenu);
+      if (!manques.length && regardeOk) continue;
+
+      const resume = [];
+      for (const e of manques) {
+        resume.push(e.code === null ? `commande de « ${e.livrable} » manquante` : `commande de « ${e.livrable} » code ${e.code} ≠ 0`);
+      }
+      if (!regardeOk) resume.push('ligne « Regardé : » manquante');
+
+      const lignesSquelette = etats.map((e) => {
+        const codeCell = e.code === null ? '<code>' : (e.code === '0' ? '0' : `${e.code} ≠ 0 — corrige puis rejoue`);
+        return `| ${e.livrable} | \`${e.controle}\` | ${codeCell} | <chemin du rapport ou sa première ligne> |`;
+      });
+      const squelette = [
+        '## Contrôles',
+        '| Livrable | Commande | Code | Rapport |',
+        '|---|---|---|---|',
+        ...lignesSquelette,
+        '',
+        'Regardé : <ce qui a été inspecté à l\'œil ou à l\'oreille, et comment>',
+      ].join('\n');
+      return emit({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: `[HOLARCH · garde-fou deliver-guard] DELIVERABLE ${bloc.id} refusé : ${resume.join(' ; ')}.\nSquelette attendu dans le corps du message :\n${squelette}\nUne commande n'est citée qu'après avoir été lancée : cite le code réel, jamais un code supposé.`,
+        },
+      });
+    }
+    return ok();
+  } catch (_) {
+    return ok();
+  }
+}
+
+// --- gate-guard (chantier 15, §16.3) -----------------------------------------------------------
+// Une section « Validations requises » de ROLE.md/OBJECTIVE.md déclare des portes de validation :
+// tant qu'une porte n'a pas été franchie (une RESPONSE de l'INBOX.md de l'instance portant
+// `porte: V<n>`), toute écriture sous un chemin qu'elle protège est refusée (hook `gateGuard`,
+// PreToolUse sur Write|Edit|Bash), et tout DELIVERABLE d'un livrable qu'elle protège est refusé par
+// `deliverGuard` (voir plus haut, vérifié avant son `return ok()` de compatibilité — la protection
+// par porte ne dépend pas de la colonne Contrôle). Une CLARIFICATION portant `porte: V<n>` est la
+// façon ordinaire de la demander ; aucun nouveau type de message.
+
+/** Noms des livrables de la table « Livrables » d'une source de rôle (colonne `Livrable`), quelle que
+ *  soit la présence d'une colonne `Contrôle` — indépendant de `parseLivrables` (deliver-guard), utilisé
+ *  par gate-guard pour savoir quels livrables une porte protège. `[]` si aucune table Livrables. */
+function parseNomsLivrables(text) {
+  const lines = String(text || '').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*\|/.test(lines[i])) continue;
+    const header = splitRow(lines[i]);
+    const livIdx = header.findIndex((c) => c === 'Livrable');
+    if (livIdx === -1) continue;
+    let j = i + 1;
+    if (j < lines.length && /^\s*\|/.test(lines[j]) && isSeparatorRow(splitRow(lines[j]))) j++;
+    const noms = [];
+    for (; j < lines.length; j++) {
+      if (!/^\s*\|/.test(lines[j])) break;
+      noms.push(stripTicks(splitRow(lines[j])[livIdx]));
+    }
+    return noms;
+  }
+  return [];
+}
+
+/**
+ * Table « Validations requises » d'un ROLE.md/OBJECTIVE.md : cherche la ligne `## Validations
+ * requises` (ou `### `), puis la première table dont l'en-tête porte `Porte` et `Protège`. `null` si
+ * section ou table absente. Sinon `[{ porte, quoi, parQui, chemins: [...], livrables: [...] }]` — la
+ * cellule « Protège » est découpée sur ` ; ` (ou `;`), chaque morceau `DELIVERABLE « X »` /
+ * `DELIVERABLE "X"` / `DELIVERABLE X` → livrable nommé `X` ; sinon → chemin (préfixe, backticks
+ * retirés, `./` de tête retiré). Une ligne dont la cellule Porte est vide ou `—` n'est pas retenue.
+ */
+function parseValidationsRequises(text) {
+  const lines = String(text || '').split('\n');
+  let debut = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^#{2,3}\s*Validations requises\s*$/.test(lines[i].trim())) { debut = i; break; }
+  }
+  if (debut === -1) return null;
+  for (let i = debut + 1; i < lines.length; i++) {
+    if (/^#{1,6}\s+/.test(lines[i])) return null; // section suivante avant toute table trouvée
+    if (!/^\s*\|/.test(lines[i])) continue;
+    const header = splitRow(lines[i]);
+    const porteIdx = header.findIndex((c) => c === 'Porte');
+    const protegeIdx = header.findIndex((c) => c === 'Protège');
+    if (porteIdx === -1 || protegeIdx === -1) continue;
+    const quoiIdx = header.findIndex((c) => c === 'Quoi');
+    const parQuiIdx = header.findIndex((c) => c === 'Par qui');
+    let j = i + 1;
+    if (j < lines.length && /^\s*\|/.test(lines[j]) && isSeparatorRow(splitRow(lines[j]))) j++;
+    const rows = [];
+    for (; j < lines.length; j++) {
+      if (!/^\s*\|/.test(lines[j])) break;
+      const cells = splitRow(lines[j]);
+      const porte = stripTicks(cells[porteIdx]);
+      if (!porte || porte === '—') continue;
+      const morceaux = String(cells[protegeIdx] || '').split(/\s*;\s*/).map((s) => s.trim()).filter(Boolean);
+      const chemins = [];
+      const livrables = [];
+      for (const m of morceaux) {
+        if (m === '—') continue;
+        const dm = /^DELIVERABLE\s*[«"]?\s*([^»"]+?)\s*[»"]?\s*$/.exec(m);
+        if (dm) { livrables.push(dm[1].trim()); continue; }
+        const chemin = stripTicks(m).replace(/^\.\//, '');
+        if (chemin) chemins.push(chemin);
+      }
+      rows.push({
+        porte,
+        quoi: quoiIdx !== -1 ? stripTicks(cells[quoiIdx]) : '',
+        parQui: parQuiIdx !== -1 ? stripTicks(cells[parQuiIdx]) : '',
+        chemins, livrables,
+      });
+    }
+    return rows;
+  }
+  return null;
+}
+
+/** Ensemble des portes (`porte: V<n>`) franchies par une RESPONSE de l'INBOX.md de l'instance. */
+function portesFranchies(root, instance) {
+  const texte = readIf(path.join(root, 'mission', instance, 'INBOX.md'));
+  if (texte === null) return new Set();
+  const portes = new Set();
+  for (const bloc of blocsMessages(texte)) {
+    if (bloc.type === 'RESPONSE' && bloc.porte) portes.add(bloc.porte);
+  }
+  return portes;
+}
+
+/** Cibles visées par l'appel d'outil en cours, pour gate-guard : `file_path` pour Write/Edit ; pour un
+ *  Bash, toutes les cibles de redirection `>`/`>>` (même regex que `cibleDeliverGuard`) — sans la
+ *  restriction à INBOX.md/OUTBOX.md, gate-guard protège n'importe quel chemin de la colonne Protège. */
+function ciblesGateGuard(input) {
+  const ti = input.tool_input || {};
+  if (input.tool_name === 'Write' || input.tool_name === 'Edit') return ti.file_path ? [String(ti.file_path)] : [];
+  if (input.tool_name === 'Bash') {
+    const cmd = String(ti.command || '');
+    const re = />>?\s*(\S+)/g;
+    const cibles = [];
+    let m;
+    while ((m = re.exec(cmd)) !== null) cibles.push(m[1].replace(/^['"]|['"]$/g, ''));
+    return cibles;
+  }
+  return [];
+}
+
+/** Chemin rendu relatif à `root` (si absolu et sous `root`), séparateurs normalisés `/`. */
+function cheminRelatifRoot(root, cible) {
+  let p = String(cible || '');
+  if (path.isAbsolute(p)) {
+    const rel = path.relative(root, p);
+    if (!rel.startsWith('..')) p = rel;
+  }
+  return p.split(path.sep).join('/');
+}
+
+function gateGuard(ctx) {
+  try {
+    const { root, instance, input } = ctx;
+    const cibles = ciblesGateGuard(input);
+    if (!cibles.length) return ok();
+
+    const source = instance.includes('/')
+      ? path.join(root, 'mission', instance, 'ROLE.md')
+      : path.join(root, 'mission', 'OBJECTIVE.md');
+    const texteSource = readIf(source);
+    if (texteSource === null) return ok();
+    const portes = parseValidationsRequises(texteSource);
+    if (!portes) return ok(); // pas de section Validations requises : inerte
+
+    const franchies = portesFranchies(root, instance);
+    for (const cible of cibles) {
+      const chemin = cheminRelatifRoot(root, cible);
+      const p = portes.find((q) => !franchies.has(q.porte) && q.chemins.some((c) => chemin.startsWith(c)));
+      if (!p) continue;
+      return emit({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: `[HOLARCH · garde-fou gate-guard] écriture sous ${chemin} refusée : porte ${p.porte} (« ${p.quoi} ») non franchie — demande-la à ${p.parQui} par une CLARIFICATION portant \`porte: ${p.porte}\` dans son en-tête ; elle sera franchie par une RESPONSE portant \`porte: ${p.porte}\`. La préparation (échantillon, plan, règles du métier) reste permise hors de ${p.chemins.join(', ')}.`,
+        },
+      });
+    }
+    return ok();
+  } catch (_) {
+    return ok();
+  }
+}
+
 function lastAssistantUsage(transcriptPath) {
   let fd = null;
   try {
@@ -507,6 +928,34 @@ function lastAssistantUsage(transcriptPath) {
 const CHECKLIST_ON_SLEEP = 'Liste de contrôle ON_SLEEP : ☐ MEMORY.md réécrit en entier (État courant / Décisions prises / Prochaines actions / Points de vigilance) ☐ fiche memoire/U<n>-….md de l\'unité en cours si elle s\'achève ici ☐ STATUS.md à l\'état réel, Note d\'hibernation posée ☐ entrée JOURNAL.md ☐ fiche registre à jour (Statut, budget consommé, Profil/Effort, livrables) ☐ commit Git [<ton chemin>] ….';
 
 /**
+ * Chantier 15, §16.4 : `<root>/mission/OBJECTIVE.md`, s'il existe, doit porter les trois sections que
+ * produit `tools/holarch-init` (« Échéance », « Validations requises », « Ressources ») ; une table
+ * dont l'en-tête porte une cellule « Livrable » sans cellule « Contrôle » ajoute `colonne Contrôle`
+ * aux manques. Dupliqué de `tools/config-lint` (fonction `verifierBriefObjective`) : le framework ne
+ * dépend d'aucun fichier de `tools/`. Renvoie `''` si le fichier est absent ou complet.
+ */
+function briefIncomplet(root) {
+  const texte = readIf(path.join(root, 'mission', 'OBJECTIVE.md'));
+  if (texte === null) return '';
+  const manquants = [];
+  if (!/^#{2,3}\s*Échéance\s*$/m.test(texte)) manquants.push('Échéance');
+  if (!/^#{2,3}\s*Validations requises\s*$/m.test(texte)) manquants.push('Validations requises');
+  if (!/^#{2,3}\s*Ressources\s*$/m.test(texte)) manquants.push('Ressources');
+  const lignes = texte.split('\n');
+  for (let i = 0; i < lignes.length; i++) {
+    const ligne = lignes[i].trim();
+    if (!ligne.startsWith('|') || /^\|[\s:|-]+\|?$/.test(ligne)) continue;
+    if ((i > 0 ? lignes[i - 1].trim() : '').startsWith('|')) continue;
+    const cellules = ligne.replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim().toLowerCase());
+    if (cellules.some((c) => c.includes('livrable')) && !cellules.some((c) => c.includes('contrôle') || c.includes('controle'))) {
+      manquants.push('colonne Contrôle');
+      break;
+    }
+  }
+  return manquants.length ? `brief incomplet : ${manquants.join(', ')} absentes` : '';
+}
+
+/**
  * SessionStart (chantier 7, §9.2) : rappelle, au réveil, le contexte de départ mesuré à la session
  * précédente de cette instance (dernière ligne de registry/SESSIONS.md la concernant, colonne
  * « Contexte (départ / max) ») et la discipline du module mémoire `unites-indexees` — sans lire ni
@@ -527,10 +976,17 @@ function sessionStart(ctx) {
     }
   }
   const rappelContexte = contexte ? `Ta session précédente avait démarré avec un contexte de ${contexte} tokens (registry/SESSIONS.md). ` : '';
+  // Chantier 15, §16.4 : seule la racine (instance sans '/', profondeur 1) porte le brief de mission —
+  // un enfant a son propre ROLE.md, pas de mission/OBJECTIVE.md à lui.
+  let prefixeBrief = '';
+  if (!instance.includes('/')) {
+    const b = briefIncomplet(root);
+    if (b) prefixeBrief = `[HOLARCH · brief] ${b} — une CLARIFICATION d'orientation groupée à l'utilisateur est attendue avant toute unité de production (typed-escalation, ON_ORIENT). `;
+  }
   emit({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: `[HOLARCH · rappel d'orientation] ${rappelContexte}Discipline mémoire (module unites-indexees) : plan de session = 1 à 3 unités numérotées U<n>, un commit par unité achevée, une fiche memoire/U<n>-….md à chaque unité (réussie, échouée ou partielle) ; ne relis que ce que ton plan cite explicitement — jamais un fichier entier par anticipation.`,
+      additionalContext: `${prefixeBrief}[HOLARCH · rappel d'orientation] ${rappelContexte}Discipline mémoire (module unites-indexees) : plan de session = 1 à 3 unités numérotées U<n>, un commit par unité achevée, une fiche memoire/U<n>-….md à chaque unité (réussie, échouée ou partielle) ; ne relis que ce que ton plan cite explicitement — jamais un fichier entier par anticipation.`,
     },
   });
 }
@@ -633,6 +1089,8 @@ function main() {
     if (event === 'framework-guard') return frameworkGuard(ctx);
     if (event === 'path-guard') return pathGuard(ctx);
     if (event === 'git-guard') return gitGuard(ctx);
+    if (event === 'deliver-guard') return deliverGuard(ctx);
+    if (event === 'gate-guard') return gateGuard(ctx);
     if (event === 'context-watch') return contextWatch(ctx);
     return ok();
   } catch (e) {
@@ -641,5 +1099,5 @@ function main() {
   }
 }
 
-module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard, pathGuard, racinePrincipale };
+module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard, pathGuard, racinePrincipale, deliverGuard, parseLivrables, parseControlesMessage, parseValidationsRequises, portesFranchies, gateGuard, briefIncomplet };
 if (require.main === module) main();

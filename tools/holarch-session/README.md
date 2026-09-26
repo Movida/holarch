@@ -101,7 +101,7 @@ signalé au tour suivant comme « étranger » ; câbler aussi `PostToolUseFailu
 invisibles : là, seule la relecture protège.
 
 Fail-open : toute erreur interne laisse l'action se faire. Pour tester une règle sans processus
-réel, `HOLARCH_GARDE_PS` remplace la sortie de `ps -eo pid,args`.
+réel, `HOLARCH_GARDE_PS` remplace la sortie de `ps -eo pid,args` (lue aussi par `etat.js` et `holarch-upgrade`).
 
 ## Limites assumées
 

@@ -41,6 +41,13 @@
  * Codes de sortie : 0 tout vérifié, 1 au moins une anomalie de format, 2 au moins une origine non
  * vérifiée (nécessite --blame), 3 les deux cumulées.
  *
+ * Champ optionnel `porte` (chantier 15, §16.3, gate-guard) : `V<n>`, placé après `date` dans le
+ * gabarit — une CLARIFICATION le porte pour demander une porte de validation, une RESPONSE pour la
+ * franchir. Comme `origine`, il n'ajoute aucun type de message et n'est soumis à aucun contrôle de
+ * valeur ici (message-lint ne vérifie pas les champs inconnus de l'enveloppe ; seuls `type`, `date`
+ * et `origine` ont une valeur contrôlée — voir CHAMPS_REQUIS/TYPES_VALIDES/ORIGINES_VALIDES
+ * ci-dessous) : un `porte: V1` ne déclenche donc jamais d'anomalie.
+ *
  * Sans dépendance (Node ≥ 18). --blame invoque `git` via execFileSync (jamais de shell).
  */
 
@@ -53,11 +60,14 @@ const ORIGINES_VALIDES = ['parent', 'enfant', 'utilisateur', 'harnais', 'externe
 const CHAMPS_REQUIS = ['id', 'from', 'to', 'type', 'ref', 'date'];
 const DATE_ISO = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$/;
 
-const CHAMPS_ENVELOPPE = ['id', 'from', 'to', 'type', 'ref', 'date', 'origine'];
+// `porte` (chantier 15, §16.3) : champ optionnel de l'enveloppe, reconnu comme ouverture de bloc au
+// même titre que les autres (pour ne pas l'absorber en silence dans le corps du message précédent
+// s'il apparaît par erreur juste après un "---") ; aucune valeur imposée.
+const CHAMPS_ENVELOPPE = ['id', 'from', 'to', 'type', 'ref', 'date', 'origine', 'porte'];
 
 /**
  * Ouvertures d'enveloppe d'un fichier INBOX/OUTBOX (gabarit MESSAGE.template.md) : un "---"
- * **immédiatement suivi** d'une ligne commençant par l'un des sept champs du gabarit (KERNEL §7) —
+ * **immédiatement suivi** d'une ligne commençant par l'un des huit champs du gabarit (KERNEL §7) —
  * jamais un "---" isolé : le corps d'un message (markdown libre) peut lui-même contenir une ligne
  * "---" (filet de séparation en prose), qui n'entre donc dans aucune de ces sept familles.
  * `valide` n'est vrai que si le premier champ est "id" (ordre imposé par le gabarit) : une

@@ -616,6 +616,55 @@ Les trois points restés ouverts en fin de conception ont été tranchés. Confo
     la décision 3 de §16.6 (« ne jamais conclure d'une exécution unique ») pour le permis aussi. Réserve : la
     ventilation par garde-fou des refus de `path-guard` en réel reste à relever par le dogfooding après promotion
     (recette au rapport §6), l'instance ne pouvant pas lire `/tmp`.
+42. **Chantiers 15 à 18, issus de la première mission hors framework (2026-09-20)** — la mission `montage-video-pacs`
+    (18-19/09, deux films pour une fête, HOLARCH 1.21.0) est jugée **échec** par le mainteneur : trop chère, artefacts
+    sous le niveau attendu. Mesure (`docs/diagnostics/2026-09-20-retex-montage-video-pacs.md`) : 152 USD liste de LLM
+    dont **64 % dans la session interactive du mainteneur** (608 k de contexte, hors de toute discipline du harnais),
+    instances 48 USD, génératif ≈ 42 USD réels ; 0 `CLARIFICATION`/`BLOCKER`/`PROPOSAL` des instances ; toutes les
+    validations sur des aperçus complets ; `milestone-reviews` inactif, profil `relecture` jamais incarné ; règles du
+    métier apparues à 00:16 sur prompt du mainteneur. Le mainteneur a demandé que l'instance se spécialise avant de
+    produire (règles d'or, savoir de domaine, prompts précis aux services externes, curiosité, remise en question,
+    recul) et a délégué le choix des chantiers à la session de maintenance. Retenu : quatre chantiers (`ROADMAP.md`
+    §3), **des mécanismes plutôt que des consignes** — 15 livraison verrouillée et portes de validation, 16 jobs et
+    lots payants arbitrés par le harnais, 17 spécialisation (règles du métier, kits, veille, relecture), 18 le
+    mainteneur gouverné comme une instance ; ordre 15, 17, 16, 18 en parallèle. Un second avis d'une autre session,
+    transmis par le mainteneur (quatre causes, quatre garanties, ne pas institutionnaliser les bricolages d'urgence),
+    est intégré au diagnostic. Non fait, volontairement : aucune conclusion sur l'utilité de l'orchestration
+    multi-instances pour une mission d'une nuit — son avantage n'est pas établi, son coût de coordination l'est.
+43. **Chantier 15 promu (2026-09-20, framework 1.24.0, mission `holarch-livraison`)** — racine seule, 5 sessions,
+    28,63 USD liste, 13 unités, 30 cibles, dans la journée qui a suivi le diagnostic. Décisions à la promotion :
+    (a) le jalon J1 (`deliver-guard` seul, livré à la première unité close) a été **validé sur pièces avant le reste**
+    — application à la mission elle-même de la règle « échantillon avant multiplication » (G5) ; la correction
+    demandée (juger seulement ce qui est ajouté, bloc de message par bloc — un `Write` réécrit tout le fichier et
+    aurait laissé passer un nouveau `DELIVERABLE` derrière un ancien valide) est la seule intervention du mainteneur
+    en cours de mission ; (b) la détection `Bash` des deux garde-fous limitée aux redirections `>`/`>>` est
+    **acceptée** comme écart (les instances écrivent leurs messages par `Write`/`Edit`), à étendre seulement sur un
+    contournement observé ; (c) `typed-escalation` `ON_WAKE` resserré sans changement de sens pour loger `ON_ORIENT`
+    sous le budget du contrat réduit (marge ≈ 16 caractères) : la mesure de cette marge par `npm run etat` va au
+    carnet ; (d) aucun nouveau type de message — `porte:` est un champ optionnel d'en-tête, ce qui garde
+    `message-lint`, les archives et les missions en cours valides. Mesure attendue : la mission du chantier 17 est la
+    première à tourner sous ces garde-fous (refus de `DELIVERABLE` puis corrections, `CLARIFICATION` d'orientation,
+    portes franchies).
+44. **Opus 5.5 pour tous les profils (2026-09-26, framework 1.24.1 puis 1.25.0)** — le mainteneur a signalé Opus 5.5
+    comme valant d'être utilisé, puis demandé de trancher les profils sur le classement d'Artificial Analysis. Règle
+    retenue : un profil ne bascule que là où le nouveau réglage **domine** l'ancien à la fois sur l'index d'intelligence
+    et sur le coût par tâche — aucun arbitrage coût contre qualité sans le mainteneur. C'est le cas d'`execution`
+    (`sonnet`/`medium` → `opus`/`low`) et d'`exploration` (`fable`/`xhigh` → `opus`/`xhigh`) ; `conception` et
+    `relecture` gardent leur effort. Le classement externe éclaire la décision sans la lier : aucun instantané de ses
+    données n'est committé (conditions de redistribution), `CONFIG.md` reste la seule source lue par le lanceur. À
+    vérifier sur les missions suivantes : coût par session (`SESSIONS.md`), limites 429 du forfait maintenant que tous
+    les profils partagent un modèle, qualité des livrables `execution`.
+45. **Chantier 17 promu (2026-09-26, framework 1.26.0, mission `holarch-specialisation`)** — racine seule, 6 sessions,
+    24,70 USD liste journalisés (S2-S6 ; S1 perdue au journal, son lanceur mort avant d'écrire), 21 unités, 58 cibles
+    dont 44 fragments. Décisions à la porte V1 et à la promotion : (a) le preset `artefacts` garde `git-branches` pour
+    que `isolation = worktree` agisse (le lanceur l'ignore sans ce module) ; (b) la hausse du contexte fixe qu'il
+    entraîne (64 947 caractères de prompt système contre 48 167 pour `solo-light`) est **acceptée** parce que le preset
+    est opt-in et que son surcoût, lu depuis le cache, reste de l'ordre du centime par session — `solo-light` ne prend
+    que les lignes Kits et Veille de `direct-spawn` 1.9.0 ; (c) un kit n'est jamais écrit par une instance : son
+    rapport propose, le mainteneur verse (`archive.js --kit`) ; (d) le kit `media` part dans le modèle public après
+    relecture (aucune donnée de personne, aucun chemin local). Mesure du chantier 15 sur cette première mission sous
+    ses garde-fous : 0 `DELIVERABLE` refusé, 1 écriture refusée par `gate-guard` et corrigée, 1 porte demandée et
+    franchie, aucune `CLARIFICATION` d'orientation. Reste le dogfooding §17.6 (mission média courte sous `artefacts`).
 
 ## 16. Harnais d'exécution (v1.1 — 2026-09-02, synchronisé depuis le framework public le 2026-09-04)
 
@@ -693,6 +742,15 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
       ni `Équivalent` — donc pour toute mission qui n'a qu'un fournisseur, dont celle-ci —, le
       comportement est **exactement** l'attente d'avant (`repriseIso`, à défaut `HOLARCH_ATTENTE_429_MS`).
 
+14. **Kits de domaine et veille bornée** (chantier 17, `IMPLEMENTATION.md` §17.2-17.3) : une ligne `- Kits : <domaine>, …`
+    du « Contexte hérité » du `ROLE.md` (de « Ressources » d'`OBJECTIVE.md` pour la racine) attache `framework/kits/<domaine>/` ;
+    le lanceur (`framework/bin/kits.js`) injecte l'`INDEX.md` de chaque kit attaché dans un bloc `<kits>` placé après
+    `<reveil>`, le pèse au `--dry-run` (ligne `KITS`) et refuse de lancer une instance qui attache un kit absent. Références,
+    prompts et vérificateurs du kit se lisent à la demande, jamais injectés ; `npm run lint:kits` en valide la forme. Une ligne
+    `| Veille | <n> |` de la fiche registre étend `--tools` de `outils_veille` (défaut `WebSearch,WebFetch`,
+    `framework/bin/veille.js`) pour un profil `conception` ou `exploration` seulement ; la borne de n lectures est tenue par
+    l'instance (unité U0, `regles-du-metier`), pas comptée par le harnais.
+
 ### 16.2 Garde-fous
 
 | Hook | Événement | Effet |
@@ -703,6 +761,11 @@ Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CL
 | `framework-guard` | `PreToolUse` (Write, Edit) | Refuse tout `Write`/`Edit` sous `framework/`, `docs/`, `tools/` ou sur `mission/OBJECTIVE.md` — hors de l'arbre propre de l'instance (`mission/<instance>/**`, `mission/shared/<instance>/**`) —, quel que soit l'état de `STATUS.md`. Différent de `wake-guard` par la portée : `wake-guard` porte sur l'arbre autorisé selon la phase de l'instance (gouverné par `ON_ORIENT`/l'état actif) et s'ouvre une fois la porte franchie ; `framework-guard` porte sur une liste fixe de répertoires qui ne sont jamais la production d'une mission (le produit et la documentation du harnais lui-même) et refuse inconditionnellement, indépendamment de `STATUS.md`/`PROGRESS.md`. Doublé, en défense en profondeur, par `permissions.deny` d'`instance-settings.json` (`framework/**`, `docs/**`, `tools/**`, `mission/OBJECTIVE.md`) — ceinture et bretelles, `--disallowedTools` du lanceur restant le troisième niveau pour `framework/**` et `mission/OBJECTIVE.md` (chantier 7 U2, `IMPLEMENTATION.md` §9.4). |
 | `context-watch` | `PostToolUse` (tous outils) | Lit l'usage du dernier message assistant dans la transcription (entrée + cache lu + cache écrit = contexte réel) ; au-delà de `seuil_contexte_tokens`, injecte l'ordre d'hiberner volontairement (une fois par palier de 20 000 tokens ; ton renforcé au-delà de 125 % du seuil). Remplace, quand le lanceur est utilisé, l'heuristique auto-rapportée de `context-budget`. **Depuis 1.9.0**, persiste aussi la mesure instantanée (`{session_id, depart, max, dernier, tours}`) dans `mission/.holarch/live/<chemin-tirets>.contexte.json`, lue et consommée par `appendSessionLine` en fin de session (colonne 12 de `SESSIONS.md`, §16.1 point 10). Lit aussi la demande d'arrêt propre (`mission/.holarch/stop/<instance>`, posée par `--arret`) et injecte une seule fois par session l'ordre d'hiberner avec la note « hibernation volontaire (arrêt demandé) », que le lanceur ne ré-incarne jamais (chantier 2). |
 | `path-guard` | `PreToolUse` (Write, Edit, Read, Bash) | Déclaré dans `framework/claude/instance-settings.json` (chantier 14). Sous `isolation = worktree`, intercepte l'usage, par une instance incarnée dans un worktree, d'un chemin absolu de l'arbre **principal** (`<racine principale>/…`) dans un appel d'outil, et refuse **en enseignant** : le message de refus donne le chemin **relatif** équivalent à employer, au lieu d'un refus sec. La racine de l'arbre principal est déduite du fichier `.git` du worktree, avec repli sur la forme `…/mission/.holarch/worktrees/<instance>` ; si la session tourne dans l'arbre principal (racine indéterminable), le hook est **inerte** — il ne gêne jamais une session de maintenance. Motivation : au chantier 13, une instance a produit 58 refus pour 0 unité livrée ; un refus d'allowlist est muet et perdu à l'archivage, un refus de hook est lisible, compté et ventilé par `tools/holarch-session/refus.js`. |
+| `deliver-guard` | `PreToolUse` (Write, Edit, Bash) | Chantier 15 (`docs/IMPLEMENTATION.md` §16.1), déclaré dans `framework/claude/instance-settings.json`. Refuse toute écriture d'un bloc `type: DELIVERABLE` dans `INBOX.md`/`OUTBOX.md` qui ne porte pas une table `## Contrôles` à quatre colonnes (une ligne par livrable de la table Livrables de la source de rôle — `ROLE.md` de l'instance dans son worktree, `mission/OBJECTIVE.md` pour la racine) ni, pour un jalon, la ligne `Livrables couverts :`. Ne juge que ce qui est **ajouté** (Write : le contenu moins le texte déjà sur disque ; Edit : `new_string` ; Bash : la commande), découpé en blocs de message (`---` + `id:`), chaque bloc DELIVERABLE jugé séparément. Le refus imprime le squelette exact de la table attendue (un refus qui enseigne). Sept cas à sec, `framework/tests/deliver-guard.test.js`. Rejeu côté parent : `node framework/bin/holarch-spawn.js --controle <chemin-enfant>` (exit 0 conforme / 1 écart / 2 source introuvable ; JSON sous `mission/.holarch/controles/`), exigé par `direct-spawn` 1.8.0 à `ON_CHILD_DONE` avant toute acceptation ou fusion. |
+| `gate-guard` | `PreToolUse` (Write, Edit, Bash) | Chantier 15 (§16.3). Lit la table « Validations requises » (`| Porte | Quoi | Par qui | Protège |`) de la source de rôle ; tant qu'une porte `V<n>` n'a pas été franchie (une `RESPONSE` du parent portant `porte: V<n>` dans l'`INBOX.md`), toute écriture sous un chemin qu'elle protège est refusée, et `deliver-guard` refuse tout `DELIVERABLE` d'un livrable qu'elle protège (indépendant de la colonne Contrôle). Une `CLARIFICATION` portant `porte: V<n>` est la façon ordinaire de demander la validation ; aucun nouveau type de message. Cinq cas à sec, `framework/tests/gate-guard.test.js`. |
+| `spawn-guard` (veille) | `PreToolUse` (Bash) | Chantier 17 (§17.3). Refuse d'incarner un enfant dont la fiche registre porte une ligne `Veille` sur un profil autre que `conception` ou `exploration` (profil absent = `execution`) ; fiche lue comme pour le reste du hook : arbre du parent, worktree de l'enfant, sinon sa branche. Le lanceur applique le même refus, que `--dry-run` signale sans lancer. |
+
+**Brief incomplet (chantier 15, §16.4).** `holarch-init` pose six questions (échéance, commanditaire et validations requises, ressources, en plus des trois existantes) et produit un `OBJECTIVE.md` à trois sections de plus (« Échéance », « Commanditaire et validations » avec une table `### Validations requises` amorcée sur V1 dès qu'il y a un artefact, « Ressources ») ; `config-lint` et le lanceur (`session-start`, `--dry-run`) signalent « brief incomplet : … absentes » quand une de ces sections manque — un **avertissement, jamais un refus** (un brief ancien reste valide), relayé au réveil de la racine où la règle `ON_ORIENT` de `typed-escalation` 1.2.0 impose une `CLARIFICATION` d'orientation unique avant toute unité de production. Cinq cas à sec, `framework/tests/brief-incomplet.test.js`.
 
 ### Gardes a posteriori : vérifier une session par le dépôt
 

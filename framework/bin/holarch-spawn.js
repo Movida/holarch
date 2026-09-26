@@ -96,9 +96,9 @@ const DEFAULTS = {
 /** Politique de modèle par profil, par défaut (surchargeable : CONFIG.md « ## Politique de modèle »). */
 const DEFAULT_POLICY = {
   conception: { modele: 'opus', effort: 'high' },
-  execution: { modele: 'sonnet', effort: 'medium' },
+  execution: { modele: 'opus', effort: 'low' },
   relecture: { modele: 'opus', effort: 'medium' },
-  exploration: { modele: 'fable', effort: 'xhigh' },
+  exploration: { modele: 'opus', effort: 'xhigh' },
 };
 
 // ---------------------------------------------------------------------------
@@ -303,6 +303,75 @@ function findRoot(start) {
     dir = parent;
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Chantier 15, §16.2 : --controle <chemin> — rejeu de la colonne Contrôle d'un ROLE.md/OBJECTIVE.md
+// ---------------------------------------------------------------------------
+/** Source des livrables de `chemin` et l'espace de travail où rejouer ses commandes : règle
+ *  « worktree → disque → branche ». `null` si introuvable dans les trois. */
+function resolveSourceControle(root, chemin, cfg) {
+  const relSource = chemin.includes('/') ? path.join('mission', chemin, 'ROLE.md') : path.join('mission', 'OBJECTIVE.md');
+  if (hasWorktree(root, chemin)) {
+    const cwd = worktreeDir(root, chemin);
+    const texte = readIf(path.join(cwd, relSource));
+    if (texte !== null) return { texte, espace: 'worktree', cwd, source: relSource };
+  }
+  const texteDisque = readIf(path.join(root, relSource));
+  if (texteDisque !== null) return { texte: texteDisque, espace: 'disque', cwd: root, source: relSource };
+  const gb = gitBranchesCtx(cfg);
+  const prefixe = (gb && gb.prefixe) || 'holarch/';
+  const branche = `${prefixe}${chemin.replace(/\//g, '-')}`;
+  const show = spawnSync('git', ['show', `${branche}:${relSource.replace(/\\/g, '/')}`], { cwd: root, encoding: 'utf8' });
+  if (show.status === 0) return {
+    texte: show.stdout, espace: 'branche', cwd: root, source: relSource,
+  };
+  return null;
+}
+
+/** `--controle <chemin>` (docs/IMPLEMENTATION.md §16.2) : rejoue chaque commande de la colonne
+ *  Contrôle de la source de rôle de `chemin` dans son espace de travail réel, imprime code et
+ *  première ligne de chaque rapport, écrit `mission/.holarch/controles/<chemin-tirets>-<ts>.json`.
+ *  Retourne `{ code, fichier }` — code 0 ssi tous les contrôles exécutés sont à 0 (aucune colonne
+ *  Contrôle : code 0, rien écrit ; source introuvable : code 2, rien écrit). */
+function controle(root, chemin) {
+  // Chargé ici, pas en tête de fichier : les sandboxes des autres tests (unites-indexees-select-
+  // inbox-messages-origine.test.js, etc.) ne reconstituent que framework/bin/ autour de ce fichier,
+  // jamais framework/hooks/ — un require de tête casserait tout ce qui n'exerce pas --controle.
+  const holarchHooks = require('../hooks/holarch-hooks');
+  const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
+  const resolu = resolveSourceControle(root, chemin, cfg);
+  if (!resolu) {
+    const attendu = chemin.includes('/') ? `mission/${chemin}/ROLE.md` : 'mission/OBJECTIVE.md';
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ --controle : source introuvable (ni worktree, ni disque, ni branche) — ${attendu}\n`);
+    return { code: 2, fichier: null };
+  }
+  const livrables = holarchHooks.parseLivrables(resolu.texte);
+  if (!livrables) {
+    process.stdout.write('aucune colonne Contrôle : rien à rejouer\n');
+    return { code: 0, fichier: null };
+  }
+  const controles = [];
+  for (const l of livrables) {
+    if (!l.controle) { process.stdout.write(`${l.livrable} : — (pas de contrôle)\n`); continue; }
+    const res = spawnSync(l.controle, { shell: true, cwd: resolu.cwd, encoding: 'utf8', timeout: 10 * 60 * 1000 });
+    const code = res.status === null ? 1 : res.status;
+    const premiereLigne = (res.stdout || '').split('\n').map((s) => s.trim()).find(Boolean)
+      || (res.stderr || '').split('\n').map((s) => s.trim()).find(Boolean) || '-';
+    process.stdout.write(`${l.livrable} · ${l.controle} → code ${code} · ${premiereLigne}\n`);
+    controles.push({
+      livrable: l.livrable, commande: l.controle, code, premiereLigne,
+    });
+  }
+  const tousAZero = controles.every((c) => c.code === 0);
+  const ts = new Date().toISOString().replace(/:/g, '-');
+  const dir = path.join(root, 'mission', '.holarch', 'controles');
+  fs.mkdirSync(dir, { recursive: true });
+  const fichier = path.join(dir, `${chemin.replace(/\//g, '-')}-${ts}.json`);
+  fs.writeFileSync(fichier, JSON.stringify({
+    chemin, date: new Date().toISOString(), source: resolu.source, espace: resolu.espace, cwd: resolu.cwd, controles, tousAZero,
+  }, null, 2));
+  return { code: tousAZero ? 0 : 1, fichier };
 }
 
 // ---------------------------------------------------------------------------
@@ -928,6 +997,12 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg, extra
     const obj = readIf(path.join(root, 'mission', 'OBJECTIVE.md'));
     p.push(obj === null ? '<fichier chemin="mission/OBJECTIVE.md" note="INTROUVABLE"></fichier>' : fileBlock('mission/OBJECTIVE.md', obj));
     blocs.push({ nom: 'OBJECTIVE', chars: obj === null ? 0 : obj.length, note: '' });
+    // Chantier 17, §17.2 : kits de la ligne « Kits » d'OBJECTIVE.md (section Ressources), dès la première session.
+    const kitsBoot = require('./kits').blocKits(require('./kits').resoudreKits(root, chemin, { bootstrap: true }));
+    if (kitsBoot) {
+      if (kitsBoot.texte) p.push(kitsBoot.texte);
+      blocs.push({ nom: 'KITS', chars: kitsBoot.chars, note: kitsBoot.note });
+    }
     p.push(...harnais);
     return { prompt: p.join('\n\n'), blocs };
   }
@@ -975,6 +1050,12 @@ function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg, extra
     }
     p.push(`<reveil>\n${reveil}\n</reveil>`);
     blocs.push({ nom: 'REVEIL', chars: reveil.length, note: '' });
+  }
+  // Chantier 17, §17.2 : INDEX.md de chaque kit attaché (ligne « Kits »), bloc <kits> après <reveil> ; pesé au dry-run.
+  const kitsBloc = require('./kits').blocKits(require('./kits').resoudreKits(root, chemin, { cwd: ws && ws.cwd }));
+  if (kitsBloc) {
+    if (kitsBloc.texte) p.push(kitsBloc.texte);
+    blocs.push({ nom: 'KITS', chars: kitsBloc.chars, note: kitsBloc.note });
   }
   if (inbox === null) {
     p.push(introuvable('INBOX.md'));
@@ -1118,6 +1199,23 @@ function prepareLaunch(root, chemin, opts) {
     for (const name of ['ROLE.md', 'STATUS.md']) {
       if (!fs.existsSync(path.join(base, name))) throw new Error(`instance ${chemin} : ${name} introuvable (mécanique de spawn KERNEL §9 non faite ?)`);
     }
+  }
+  // Chantier 17, §17.2 : un kit nommé à la ligne « Kits » mais absent de framework/kits/ refuse le lancement, avant
+  // toute session (même logique que les variables de fournisseur ci-dessous) ; le dry-run avertit seulement.
+  const refusKit = require('./kits').refusKits(chemin, require('./kits').resoudreKits(root, chemin, { bootstrap, cwd: workspace.cwd }));
+  if (refusKit) {
+    if (opts.dryRun) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ${refusKit} (un lancement réel serait refusé)\n`);
+    else throw new Error(refusKit);
+  }
+  // Chantier 17, §17.3 : veille bornée — une ligne « Veille » de la fiche registre étend --tools de `outils_veille`
+  // pour un profil conception/exploration ; posée sur un autre profil, elle refuse le lancement (le dry-run avertit).
+  const veille = require('./veille').resoudreVeille(bootstrap ? null : readIf(fichePath(root, chemin)), meta.profil, params);
+  if (veille.refus) {
+    if (opts.dryRun) process.stderr.write(`HOLARCH ▸ ${chemin} ▸ ${veille.refus} (un lancement réel serait refusé)\n`);
+    else throw new Error(veille.refus);
+  } else if (veille.lectures) {
+    params.outils_cli = veille.outils;
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ veille : au plus ${veille.lectures} lecture(s), outils ${veille.outils}\n`);
   }
   const permissionMode = opts.permissionMode || params.permission_mode;
   if (!VALID_PERMISSION_MODES.includes(permissionMode)) throw new Error(`permission_mode invalide « ${permissionMode} »`);
@@ -1813,7 +1911,7 @@ function summarize(launch, sessions) {
 // CLI
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
-  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '', reprendre: false, checkEnv: false };
+  const o = { chemin: null, bootstrap: false, dryRun: false, json: false, profil: '', modele: '', effort: '', budget: '', maxTours: '', permissionMode: '', root: '', timeoutMin: 0, addDir: [], detach: false, reveil: false, taches: false, arret: '', nettoyerWorktree: '', reprendre: false, checkEnv: false, controle: '' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => argv[++i];
@@ -1840,6 +1938,7 @@ function parseArgs(argv) {
     else if (a === '--arret') o.arret = next();
     else if (a === '--immediat') o.immediat = true;
     else if (a === '--nettoyer-worktree') o.nettoyerWorktree = next();
+    else if (a === '--controle') o.controle = next();
     else if (a === '--check-env') o.checkEnv = true;
     else if (a === '-h' || a === '--help') { o.help = true; }
     else if (a.startsWith('-')) throw new Error(`option inconnue : ${a}`);
@@ -1894,6 +1993,8 @@ function usage() {
     '          --nettoyer-worktree <chemin> (supprime le worktree d\'une instance déjà fusionnée ; refuse si des changements non committés subsistent,',
     '          sauf --forcer : écrit d\'abord un patch sous mission/.holarch/graveyard/ puis supprime de force)',
           '          --check-env (prérequis d\'Étape 0 de BOOTSTRAP.md : Node, git, CLI claude installée et authentifiée — avant tout lancement réel)',
+          '          --controle <chemin> (rejoue la colonne Contrôle du ROLE.md de <chemin> — OBJECTIVE.md pour la racine — dans son espace de travail réel ;',
+          '          écrit mission/.holarch/controles/<chemin-tirets>-<ts>.json, sort en 0 ssi tous les contrôles exécutés sont à 0)',
   ].join('\n');
 }
 
@@ -2021,6 +2122,12 @@ function main() {
     process.stdout.write(`HOLARCH ▸ ${chemin} ▸ ${r.message}\n`);
     return;
   }
+  if (o.controle) {
+    const chemin = o.controle.replace(/^mission\//, '').replace(/\/+$/, '');
+    const r = controle(root, chemin);
+    if (r.fichier) process.stdout.write(`HOLARCH ▸ ${chemin} ▸ contrôle écrit : ${path.relative(root, r.fichier)}\n`);
+    process.exit(r.code);
+  }
   if (o.nettoyerWorktree) {
     const chemin = o.nettoyerWorktree.replace(/^mission\//, '').replace(/\/+$/, '');
     const res = removeWorktree(root, chemin, { forcer: !!o.forcer });
@@ -2090,6 +2197,13 @@ function main() {
       '',
     ].join('\n'));
     if (o.json) process.stdout.write(`${JSON.stringify({ root, chemin: launch.chemin, meta: launch.meta, params: launch.params, executeur: apercu.executeur, bin: apercu.bin, args: apercu.args }, null, 2)}\n`);
+    // Chantier 15, §16.4 : au dry-run d'une racine (bootstrap, ou chemin sans '/'), répète l'avertissement
+    // de brief incomplet que le hook session-start donnera au réveil réel — visible avant tout lancement.
+    if (launch.bootstrap || !launch.chemin.includes('/')) {
+      const holarchHooks = require('../hooks/holarch-hooks');
+      const b = holarchHooks.briefIncomplet(root);
+      if (b) process.stderr.write(`HOLARCH ▸ ${launch.chemin} ▸ ${b} (mission/OBJECTIVE.md, §16.4)\n`);
+    }
     return;
   }
   const sessions = launchWithRelaunches(root, o.chemin, o);
@@ -2115,6 +2229,7 @@ module.exports = {
   worktreeDir, hasWorktree, instanceRoot, instancePath, resolveWorkspace, removeWorktree, writeGraveyardPatch, relayInboxFromParent,
   ensureSessionsFile, lastContexteDepart, contexteLivePath,
   verifierEnv,
+  controle, resolveSourceControle,
 };
 
 if (require.main === module) main();

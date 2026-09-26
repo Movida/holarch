@@ -15,6 +15,10 @@ node message-lint.js <INBOX.md|OUTBOX.md> [--blame] [--json]
 - `date` est une date ISO 8601 valide (jour seul ou horodatage complet) ;
 - `origine` (si présent) est l'une des cinq valeurs du gabarit
   (`framework/templates/MESSAGE.template.md`) : `parent, enfant, utilisateur, harnais, externe` ;
+- `porte` (si présent, chantier 15 §16.3, gate-guard) : `V<n>` — une CLARIFICATION le porte pour
+  demander une porte de validation, une RESPONSE pour la franchir ; champ reconnu comme ouverture
+  d'enveloppe mais sans valeur imposée, aucune anomalie n'est déclenchée par sa présence (message-lint
+  ne vérifie pas les champs inconnus de l'enveloppe) ;
 - le numéro séquentiel d'un `id` (`<préfixe>-<numéro>`, préfixe = tout ce qui précède le dernier
   `-`) est strictement croissant **au sein de son propre préfixe**, pas globalement sur le fichier :
   une même boîte reçoit des messages de plusieurs émetteurs, chacun avec son propre compteur

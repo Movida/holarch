@@ -1,6 +1,6 @@
 # Module : direct-spawn
 > Catégorie : orchestration
-> Version : 1.7.0
+> Version : 1.9.0
 > Requiert : —
 > Incompatible avec : —
 > Complète bien : fork-join, dependency-graph, instance-budget, max-depth, context-budget
@@ -18,6 +18,7 @@
 | seuil_contexte_tokens | 120000 | Contexte réel (tokens) au-delà duquel le hook `context-watch` ordonne l'hibernation volontaire. |
 | autocompact_tokens | 180000 | Dernier recours si l'instance ignore l'ordre d'hiberner : fenêtre de compaction automatique de Claude Code (`--autocompact`). |
 | outils_cli | Read,Write,Edit,Bash,Glob,Grep,Agent,TodoWrite | Outils Claude Code disponibles (`--tools`) ; les autres n'entrent pas dans le contexte. |
+| outils_veille | WebSearch,WebFetch | Outils ajoutés à `--tools` d'une instance dont la fiche registre porte une ligne `Veille` (profils `conception` et `exploration` seulement, §17.3). |
 | relances_max | 2 | Sessions consécutives **sans progrès** (aucune nouvelle fiche `memoire/U<n>-*.md`, aucun commit `[<chemin>]`) que le lanceur tolère après une hibernation volontaire de contexte avant d'arrêter de ré-incarner ; une session qui progresse remet le compte à zéro. Arrêt ⇒ `ALERT` du lanceur dans l'INBOX du parent (provenance `harnais`), qui décide : relance détachée, `TASK`, `FAILED`. |
 | sessions_sans_unite_max | 3 | Sessions consécutives **sans nouvelle fiche d'unité** (`memoire/U<n>-*.md`), commits ou pas, avant l'arrêt et l'`ALERT` au parent (1.21.0 : un enfant a commité du travail en cours pendant 8 sessions sans jamais clore une unité). `0` : désactivé. |
 | sessions_max_par_instance | 24 | Plafond absolu de sessions d'une instance, toutes invocations du lanceur confondues (compté dans `registry/SESSIONS.md`) ; atteint ⇒ même `ALERT` au parent. `0` : sans plafond. |
@@ -30,11 +31,11 @@ Chaque instance porte un **profil** : champ `Profil` de sa fiche registre, posé
 | Profil | Modèle | Effort par défaut | Quand l'attribuer |
 |---|---|---|---|
 | conception | opus | high | Racine, parents, rôles de décomposition, d'arbitrage ou de synthèse multi-sources, critères d'acceptation encore flous |
-| execution | sonnet | medium | Livrable précis, critères d'acceptation vérifiables (rédaction cadrée, code spécifié, conversion, extraction) |
+| execution | opus | low | Livrable précis, critères d'acceptation vérifiables (rédaction cadrée, code spécifié, conversion, extraction) |
 | relecture | opus | medium | Revue, audit ou vérification indépendante d'un livrable |
-| exploration | fable | xhigh | Chemin de solution inconnu au moment du spawn : problème ouvert, forte incertitude, plusieurs sessions attendues, raisonnement long ou de haut niveau (recherche, conception sous contrainte, diagnostic difficile). Le modèle le plus capable et le plus coûteux : pour ce qui dépasse ce que `conception` sait faire, jamais pour compenser un `ROLE.md` flou |
+| exploration | opus | xhigh | Chemin de solution inconnu au moment du spawn : problème ouvert, forte incertitude, plusieurs sessions attendues, raisonnement long ou de haut niveau (recherche, conception sous contrainte, diagnostic difficile). Le réglage le plus capable et le plus coûteux : pour ce qui dépasse ce que `conception` sait faire, jamais pour compenser un `ROLE.md` flou |
 
-Règles : (a) en cas de doute, `execution` avec des critères d'acceptation plus précis dans le `ROLE.md`, plutôt qu'un modèle plus fort avec un `ROLE.md` flou — un modèle fort ne compense pas une mission mal cadrée ; (b) jamais `haiku` pour une instance (boucle agentique longue) — il reste réservé aux sous-agents de lecture internes à une session ; (c) la précédence est : option de ligne de commande > lignes `Modèle` et `Effort` de la fiche registre > table `## Politique de modèle` > `modele_cli`/`effort_cli` explicites > défauts ci-dessus ; (d) pour une question de raisonnement bornée en cours de session (un arbitrage difficile, une preuve, la critique d'un design), un sous-agent `Agent` avec `model: fable` coûte moins qu'un changement de régime — il ne le remplace pas quand c'est toute la suite du travail qui dépasse le régime courant.
+Règles : (a) en cas de doute, `execution` avec des critères d'acceptation plus précis dans le `ROLE.md`, plutôt qu'un modèle plus fort avec un `ROLE.md` flou — un modèle fort ne compense pas une mission mal cadrée ; (b) jamais `haiku` pour une instance (boucle agentique longue) — il reste réservé aux sous-agents de lecture internes à une session ; (c) la précédence est : option de ligne de commande > lignes `Modèle` et `Effort` de la fiche registre > table `## Politique de modèle` > `modele_cli`/`effort_cli` explicites > défauts ci-dessus ; (d) pour une question de raisonnement bornée en cours de session (un arbitrage difficile, une preuve, la critique d'un design), un sous-agent `Agent` avec `model: opus` coûte moins qu'un changement de régime — il ne le remplace pas quand c'est toute la suite du travail qui dépasse le régime courant.
 
 **Modèle par instance** (1.7.0). Le profil reste la manière normale de choisir un modèle : il dit *quel genre de travail* fait l'instance, et la politique de la mission tranche une fois pour toutes ce qu'on met en face. Quand un enfant a besoin d'un modèle que sa politique de profil ne lui donnerait pas, pose-le explicitement dans sa fiche registre par la ligne `| Modèle | <identifiant du catalogue> |`, optionnelle : absente — cas courant, et le bon par défaut —, la politique s'applique. Trois cas où elle se justifie : une **aptitude** déclarée au catalogue (colonne `Aptitudes`) que le modèle du profil n'a pas ; un travail volumineux et mécanique qu'un modèle moins coûteux fait aussi bien (devoir d'économie, KERNEL §5.8) ; un fournisseur imposé par la nature des données manipulées. Deux garde-fous inchangés : jamais `haiku` pour une instance (règle (b)), et jamais un modèle plus fort pour compenser un `ROLE.md` flou (règle (a)). Un identifiant absent du catalogue n'est pas refusé — il part tel quel à l'exécuteur, avec un avertissement du lanceur sur stderr : le catalogue nomme ce qu'il connaît, il ne fait pas office de liste blanche.
 
@@ -47,7 +48,7 @@ Règles : (a) en cas de doute, `execution` avec des critères d'acceptation plus
 | xhigh | Tâche longue ou agentique dont la qualité dépend de la capacité du modèle (code non trivial, conception, diagnostic) ; défaut d'`exploration` |
 | max | L'exactitude prime sur le coût : livrable irréversible, promu sans relecture, ou dont l'erreur coûterait plus qu'une session entière |
 
-Un effort plus élevé allonge chaque tour et consomme davantage de budget de session pour le même nombre de tours ; au tarif liste, `fable` coûte deux fois `opus`, donc `budget_usd_par_session` tombe deux fois plus vite sur une instance `exploration` — sous forfait, ce montant mesure l'usage, pas une facture (`docs/holarch.md` §16.4).
+Un effort plus élevé allonge chaque tour et consomme davantage de budget de session pour le même nombre de tours ; `xhigh` consomme environ deux fois `high`, donc `budget_usd_par_session` tombe deux fois plus vite sur une instance `exploration` — sous forfait, ce montant mesure l'usage, pas une facture (`docs/holarch.md` §16.4).
 
 **Régime par phase, à l'intérieur d'une même instance `execution`.** Une instance dont la mission comporte une phase de conception ouverte (produire un plan détaillé, fichier par fichier, avant de coder) suivie d'une phase d'exécution cadrée (le plan écrit) peut porter les deux effort successivement, sans que ce soit un changement de régime au sens ci-dessous : `xhigh` pour la seule unité de conception (le plan), puis `high` pour la transcription et les tests une fois ce plan committé — la bascule descendante `xhigh → high` est alors **prévue au `ROLE.md` par le parent**, pas décidée en cours de route par l'instance ; elle suit la même mécanique (`ON_PLAN`, ligne `Effort` de la fiche, hibernation, ré-incarnation) mais ne compte pas comme le changement de régime discrétionnaire décrit plus bas, car elle est déjà écrite dans le contrat de l'instance avant sa première session.
 
@@ -96,6 +97,12 @@ ligne de synthèse du lanceur ; le hook `sleep-guard` refuse l'hibernation d'une
 ### ⚓ ON_SPAWN
 Pour chaque enfant que tu décides de créer, applique d'abord la mécanique structurelle invariante (KERNEL §9 : création des répertoires et fichiers, fiche registre, `ORG.md`, commit). Ajoute dans sa fiche registre la ligne `| Profil | conception |`, `| Profil | execution |`, `| Profil | relecture |` ou `| Profil | exploration |` selon la politique ci-dessus, la ligne `| Effort | low |` (ou `medium`, `high`, `xhigh`, `max`) si l'effort par défaut du profil ne convient pas à la tâche, et la ligne facultative `| Modèle | <identifiant du catalogue> |` si c'est le modèle du profil qui ne convient pas (voir « Modèle par instance ») ; justifie ces choix en une ligne dans ton `JOURNAL.md`. Si la mission de l'enfant enchaîne une phase de conception ouverte et une exécution cadrée (voir « Régime par phase » ci-dessus), écris-le dans son `ROLE.md` : effort initial, condition de bascule, effort cible. Ce module ne modifie pas la mécanique de spawn — il ne régit que ce qui se passe *après*, à `ON_SUPERVISE`.
 
+Pour chaque livrable de la table Livrables du `ROLE.md` de l'enfant, le parent remplit la colonne « Contrôle » (commande exécutable depuis la racine de travail de l'enfant, code 0 = conforme) ou écrit `—` en motivant l'absence dans la cellule Critères (« lecture sur pièces par le parent : <motif> ») ; un `ROLE.md` sans colonne Contrôle est un défaut de cadrage qui appartient au parent, le hook `deliver-guard` de l'enfant restant inerte ; à `ON_CHILD_DONE`, ces commandes sont ce que le parent rejoue (`--controle`, volet 2).
+
+Technique ou service qu'aucun kit ne couvre, enfant `conception`/`exploration` : ligne `| Veille | <n> |` à sa fiche (≤ n lectures par `outils_veille`, consignées en U0) ; jamais en `execution` (`spawn-guard` refuse).
+
+Tâche couverte par un kit (`framework/kits/<domaine>/`, §17.2) : ligne `- Kits : <domaine>, …` au « Contexte hérité » du `ROLE.md` — `INDEX.md` injecté à chaque réveil (bloc `<kits>`), kit absent refusé ; n'attache que l'utile.
+
 ### ⚓ ON_PLAN
 Avant de décider entre faire seul et décomposer, demande-toi si ton régime (profil, modèle et effort de cette session, rappelés par le harnais dans ton prompt) suffit à la tâche. S'il ne suffit pas selon les critères de « Changement de régime » ci-dessus, et si ta fiche ne porte pas déjà un changement de ta main :
 1. Mets à jour ta fiche registre : ligne `Profil` (vers `exploration`, ou `conception` depuis `execution`), ligne `Effort` et/ou ligne `Modèle` (identifiant du catalogue). Un seul changement de régime par instance ; jamais vers `haiku`.
@@ -140,7 +147,9 @@ déjà vrai te réveillerait à nouveau sur-le-champ), puis hiberne. En mode `sy
 objet (le parent reste vivant, `isLive` empêche tout réveil parasite).
 
 ### ⚓ ON_CHILD_DONE
-Si la ligne de synthèse du lanceur (`opus/high → fable/xhigh`) ou `registry/SESSIONS.md` montre qu'un enfant a changé de régime, lis sa justification dans son `JOURNAL.md` avant de juger son livrable : un changement motivé par un `ROLE.md` flou est un défaut de cadrage qui t'appartient (KERNEL §10), pas une faute de l'enfant. Note ton verdict dans ton `JOURNAL.md` ; un enfant ne change de régime qu'une fois, et un enfant qui aurait besoin d'un second changement relève d'un recadrage, pas d'une relance.
+Si la ligne de synthèse du lanceur (`opus/high → opus/xhigh`) ou `registry/SESSIONS.md` montre qu'un enfant a changé de régime, lis sa justification dans son `JOURNAL.md` avant de juger son livrable : un changement motivé par un `ROLE.md` flou est un défaut de cadrage qui t'appartient (KERNEL §10), pas une faute de l'enfant. Note ton verdict dans ton `JOURNAL.md` ; un enfant ne change de régime qu'une fois, et un enfant qui aurait besoin d'un second changement relève d'un recadrage, pas d'une relance.
+
+Avant d'accepter un `DELIVERABLE` (et, sous `git-branches`, avant toute fusion), lance `--controle <chemin-enfant>` et compare chaque ligne au tableau `## Contrôles` du message : commande absente, code différent ou ≠ 0 vaut renvoi par `TASK`, jamais acceptation. Consigne le fichier `mission/.holarch/controles/…json` dans ta fiche d'unité ou ton `JOURNAL.md`.
 
 ## Ce que le lanceur garantit — et ce qu'il ne garantit pas
 - Garantit : modèle par profil et effort par instance (ligne `Effort` de la fiche registre) ; ré-incarnation sur le nouveau régime après un changement de régime, signalée dans la ligne de synthèse et décomptée à part (`changements_regime_max`) ; contexte fixe réduit et identique pour toutes les instances de la mission (outils restreints, skills et serveurs MCP exclus, mémoire automatique de Claude Code désactivée — toute la mémoire d'une instance vit dans ses fichiers, KERNEL §1 ; prompt système partagé, donc cache de prompt partagé) ; plafonds de tours, de dépense et de contexte ; refus mécanique des écritures sous `framework/` et dans `mission/OBJECTIVE.md` (deux niveaux redondants — `--disallowedTools` et `permissions.deny`, en motifs relatifs à la racine du dépôt ; un défaut de l'un des deux, motifs absolus donc inertes, a laissé passer l'écriture en conditions réelles jusqu'au 2026-09-03, constat D2 — vérifié corrigé par un test d'intégration qui lance une vraie session, `framework/tests/B3-refus-ecriture.test.js`, opt-in `HOLARCH_E2E=1`) ; refus immédiat, sans blocage, des commandes non autorisées ; fin de session impossible sans `ON_SLEEP` (STATUS cohérent, changements committés) ; ré-incarnation après hibernation volontaire ; en mode `detache`, aucune session parent ne reste vivante entre le lancement d'un enfant et son réveil (`wakeWaiters`/`tools/holarch-watch/watch.js`).
@@ -159,3 +168,10 @@ décision de rédaction autonome (`ROLE.md`, Autorité), signalée ici plutôt q
 non décomptée de `changements_regime_max`). `ON_SPAWN` et `ON_PLAN` référencent ces deux ajouts.
 Rétrocompatible : une fiche sans ligne `Régime posé par` et un `ROLE.md` sans clause de phase se
 comportent exactement comme en 1.4.0.
+
+1.7.0 → 1.8.0 (chantier 15, `docs/IMPLEMENTATION.md` §16.1-16.2 — livraison verrouillée) : `ON_SPAWN`
+remplit la colonne « Contrôle » de chaque livrable du `ROLE.md` de l'enfant (commande exécutable depuis sa
+racine de travail, code 0 = conforme, ou `—` motivé) ; `ON_CHILD_DONE` rejoue ces contrôles par
+`holarch-spawn.js --controle <chemin-enfant>` et compare au tableau `## Contrôles` du `DELIVERABLE` avant
+toute acceptation ou fusion. Rétrocompatible : un `ROLE.md` sans colonne « Contrôle » reste valide, le
+rejeu répond alors « aucune colonne Contrôle : rien à rejouer » (code 0) sans refuser.

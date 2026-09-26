@@ -71,6 +71,36 @@ const QUESTIONS = [
     booleen: true,
     defaut: true,
   },
+  {
+    cle: 'echeance',
+    texte: 'Échéance et heure de vérité : quand, et devant qui, le résultat est-il jugé ? (facultatif — Entrée pour passer)',
+    facultatif: true,
+  },
+  {
+    cle: 'decideur',
+    texte: 'Qui décide (commanditaire), et jusqu\'à quand est-il joignable ? (facultatif)',
+    facultatif: true,
+  },
+  {
+    cle: 'references',
+    texte: 'Références : ce que le commanditaire veut, et ce qu\'il ne veut surtout pas ? (facultatif)',
+    facultatif: true,
+  },
+  {
+    cle: 'faits_a_valider',
+    texte: 'Faits à faire valider par le commanditaire avant de produire (identités, noms, dates…) ? (facultatif)',
+    facultatif: true,
+  },
+  {
+    cle: 'services',
+    texte: 'Services externes utilisés et budget associé ? (facultatif)',
+    facultatif: true,
+  },
+  {
+    cle: 'ressources_lourdes',
+    texte: 'Ressources lourdes (rendus, calculs longs, gros volumes) ? (facultatif)',
+    facultatif: true,
+  },
 ];
 
 /* ------------------------------------------------------------------ *
@@ -100,6 +130,13 @@ function deriver(r) {
 
   push('registre', 'sharded-files', 'une fiche par instance : pas de conflit d\'écriture');
   if (r.suivi) push('observabilite', 'heartbeat-log', 'progression visible même si une session est tuée');
+  // Chantier 17, §17.5 : un artefact déclaré (références ou faits à valider), hors équipe, propose le preset `artefacts`.
+  const artefacts = !equipe && Boolean((r.references && r.references.trim()) || (r.faits_a_valider && r.faits_a_valider.trim()));
+  if (artefacts) {
+    push('extensions', 'git-branches', 'fichiers produits pour un tiers : un worktree par instance, revue par fusion');
+    push('extensions', 'milestone-reviews', 'fichiers produits pour un tiers : jalons relus par une instance distincte');
+    push('extensions', 'regles-du-metier', 'références ou faits à valider déclarés : règles du métier écrites avant de produire (J0)');
+  }
 
   modules.sort((a, b) => ORDRE_CATEGORIES.indexOf(a.categorie) - ORDRE_CATEGORIES.indexOf(b.categorie));
 
@@ -115,7 +152,9 @@ function deriver(r) {
     seuil_contexte_tokens: 120000,
   };
 
-  return { modules, parametres, preset: equipe ? 'team-standard' : 'solo-light' };
+  if (artefacts) Object.assign(parametres, { budget_usd_par_session: r.budget_usd_par_session ?? 8, mode_attente: 'detache', isolation: 'worktree', sessions_sans_unite_max: 3 });
+
+  return { modules, parametres, preset: equipe ? 'team-standard' : (artefacts ? 'artefacts' : 'solo-light') };
 }
 
 /* ------------------------------------------------------------------ *
@@ -142,12 +181,12 @@ function rendreConfig(r, d) {
   lignes.push('| Profil | Modèle | Effort |');
   lignes.push('|---|---|---|');
   lignes.push('| conception | opus | high |');
-  lignes.push('| execution | sonnet | medium |');
+  lignes.push('| execution | opus | low |');
   lignes.push('| relecture | opus | medium |');
-  lignes.push('| exploration | fable | xhigh |');
+  lignes.push('| exploration | opus | xhigh |');
   lignes.push('');
   lignes.push('## Valeurs organisationnelles');
-  if (d.preset === 'solo-light') {
+  if (d.preset !== 'team-standard') {
     lignes.push('- Préfère une organisation plate : ne décompose que si le questionnaire `self-assessment` le justifie clairement.');
     lignes.push('- En cas de doute entre faire seul et spawner, faire seul.');
   } else {
@@ -177,6 +216,39 @@ function rendreObjective(r) {
   lignes.push(`Ampleur déclarée au setup : **${r.ampleur === 'equipe' ? 'projet à plusieurs étapes et plusieurs rôles' : 'tâche cadrée, menée seul ou presque'}**.`);
   lignes.push('Les contraintes opérationnelles (budget d\'instances, profondeur, plafonds de session) sont dans `framework/CONFIG.md`.');
   lignes.push('');
+
+  // Chantier 15, §16.4 : trois sections ajoutées pour que la racine dispose, dès le setup, de
+  // l'échéance, du commanditaire et des validations attendues, et des ressources engagées.
+  lignes.push('## Échéance');
+  lignes.push(r.echeance && r.echeance.trim()
+    ? r.echeance.trim()
+    : '_Non précisée au setup._ La racine émet une `CLARIFICATION` d\'orientation (typed-escalation, ON_ORIENT) si elle lui manque.');
+  lignes.push('');
+
+  lignes.push('## Commanditaire et validations');
+  lignes.push(`- Décideur et disponibilité : ${r.decideur && r.decideur.trim() ? r.decideur.trim() : 'non précisé'}`);
+  lignes.push(`- Références (veut / ne veut pas) : ${r.references && r.references.trim() ? r.references.trim() : 'non précisées'}`);
+  lignes.push(`- Faits à valider avant de produire : ${r.faits_a_valider && r.faits_a_valider.trim() ? r.faits_a_valider.trim() : 'aucun déclaré'}`);
+  lignes.push('');
+  lignes.push('### Validations requises');
+  lignes.push('<!-- Franchir une porte = recevoir une RESPONSE dont l\'en-tête porte `porte: V<n>` ; la');
+  lignes.push('     préparation hors des chemins protégés reste permise en attendant. -->');
+  lignes.push('| Porte | Quoi | Par qui | Protège |');
+  lignes.push('|---|---|---|---|');
+  const artefactAttendu = (r.references && r.references.trim()) || (r.faits_a_valider && r.faits_a_valider.trim());
+  if (artefactAttendu) {
+    lignes.push('| V1 | échantillon validé avant tout livrable complet | utilisateur | `mission/shared/` |');
+  } else {
+    lignes.push('| — | — | — | — |');
+    lignes.push('<!-- aucune porte amorcée : ajouter une ligne V1 si un artefact doit être validé sur échantillon avant le livrable complet -->');
+  }
+  lignes.push('');
+
+  lignes.push('## Ressources');
+  lignes.push(`- Services externes et budget : ${r.services && r.services.trim() ? r.services.trim() : 'aucun déclaré'}`);
+  lignes.push(`- Ressources lourdes : ${r.ressources_lourdes && r.ressources_lourdes.trim() ? r.ressources_lourdes.trim() : 'aucune déclarée'}`);
+  lignes.push('');
+
   lignes.push('---');
   lignes.push('> Ce fichier est en lecture seule pour toute instance (KERNEL §4) : seul l\'utilisateur le modifie.');
   lignes.push('');
@@ -284,7 +356,7 @@ async function dialogue() {
   const reponses = {};
 
   process.stdout.write('\nholarch-init — mise en route d\'une mission HOLARCH\n');
-  process.stdout.write('7 questions, puis les deux fichiers de démarrage sont écrits et vérifiés.\n\n');
+  process.stdout.write('13 questions, puis les deux fichiers de démarrage sont écrits et vérifiés.\n\n');
 
   for (const q of QUESTIONS) {
     for (;;) {

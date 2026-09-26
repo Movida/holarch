@@ -113,6 +113,8 @@ date: <ISO 8601>
 <corps en markdown libre ; pour DELIVERABLE : pointeur vers shared/...>
 ```
 
+Un `DELIVERABLE` porte en outre les sections définies par `framework/templates/MESSAGE.template.md` (« Contrôles », « Regardé : ») — lues mécaniquement par le garde-fou `deliver-guard`.
+
 | Type | Émetteur → Destinataire | Sémantique | Réponse attendue |
 |---|---|---|---|
 | `TASK` | parent → enfant | Ordre de travail / correctif | exécution |

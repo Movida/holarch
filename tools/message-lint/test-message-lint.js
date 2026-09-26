@@ -90,6 +90,16 @@ test('format : préfixes d\'id entrelacés → pas de fausse anomalie de croissa
   for (const m of msgs) assert.deepEqual(m.anomalies, []);
 });
 
+test('format : porte présent (V1) → aucune anomalie de format', () => {
+  // Chantier 15, §16.3 (gate-guard) : `porte: V1` est un champ optionnel de l'enveloppe, placé après
+  // `date` dans le gabarit — sa présence ne doit déclencher aucune anomalie.
+  const texte = '---\nid: MSG-x-001\nfrom: a\nto: b\ntype: CLARIFICATION\nref: —\ndate: 2026-09-20\n'
+    + 'porte: V1\n---\ncorps\n';
+  const msgs = ml.analyserMessages(texte, {});
+  assert.equal(msgs.length, 1);
+  assert.deepEqual(msgs[0].anomalies, []);
+});
+
 test('format : champ absent et origine hors énumération → anomalies dédiées', () => {
   const texte = '---\nid: MSG-x-001\nfrom: a\ntype: TASK\nref: —\ndate: 2026-09-10\norigine: mystere\n---\ncorps\n';
   const msgs = ml.analyserMessages(texte, {});

@@ -10,6 +10,83 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.26.0 — 2026-09-26
+
+Mineure — chantier 17 « Spécialisation de l'instance », promu par `promote.js` (58 cibles, dont 44 fragments) depuis la
+mission `holarch-specialisation` (racine seule, 6 sessions, 24,70 USD liste journalisés pour S2-S6, S1 non journalisée ;
+jalon J1 validé sur pièces et porte V1 franchie en cours de mission) :
+- Nouveau module **`regles-du-metier`** 1.0.0 (extensions) : une instance qui livre un artefact écrit `REGLES-OR.md`
+  (bon livrable vu du commanditaire, contrôles mesurables et vérificateurs, pièges des outils, inconnues à vérifier sur
+  échantillon) avant sa première unité de production, le livre en jalon `J0` relu par le parent, cite les règles
+  vérifiées à chaque `DELIVERABLE`, l'enrichit à chaque `ON_SLEEP`.
+- Nouveau preset **`artefacts`** : `solo-light` + `git-branches` (`isolation = worktree`) + `milestone-reviews` 1.1.0 +
+  `regles-du-metier`, `detache`, budget 8, `sessions_sans_unite_max = 3` ; proposé par `holarch-init` quand les
+  références ou les faits à valider du brief ne sont pas vides.
+- **Kits de domaine** `framework/kits/<domaine>/` : ligne `- Kits :` du `ROLE.md`, `INDEX.md` injecté au réveil (bloc
+  `<kits>`), refus de lancement pour un kit absent, pesée au `--dry-run`, `npm run lint:kits` (aussi en CI) ; premier
+  kit **`media`** (6 références, 2 prompts, 4 vérificateurs), tiré du retex de la mission pacs ; `archive.js --kit`.
+- **Veille bornée** : ligne `Veille` de la fiche registre, outils web ajoutés aux seuls profils `conception` et
+  `exploration`, refus `spawn-guard` sur `execution`, unité `U0` « état de l'art ».
+- **Relecture distincte** : `milestone-reviews` 1.1.0 (sœur `relecture` créée à `ON_SPAWN`, jalon d'artefact accepté
+  seulement avec sa relecture) ; anomalie `jalon-sans-relecture` d'`holarch-observe`.
+- `direct-spawn` 1.9.0 (lignes Kits et Veille) ; `holarch.md` §16.1-§16.2, `IMPLEMENTATION.md` §17.8 (dix écarts).
+- **Contexte fixe, validé par le mainteneur à la promotion** : prompt système du preset `artefacts` 64 947 caractères
+  (≈ 18 600 tokens) contre 48 167 pour `solo-light`, lequel prend 485 caractères (borne du contrat réduit du
+  chantier 7 : 55 000 → 56 000). Opt-in : aucune mission existante ne paie les 16 780 caractères du preset.
+- Intégration : 674 → 718 tests, 0 rouge nouveau (clone jetable et dépôt réel).
+
+## 1.25.0 — 2026-09-26
+
+Mineure (politique de modèle des presets et du module `direct-spawn` 1.8.1, sans règle nouvelle) — **Opus 5.5 pour
+tous les profils**, sur la foi du classement public d'Artificial Analysis consulté le 2026-09-26 (index d'intelligence
+et coût par tâche, effort par effort ; aucun chiffre recopié ici, leurs conditions interdisent la redistribution des
+données) :
+- `execution` : `sonnet`/`medium` → `opus`/`low` — Opus 5.5 en effort bas y dépasse Sonnet 5 à tous ses efforts, pour
+  un coût par tâche inférieur à celui de Sonnet 5 en `medium`, et produit beaucoup moins de tokens de sortie (contexte
+  des instances moins vite saturé).
+- `exploration` : `fable`/`xhigh` → `opus`/`xhigh` — Opus 5.5 dès `high` dépasse Fable 5.1 à tous ses efforts, pour
+  un coût par tâche bien moindre ; `fable` reste au catalogue (fiche registre, option `--modele`).
+- `conception` (`opus`/`high`) et `relecture` (`opus`/`medium`) inchangés : ils pointent déjà sur Opus 5.5 (1.24.1).
+- Appliqué à `CONFIG.md`, aux presets `solo-light`, `team-standard`, `module-forge`, aux défauts du lanceur
+  (`DEFAULT_POLICY`), au `CONFIG.md` généré par `holarch-init` ; aptitudes d'`opus` et `opus@openrouter` étendues aux
+  quatre profils. `direct-spawn` 1.8.1 : table des profils, règle (d) (`model: opus` pour un sous-agent de
+  raisonnement), coût de `xhigh` rapporté à `high` et non plus de `fable` à `opus`, exemple de changement de régime.
+- Hors champ : le modèle des sous-agents (`sous_agent_modele`, `sonnet`), le banc (`tools/holarch-bench`, politique
+  figée pour la comparabilité) et `tools/holarch-d/POLICY.md` (dérive assumée par ce fichier).
+
+## 1.24.1 — 2026-09-26
+
+Patch (catalogue seul : les sections « Fournisseurs » et « Catalogue de modèles » sont élaguées du `CONFIG.md` injecté,
+le contrat vu par les instances est inchangé) — **Opus 5.5 derrière `opus`** :
+- `CONFIG.md` et preset `solo-light` : `opus` → `claude-opus-5-5`, tarif liste 4 / 20 / 5 / 0,2 (la lecture de cache
+  d'Opus 5.5 coûte 5 % de l'entrée, pas le dixième dérivé : forme longue) ; `opus@openrouter` → `anthropic/claude-opus-5.5`,
+  même tarif chez OpenRouter (relevé le 2026-09-26). Profils `conception` et `relecture` concernés, `exploration` reste sur Fable.
+- Chez `anthropic`, l'exécuteur `claude-code` passe l'alias (`--model opus`) et c'est **la version du CLI** qui le
+  résout : 2.1.278 → `claude-opus-5`, 2.1.283 → `claude-opus-5-5` (sondes du 2026-09-26) ; l'identifiant explicite
+  `claude-opus-5-5` est refusé par la 2.1.278 (« API Error: 400 … version 2.1.280 or newer is required »). **Claude
+  Code ≥ 2.1.280** est donc requis pour que les profils `opus` tournent sur Opus 5.5 ; le catalogue en porte le modèle
+  réel et le tarif (estimations, conversion du plafond, équivalent derrière la passerelle).
+
+## 1.24.0 — 2026-09-20
+
+Mineure — chantier 15 « Livraison verrouillée et portes de validation », promu par `promote.js` (30 cibles) depuis
+la mission `holarch-livraison` :
+- Hook `deliver-guard` (`hooks/holarch-hooks.js`, `PreToolUse` sur `Write|Edit` et `Bash`) : un `DELIVERABLE`
+  écrit dans `INBOX.md`/`OUTBOX.md` sans table `## Contrôles` (une ligne par livrable de la colonne « Contrôle » du
+  `ROLE.md`, `OBJECTIVE.md` pour la racine) ni ligne `Livrables couverts :` pour un jalon est refusé, le refus
+  imprime le squelette attendu ; seul l'ajout est jugé, bloc par bloc (7 cas à sec, `tests/deliver-guard.test.js`).
+- `holarch-spawn.js --controle` (4 cas, `tests/controle.test.js`) et `direct-spawn` 1.8.0 (colonne Contrôle à
+  `ON_SPAWN`, rejeu à `ON_CHILD_DONE`).
+- Hook `gate-guard` (5 cas) et champ `porte:` optionnel de `MESSAGE.template.md`, table « Validations requises »
+  de `ROLE.template.md`/`OBJECTIVE.template.md`.
+- `holarch-init` six questions / trois sections, avertissement « brief incomplet » (`config-lint`, `session-start`,
+  `--dry-run`, 5 cas `tests/brief-incomplet.test.js`).
+- `typed-escalation` 1.2.0 (règle `ON_ORIENT`, `CLARIFICATION` d'orientation).
+- KERNEL §7 (renvoi à la table `## Contrôles`).
+- `message-lint` et `holarch-observe` étendus (contrôles, portes).
+- `MANIFEST.md` catalogue mis à jour.
+- Écarts consignés en `docs/IMPLEMENTATION.md` §16.8.
+
 ## 1.23.0 — 2026-09-13
 
 Mineure — chantier 14 « Conduite dans un worktree : refus qui enseignent, permis rejoué », promu par

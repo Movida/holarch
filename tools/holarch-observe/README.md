@@ -56,6 +56,7 @@ c'est le mode qu'un `Monitor` de session de maintenance consomme sans bruit.
 | `worktree-non-committe` | info | fichiers non committés dans le worktree d'une instance sans session |
 | `attente-sans-condition` | info | `WAITING_CHILDREN` / `BLOCKED` sans ligne `Réveil` |
 | `processus-sans-verrou`, `processus-inconnu` | info | un `claude -p` de mission que le lanceur ne connaît pas |
+| `livrable-sans-rejeu` | info | enfant `DELIVERED` avec un `DELIVERABLE` en OUTBOX sans fichier `mission/.holarch/controles/` postérieur : le parent a pu accepter sans rejouer `--controle` |
 
 ## Sources et règles de lecture
 

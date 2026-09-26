@@ -38,13 +38,14 @@ il découle) :
   contrôle (colonne facultative) ; présente mais illisible (attendu
   `<AAAA-MM-JJ> <note>/<sur>`) → erreur ; lisible avec une note < 3/4 →
   avertissement (le lanceur avertira au spawn, sans jamais refuser) ;
+- brief `<racine>/mission/OBJECTIVE.md` (chantier 15, §16.4), voir plus bas ;
 - étapes 1.1/1.2 (fichiers présents, mission déjà en cours), en option
   (`--bootstrap-check`), car elles échouent par construction dans un dépôt
   qui porte déjà une mission.
 
 Deux niveaux de diagnostic : **erreur** (le code de sortie devient `1`) et
 **avertissement** (paramètre orphelin, profil non couvert par la politique de
-modèle — n'affecte pas le code de sortie).
+modèle, brief incomplet — n'affecte pas le code de sortie).
 
 ## Comment l'exécuter
 
@@ -55,7 +56,29 @@ node --test tools/config-lint/config-lint.test.js
 
 Sans argument positionnel, `framework/CONFIG.md` est lu depuis le
 répertoire courant ; `--manifest` et `--modules-dir` sont dérivés du même
-répertoire si non fournis.
+répertoire si non fournis. `--racine` (défaut : répertoire courant) est le
+répertoire sous lequel `<racine>/mission/OBJECTIVE.md` est cherché pour le
+contrôle de brief ci-dessous, et sous lequel `--bootstrap-check` cherche ses
+marqueurs.
+
+## Brief `OBJECTIVE.md` (avertissement) — chantier 15, §16.4
+
+Si `<racine>/mission/OBJECTIVE.md` existe, il est **toujours** lu (pas
+seulement avec `--bootstrap-check`) et comparé aux trois sections que produit
+`tools/holarch-init` (§16.4) : `## Échéance`, `## Validations requises` (ou
+`### Validations requises`, sous-section de « Commanditaire et validations »),
+`## Ressources`. Une table dont l'en-tête porte une cellule « Livrable » mais
+pas de cellule « Contrôle » ajoute `colonne Contrôle` aux manques — son
+absence complète n'en est pas un : un `OBJECTIVE.md` libre, sans table
+Livrables, reste valide.
+
+Toute section manquante produit **un seul avertissement**, jamais une erreur :
+`brief incomplet : Échéance, Validations requises absentes (mission/OBJECTIVE.md,
+chantier 15 §16.4) — avertissement seulement, un brief libre reste valide.`
+Le hook `session-start` et `holarch-spawn --dry-run` répètent ce même message
+au réveil de la racine (fonction `briefIncomplet`, dupliquée côté
+`framework/hooks/holarch-hooks.js` pour que le framework ne dépende pas de
+`tools/`).
 
 ## Résultat réel sur le `CONFIG.md` de cette mission
 
@@ -65,9 +88,9 @@ config-lint · framework/CONFIG.md contre framework/MANIFEST.md
   → 0 erreur(s), 0 avertissement(s)
 ```
 
-39/39 tests passent (`config-lint.test.js`) ; vérifié par mutation
-(`tools/mutation-check/`, jeu `mutations-B1.json`) : 18/18 mutations tuées,
-0 survivante.
+39/39 tests passent avant le chantier 15 (`config-lint.test.js`) ; vérifié par
+mutation (`tools/mutation-check/`, jeu `mutations-B1.json`) : 18/18 mutations
+tuées, 0 survivante. Le chantier 15 (§16.4) ajoute les tests du brief.
 
 ## Limites assumées
 
@@ -76,12 +99,13 @@ config-lint · framework/CONFIG.md contre framework/MANIFEST.md
   *(hérité de `CONFIG.md` → `X`)*. Un module qui exprimerait autrement une
   obligation ne serait pas vu — c'est une lecture de tableau markdown, pas
   une déclaration formelle.
-- **L'outil applique les six règles de `BOOTSTRAP.md` et rien d'autre.** Il
-  ne vérifie pas la cohérence interne d'un module (c'est `module-lint`), ni
-  les versions.
+- **L'outil applique les six règles de `BOOTSTRAP.md`, le contrôle de brief du
+  chantier 15, et rien d'autre.** Il ne vérifie pas la cohérence interne d'un
+  module (c'est `module-lint`), ni les versions.
 - **`--bootstrap-check` est opt-in** parce qu'il échoue par construction dans
   un dépôt qui porte déjà une mission (étape 1.2) — bon comportement au
-  bootstrap, faux positif partout ailleurs.
+  bootstrap, faux positif partout ailleurs. Le contrôle de brief, lui,
+  s'applique toujours (c'est un avertissement, jamais un refus).
 - **Ne prouve rien sur le comportement d'une session réelle**, seulement sur
   la conformité d'un fichier.
 

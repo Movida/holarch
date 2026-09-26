@@ -99,10 +99,11 @@ test('parseCatalogue lit les deux tables du CONFIG.md par défaut (preset solo-l
   assert.equal(Object.keys(c.modeles).length, 4);
   const opus = cat.modele(c, 'opus');
   assert.equal(opus.fournisseur, 'anthropic');
-  assert.equal(opus.modele_reel, 'claude-opus-5');
+  assert.equal(opus.modele_reel, 'claude-opus-5-5');
   assert.deepEqual(opus.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
-  assert.equal(opus.cout_entree, 5); // tarif liste réel d'Opus 5 (1.21.0 ; 15 / 75 était celui d'Opus 4)
-  assert.equal(opus.cout_sortie, 25);
+  assert.equal(opus.cout_entree, 4); // tarif liste d'Opus 5.5 (1.24.1 ; 5 / 25 était celui d'Opus 5, 15 / 75 celui d'Opus 4)
+  assert.equal(opus.cout_sortie, 20);
+  assert.equal(opus.cout_cache_lu, 0.2); // 5 % de l'entrée, pas le dixième dérivé : forme longue obligatoire
   assert.deepEqual(cat.verifierCatalogue(c), []);
   assert.equal(cat.fournisseurDe(c, 'sonnet').nom, 'anthropic');
 });

@@ -31,6 +31,33 @@ Implémenter le chantier {{CHANTIER}} de `docs/ROADMAP.md` sous forme d'un livra
 
 <!-- à compléter -->
 
+## Échéance
+<!-- quand et devant qui le résultat est jugé -->
+
+## Commanditaire et validations
+
+- Décideur et disponibilité : <!-- à compléter -->
+- Références (veut / ne veut pas) : <!-- à compléter -->
+- Faits à valider avant de produire : <!-- à compléter -->
+
+### Validations requises
+<!--
+Chantier 15, §16.3 — garde-fou gate-guard. Une porte protège un ou plusieurs chemins (préfixes
+relatifs à la racine de travail) et/ou des livrables nommés (première colonne d'une table Livrables,
+écrits `DELIVERABLE « nom »`), séparés par ` ; ` dans la colonne Protège. Franchir une porte = recevoir
+une RESPONSE dont l'en-tête porte `porte: V<n>` ; la demander = envoyer une CLARIFICATION ordinaire
+avec `porte: V<n>` dans son en-tête. La préparation (échantillon, plan, règles du métier) reste permise
+hors des chemins protégés. Laisser vide ou « — » si aucune porte.
+-->
+| Porte | Quoi | Par qui | Protège |
+|---|---|---|---|
+| <V1> | <ce qui doit être validé> | utilisateur/commanditaire | `<chemin protégé>` ; DELIVERABLE « <livrable> » |
+
+## Ressources
+
+- Services externes et budget : <!-- à compléter -->
+- Ressources lourdes : <!-- à compléter -->
+
 ## Livrable final
 
 <!-- à compléter -->

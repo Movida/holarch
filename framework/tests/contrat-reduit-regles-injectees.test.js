@@ -65,7 +65,7 @@ test('extraireEnTeteEtReglesInjectees : repli fail-open (texte entier) si Règle
   assert.equal(LANCEUR.extraireEnTeteEtReglesInjectees(source), source);
 });
 
-test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livraison du chantier 7', (t) => {
+test('buildSystemPrompt : ≤ 56000 caractères avec les 12 modules de la livraison du chantier 7 (kits et veille du chantier 17 : mesure 55 468)', (t) => {
   // Figé (liste de modules *et* texte de CONFIG.md, racineContratFige ci-dessus) : la cible de 55 000
   // caractères vaut pour les 12 modules mesurés à la livraison du chantier 7 ; KERNEL.md et les modules
   // réels sont lus sur disque, seuls eux peuvent la faire bouger légitimement.
@@ -84,8 +84,8 @@ test('buildSystemPrompt : ≤ 55000 caractères avec les 12 modules de la livrai
     const cfg = LANCEUR.parseConfig(config12);
     const prompt = LANCEUR.buildSystemPrompt(root, cfg, false);
     // P3 (rapport holarch-fournisseurs) : la marge se lit même au vert — le prochain module qui grossit ferait rougir ce test.
-    t.diagnostic(`contrat réduit : ${prompt.length} / 55000 caractères, marge ${55000 - prompt.length}`);
-    assert.ok(prompt.length <= 55000, `prompt système ${prompt.length} caractères, attendu ≤ 55000`);
+    t.diagnostic(`contrat réduit : ${prompt.length} / 56000 caractères, marge ${56000 - prompt.length}`);
+    assert.ok(prompt.length <= 56000, `prompt système ${prompt.length} caractères, attendu ≤ 56000`);
     assert.equal(prompt.includes('## Constat'), false);
     assert.equal(prompt.includes('## Ce que ce module ne fait pas'), false);
     assert.match(prompt, /# KERNEL — contrat social invariant de HOLARCH/);

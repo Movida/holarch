@@ -126,11 +126,11 @@ test('resolveProfile : précédence option > politique CONFIG > modele_cli > dé
   assert.throws(() => launcher.resolveProfile(cfg, launcher.parseFiche(null), 'c/e', { effort: 'ultra' }), /effort invalide/);
 });
 
-test('resolveProfile : profil exploration (fable/xhigh par défaut) et effort jugé par instance (ligne Effort de la fiche)', () => {
+test('resolveProfile : profil exploration (opus/xhigh par défaut) et effort jugé par instance (ligne Effort de la fiche)', () => {
   const cfg = launcher.parseConfig(CONFIG);
-  assert.deepEqual(launcher.DEFAULT_POLICY.exploration, { modele: 'fable', effort: 'xhigh' });
+  assert.deepEqual(launcher.DEFAULT_POLICY.exploration, { modele: 'opus', effort: 'xhigh' });
   const explo = launcher.resolveProfile(cfg, launcher.parseFiche(fiche('c/x', { profil: 'exploration' })), 'c/x', {});
-  assert.deepEqual([explo.profil, explo.modele, explo.effort, explo.origine_effort], ['exploration', 'fable', 'xhigh', 'defaut']); // pas de ligne CONFIG : défaut du module
+  assert.deepEqual([explo.profil, explo.modele, explo.effort, explo.origine_effort], ['exploration', 'opus', 'xhigh', 'defaut']); // pas de ligne CONFIG : défaut du module
   const ficheEffort = launcher.resolveProfile(cfg, launcher.parseFiche(fiche('c/e', { profil: 'execution', effort: 'Max' })), 'c/e', {});
   assert.deepEqual([ficheEffort.modele, ficheEffort.effort, ficheEffort.origine_effort], ['sonnet', 'max', 'fiche']); // la fiche prime sur la table CONFIG (execution/low), le modèle reste celui du profil
   const optionPrime = launcher.resolveProfile(cfg, launcher.parseFiche(fiche('c/e', { profil: 'execution', effort: 'max' })), 'c/e', { effort: 'low' });
@@ -281,23 +281,23 @@ test('launchWithRelaunches : changement de régime décidé par l\'instance (fic
     if (attempt === 1) {
       // La session juge que la tâche excède son régime : Profil → exploration, Effort → max, hibernation volontaire.
       fs.writeFileSync(fichePath, fiche('concepteur', { alloue: 3, profil: 'exploration', effort: 'max' }));
-      fs.writeFileSync(path.join(root, 'mission/concepteur/STATUS.md'), status('WORKING', 'hibernation volontaire (changement de régime : opus/xhigh → fable/max)'));
+      fs.writeFileSync(path.join(root, 'mission/concepteur/STATUS.md'), status('WORKING', 'hibernation volontaire (changement de régime : opus/xhigh → opus/max)'));
     } else {
       // Second changement : au-delà de changements_regime_max (1) — pas de ré-incarnation automatique.
       fs.writeFileSync(fichePath, fiche('concepteur', { alloue: 3, profil: 'execution' }));
-      fs.writeFileSync(path.join(root, 'mission/concepteur/STATUS.md'), status('WORKING', 'hibernation volontaire (changement de régime : fable/max → sonnet/low)'));
+      fs.writeFileSync(path.join(root, 'mission/concepteur/STATUS.md'), status('WORKING', 'hibernation volontaire (changement de régime : opus/max → opus/low)'));
     }
     return { res: res(), elapsedMs: 10 };
   };
   const sessions = launcher.launchWithRelaunches(root, 'concepteur', {}, runner);
-  assert.deepEqual(regimes, ['conception:opus/xhigh', 'exploration:fable/max']);
+  assert.deepEqual(regimes, ['conception:opus/xhigh', 'exploration:opus/max']);
   assert.equal(sessions.length, 2);
   assert.equal(sessions[1].launch.meta.origine_effort, 'fiche');
   const journal = fs.readFileSync(path.join(root, 'mission/registry/SESSIONS.md'), 'utf8');
   assert.match(journal, /\| opus\/xhigh \|/);
-  assert.match(journal, /\| fable\/max \|/); // trace mécanique du régime de chaque session
+  assert.match(journal, /\| opus\/max \|/); // trace mécanique du régime de chaque session
   const s = launcher.summarize(sessions[1].launch, sessions);
-  assert.match(s.text, /· opus\/xhigh → fable\/max · sessions/);
+  assert.match(s.text, /· opus\/xhigh → opus\/max · sessions/);
   assert.match(s.text, /changement de régime décidé par l'instance/);
   assert.equal(s.code, 3); // STATUS encore WORKING : hibernation volontaire non relancée, le parent relance commande_cli
 });
