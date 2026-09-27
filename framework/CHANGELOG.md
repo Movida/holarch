@@ -10,6 +10,22 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.28.0 — 2026-09-27
+
+Mineure — **mode solo, défaut des nouveaux projets** (refonte « solo d'abord », `docs/holarch.md` décision 46 et §16.7,
+`docs/diagnostics/2026-09-27-refonte-apres-releves.md`). Rien ne change pour un `CONFIG.md` existant (`mode` absent =
+équipe). Avec `mode = solo` : contrat `framework/SOLO.md` au lieu du KERNEL et des modules (prompt système ≈ 9,5 k
+caractères contre 89 k), racine créée par le lanceur sans session de bootstrap, cadrage écrit (`CADRAGE.md`), écriture
+minimale, aucune instance enfant (`spawn-guard`), **contre-épreuve** par une instance neuve à chaque `DELIVERED`
+(`contre_epreuve`, `contre_epreuve_max` ; verdict ko → rapport agrégé et ré-incarnation ; ko final ou manche non jouée
+→ `BLOCKED`, reprise `--contre-epreuve` ; cas jamais committés et archivés hors du dépôt, compteur hors du dépôt ;
+filtre `path-guard` dans les deux sens, `Grep`/`Glob`/`NotebookEdit` compris). `git-guard` couvre aussi `git stage`,
+`git commit <chemin>`, `..` et les chemins absolus, refuse `git update-index`. **Projet mis à jour par `npm run upgrade`** :
+`framework/claude/instance-settings.json` est « à réconcilier » — reporter à la main le matcher `path-guard`
+`Write|Edit|Read|Grep|Glob|NotebookEdit`, sinon la cloison ne voit ni `Grep` ni `Glob`. Tous modes : `livraison_hors_mission` ouvre à `git-guard` les chemins du produit hors
+de `mission/`. Nouveau preset `solo` ; `holarch-init` (ampleur 1 = solo, question « livraison ») et le modèle publié en
+partent. `config-lint` valide les quatre paramètres. Tests : `framework/tests/solo.test.js` (8, rouges sous mutation).
+
 ## 1.27.2 — 2026-09-27
 
 Correctif de test (aucun comportement changé) — `attente-429.test.js`, « troisième revue n° 72 + 74 », échouait environ une

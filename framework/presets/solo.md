@@ -1,4 +1,18 @@
-# Configuration — mission : ma-mission
+# Preset : solo
+
+> Usage : **défaut** depuis la refonte du 2026-09-27 (`docs/diagnostics/2026-09-27-refonte-apres-releves.md`).
+> En clair : une seule instance fait tout le travail, comme une session Claude Code seule, avec ce que le harnais
+> ajoute — reprise après la fin du contexte, budget, cadrage écrit, et contre-épreuve de la livraison par une
+> instance neuve. Pas de session de bootstrap : le lanceur crée la racine. Contrat injecté : `framework/SOLO.md`
+> (la table « Modules actifs » ne sert qu'à la validation et à l'outillage ; elle n'est pas injectée).
+>
+> `livraison_hors_mission` : chemins du produit hors de `mission/` que l'instance commite elle-même
+> (`releves ; src ; tests`), `—` si tout vit sous `mission/`. `contre_epreuve = non` la désactive.
+
+Pour démarrer une mission avec ce preset, copie le contenu du bloc ci-dessous (sans les balises de bloc) vers `framework/CONFIG.md`, en remplaçant `<nom de la mission>` par un intitulé court.
+
+```markdown
+# Configuration — mission : <nom de la mission>
 > Preset de base : solo · Framework : v1.1
 
 ## Modules actifs
@@ -69,3 +83,4 @@ Secours d'« anthropic » et déclarer les identifiants équivalents, soit une l
 ## Valeurs organisationnelles
 - Préfère une organisation plate : ne décompose que si le questionnaire `self-assessment` le justifie clairement (spec §15, décision 1 : ce preset sert de socle au test T3).
 - En cas de doute entre faire seul et spawner, faire seul.
+```

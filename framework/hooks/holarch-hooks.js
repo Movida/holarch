@@ -28,6 +28,8 @@ const path = require('path');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const reveil = require(path.join(__dirname, '..', 'bin', 'reveil.js'));
+let soloModule = null;
+try { soloModule = require(path.join(__dirname, '..', 'bin', 'solo.js')); } catch (_) { soloModule = null; } // fail-open : fixture qui copie holarch-hooks.js seul
 let budgetWatchModule = null;
 try { budgetWatchModule = require(path.join(__dirname, 'budget-watch.js')); } catch (_) { budgetWatchModule = null; } // fail-open : un fixture de test peut copier holarch-hooks.js seul, sans budget-watch.js
 
@@ -308,6 +310,9 @@ function spawnGuard(ctx) {
   // fois — sinon seul le premier segment (souvent un --dry-run, qui passe sans règle) était contrôlé et le suivant
   // (`… --dry-run && node … --detach --budget-usd 999`) lançait sans aucune.
   const segments = cmd.split(/[;&|\n]+/).map((s) => s.trim());
+  if (configParam(root, 'mode') === 'solo' && segments.some((x) => /^(?:\S+=\S*\s+)*npm\s+run\s+(mission|bootstrap)\b/.test(x) && !/--dry-run/.test(x))) {
+    return emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: "[HOLARCH · fusible spawn] mode solo : pas d'instance enfant — confie l'unité à un sous-agent (outil Agent, holarch-unite) ; la contre-épreuve est lancée par le harnais à ta livraison (SOLO.md §1, §5)." } });
+  }
   const invoke = segments.find((s) => /^(?:\S+=\S*\s+)*node\s+\S*holarch-spawn\.js(?:\s|$)/.test(s));
   if (!invoke) return ok();
   const deny = (why) => emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[HOLARCH · fusible spawn] ${why}` } });
@@ -316,6 +321,9 @@ function spawnGuard(ctx) {
   // (celles du mainteneur comprises) — geste du mainteneur, comme --reveil et --arret, jamais d'une instance.
   if (/(^|\s)--reprendre(\s|$)/.test(invoke)) return deny("--reprendre est réservé à l'utilisateur : il relance les tâches de toute la holarchie avec leurs surcharges d'origine, jamais depuis une instance.");
   if (/--bootstrap/.test(invoke)) return deny("le bootstrap se lance une seule fois, par l'utilisateur — jamais depuis une instance.");
+  // Refonte solo (2026-09-27) : une seule instance ; les unités parallèles passent par un sous-agent, la contre-épreuve
+  // par le lanceur. Un --dry-run reste permis (il n'incarne rien).
+  if (configParam(root, 'mode') === 'solo' && !/(^|\s)--dry-run(\s|$)/.test(invoke)) return deny("mode solo : pas d'instance enfant — confie l'unité à un sous-agent (outil Agent, holarch-unite) ; la contre-épreuve est lancée par le harnais à ta livraison (SOLO.md §1, §5).");
   if (/(^|\s)--reveil(\s|$)/.test(invoke)) return deny("--reveil est réservé au harnais et à l'utilisateur : une instance ne réveille jamais elle-même le reste de la holarchie.");
   if (/(^|\s)--arret(\s|$)/.test(invoke)) return deny("--arret est réservé au harnais et à l'utilisateur : une instance ne s'arrête ni n'arrête une autre instance par ce biais.");
   const after = invoke.split(/holarch-spawn\.js/)[1] || '';
@@ -487,8 +495,59 @@ function racinePrincipale(root) {
  * refus par un message qui nomme le chemin relatif à reprendre. Inerte dans l'arbre principal
  * (`racinePrincipale` y renvoie null ou root lui-même).
  */
+/** Cloison du mode solo (refonte du 2026-09-27) : la racine ne lit pas ce que la contre-épreuve a fabriqué (elle
+ *  sur-ajusterait à ces cas), l'instance de contre-épreuve ne lit pas l'historique de la racine (regard neuf). */
+function cloisonSolo(ctx) {
+  const { root, instance, input } = ctx;
+  if (!soloModule || configParam(root, 'mode') !== 'solo') return null;
+  const interdits = instance === soloModule.RACINE
+    ? ['mission/contre-epreuve', soloModule.TRAVAIL]
+    : instance === soloModule.VERIFICATEUR ? [`mission/${soloModule.RACINE}`] : [];
+  if (!interdits.length) return null;
+  const ti = input.tool_input || {};
+  const message = (hit) => (instance === soloModule.RACINE
+    ? `\`${hit}/\` appartient à la contre-épreuve : tu ne la lis pas (tu sur-ajusterais). Ton retour est le rapport agrégé dans ton INBOX ; généralise à partir de l'énoncé.`
+    : `\`${hit}/\` est l'historique de l'auteur : tu éprouves le produit avec un regard neuf, depuis l'énoncé seulement (SOLO.md §6).`);
+  // Chemins d'outil : résolus (//, ./, .., lien symbolique) puis comparés par préfixe de répertoire.
+  const relatif = (p) => {
+    let abs = path.resolve(root, String(p));
+    // Lien symbolique : résout le plus proche parent existant (le fichier visé peut ne pas exister encore).
+    let reste = '';
+    for (let cur = abs; ; cur = path.dirname(cur)) {
+      try { abs = path.join(fs.realpathSync(cur), reste); break; } catch (_) { /* parent suivant */ }
+      if (path.dirname(cur) === cur) break;
+      reste = path.join(path.basename(cur), reste);
+    }
+    let base = root;
+    try { base = fs.realpathSync(root); } catch (_) { /* racine telle quelle */ }
+    return path.relative(base, abs).split(path.sep).join('/');
+  };
+  const dans = (rel) => interdits.find((d) => rel === d || rel.startsWith(`${d}/`));
+  for (const p of [ti.file_path, ti.notebook_path, ti.path].filter(Boolean)) {
+    const hit = dans(relatif(p));
+    if (hit) return message(hit);
+  }
+  if (input.tool_name === 'Glob' && ti.pattern) {
+    const hit = dans(relatif(path.join(String(ti.path || '.'), String(ti.pattern).replace(/[*?[{].*$/, ''))));
+    if (hit) return message(hit);
+  }
+  // Bash : filtre textuel — il arrête les chemins écrits, pas un glob ni une commande qui reconstruit le chemin. La vraie
+  // cloison est physique : les cas vivent hors du dépôt et ne sont jamais committés (solo.js, TRAVAIL).
+  if (input.tool_name === 'Bash' && ti.command) {
+    const n = String(ti.command).split(`${root}/`).join('').replace(/\/{2,}/g, '/').replace(/\/(\.\/)+/g, '/').replace(/(^|[\s'"=:(,])\.\//g, '$1');
+    const hit = interdits.find((d) => new RegExp(`(^|[\\s'"=:(,])${d.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(/|$|[\\s'"),;|&])`).test(n));
+    if (hit) return message(hit);
+  }
+  return null;
+}
+
 function pathGuard(ctx) {
   const { root, input } = ctx;
+  const cloison = cloisonSolo(ctx);
+  if (cloison) {
+    emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[HOLARCH · garde-fou path-guard] ${cloison}` } });
+    return;
+  }
   const principal = racinePrincipale(root);
   if (!principal || principal === root) return ok();
   const candidates = [];
@@ -531,24 +590,51 @@ function pathGuard(ctx) {
  * chemin est sous mission/ passe (`git add -A mission/`, `git add mission/concepteur/JOURNAL.md`).
  */
 function gitGuard(ctx) {
-  const { input } = ctx;
+  const { input, root, instance } = ctx;
   if (input.tool_name !== 'Bash') return ok();
   const cmd = String((input.tool_input && input.tool_input.command) || '');
   const deny = (why) => emit({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: `[HOLARCH · garde-fou git-guard] ${why}` } });
-  for (const seg of cmd.split(/[;&|]+/).map((s) => s.trim())) {
-    const m = seg.match(/^(?:\S+=\S*\s+)*git\s+(?:-C\s+\S+\s+)?(add|commit)\b(.*)$/);
+  const livraison = soloModule && root ? soloModule.livraisonHorsMission(configParam(root, 'livraison_hors_mission')) : [];
+  // Chemin normalisé relatif à la racine (absolu sous la racine accepté, `..` résolu) ; null s'il sort de la racine.
+  const rel = (p) => {
+    let t = String(p).replace(/^\.\//, '');
+    if (root && (t === root || t.startsWith(`${root}/`))) t = t.slice(root.length + 1) || '.';
+    if (t.startsWith('/')) return null;
+    const n = path.posix.normalize(t);
+    return n === '..' || n.startsWith('../') ? null : n.replace(/\/+$/, '') || '.';
+  };
+  const permis = (p) => {
+    const r = rel(p);
+    if (r === null || r === '.') return false;
+    return r === 'mission' || r.startsWith('mission/') || (livraison.length > 0 && soloModule.cheminLivrable(livraison, r, instance));
+  };
+  const jetons = (t) => (t.match(/"[^"]*"|'[^']*'|\S+/g) || []).map((x) => x.replace(/^['"]|['"]$/g, ''));
+  const ouvert = livraison.length ? ` et dans livraison_hors_mission (${livraison.filter((e) => e.instances.includes(instance)).map((e) => e.chemin).join(', ') || 'rien pour toi'})` : '';
+  for (const seg of cmd.split(/[;&|\n]+/).map((x) => x.trim())) {
+    const m = seg.match(/^(?:\S+=\S*\s+)*git\s+(?:-C\s+\S+\s+)?(add|stage|commit|update-index)\b(.*)$/);
     if (!m) continue;
-    const tokens = m[2].trim().split(/\s+/).map((t) => t.replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    if (m[1] === 'update-index') return deny('`git update-index` indexe sans contrôle de chemin : utilise `git add <chemins>`.');
+    const tokens = jetons(m[2].trim());
     if (m[1] === 'commit') {
       if (tokens.some((t) => t === '--all' || /^-[a-zA-Z]*a[a-zA-Z]*$/.test(t))) return deny("`git commit -a` indexe tout l'arbre, y compris ce qu'une autre session a en cours : nomme tes fichiers avec `git add mission/...` puis `git commit` sans -a.");
+      // `git commit <chemin>` (et -i/-o) indexe ce chemin : même règle que git add. Les valeurs de -m/-F/-C… sont sautées.
+      const chemins = [];
+      for (let k = 0; k < tokens.length; k++) {
+        const t = tokens[k];
+        if (/^(-m|--message|-F|--file|-C|--reuse-message|-c|--reedit-message|--author|--date|-t|--template|--fixup|--squash|--trailer|--cleanup)$/.test(t)) { k++; continue; }
+        if (t === '--') { chemins.push(...tokens.slice(k + 1)); break; }
+        if (!t.startsWith('-')) chemins.push(t);
+      }
+      const horsC = chemins.filter((p) => !permis(p));
+      if (horsC.length) return deny(`\`git commit ${horsC.join(' ')}\` indexe hors de mission/ : une instance ne committe que sous mission/${ouvert}.`);
       continue;
     }
     const paths = tokens.filter((t) => !t.startsWith('-') || t === '.' || t === ':/');
     const wide = tokens.some((t) => t === '-A' || t === '--all' || t === '-u' || t === '--update' || t === '.' || t === ':/' || t.startsWith(':/'));
     if (!paths.length && wide) return deny("`git add -A`/`-u`/`.` sans pathspec indexe tout l'arbre, y compris ce qu'une autre session a en cours : restreins à ton arbre (`git add -A mission/` ou des chemins sous mission/).");
-    const hors = paths.filter((p) => p !== '.' && p !== ':/' && !/^(\.\/)?mission\//.test(p));
-    if (hors.length) return deny(`\`git add ${hors.join(' ')}\` indexe hors de mission/ (framework/, docs/, tools/ sont le harnais, pas ta production) : une instance ne stage que sous mission/.`);
-    if (paths.some((p) => p === '.' || p === ':/')) return deny("`git add .` indexe tout l'arbre : restreins à mission/.");
+    if (paths.some((p) => p === '.' || p === ':/' || p.startsWith(':'))) return deny("`git add .` ou un pathspec magique indexe tout l'arbre : restreins à mission/.");
+    const hors = paths.filter((p) => !permis(p));
+    if (hors.length) return deny(`\`git ${m[1]} ${hors.join(' ')}\` indexe hors de mission/ (framework/, docs/, tools/ sont le harnais, pas ta production) : une instance ne stage que sous mission/${ouvert}.`);
   }
   return ok();
 }
@@ -1183,5 +1269,5 @@ function main() {
   }
 }
 
-module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard, pathGuard, racinePrincipale, deliverGuard, parseLivrables, parseControlesMessage, parseValidationsRequises, portesFranchies, gateGuard, briefIncomplet };
+module.exports = { parseStatus, parseFiche, lastAssistantUsage, activeModules, STOP_BLOCKS_MAX, WARN_STEP, UNITES_LIGNE_MAX_CHARS, UNITES_MEMOIRE_MAX_LIGNES, contexteLivePath, updateContexteLive, frameworkGuard, pathGuard, cloisonSolo, gitGuard, racinePrincipale, deliverGuard, parseLivrables, parseControlesMessage, parseValidationsRequises, portesFranchies, gateGuard, briefIncomplet };
 if (require.main === module) main();

@@ -40,13 +40,17 @@ function tmp() {
 
 test('le mode solo produit une configuration complète et cohérente', () => {
   const d = init.deriver(REPONSES_SOLO);
-  assert.strictEqual(d.preset, 'solo-light');
+  assert.strictEqual(d.preset, 'solo');
+  assert.strictEqual(d.parametres.mode, 'solo', 'refonte du 2026-09-27 : solo par défaut');
+  assert.strictEqual(d.parametres.contre_epreuve, 'oui');
+  assert.strictEqual(d.parametres.livraison_hors_mission, '—', 'sans réponse : tout sous mission/');
+  assert.strictEqual(init.deriver(Object.assign({}, REPONSES_SOLO, { livraison: 'src ; tests' })).parametres.livraison_hors_mission, 'src ; tests');
   const noms = d.modules.map((m) => m.nom);
   assert.ok(noms.includes('fork-join'), 'tâches indépendantes -> fork-join');
   assert.ok(noms.includes('unites-indexees'), 'pas d\'audit fin -> unites-indexees (mémoire adressée)');
   assert.ok(noms.includes('heartbeat-log'), 'suivi demandé -> heartbeat-log');
   assert.ok(!noms.includes('instance-budget'), 'solo : pas de répartition de budget à orchestrer');
-  assert.strictEqual(d.parametres.profondeur_max, 2);
+  assert.strictEqual(d.parametres.profondeur_max, 1);
   assert.strictEqual(d.parametres.format_rapport_final, 'simple');
 });
 

@@ -28,6 +28,14 @@
 | [regles-du-metier](modules/extensions/regles-du-metier.md) | extensions | 1.0.0 | — | — | Toute instance dont un livrable est un artefact (fichier pour un tiers : film, document, code, données) écrit à `ON_ORIENT`, avant sa première unité de production, un fichier de règles du métier (`REGLES-OR.md` : le bon livrable dans les mots du commanditaire, contrôles mesurables et vérificateurs, pièges des outils tirés des kits et de la veille, inconnues à vérifier sur échantillon), publié comme jalon J0 et relu sur pièces par le parent (`ON_CHILD_DONE`) ; cite les numéros de règles vérifiées dans la section « Contrôles » de chaque `DELIVERABLE` d'artefact (`ON_DELIVER`) ; ajoute les règles découvertes, datées, en append (`ON_SLEEP`). Actif dans le preset `artefacts`, opt-in ailleurs. |
 | [jobs-et-lots](modules/extensions/jobs-et-lots.md) | extensions | 1.0.0 | — | — | Les travaux longs (au-delà de `job_duree_min`), lourds (`motifs_lourds`) ou payants passent par `holarch-job` (`ON_ORIENT`) : superviseur hors session, sortie publiée après validation, jetons machine et suspension sous plancher mémoire, lots devisés, verrouillés et repris par empreinte ; `holarch-job liste --proprietaire` avant toute relance (`ON_WAKE`) ; attente par `Réveil : job:<id>` sans rester vivant (`ON_SUPERVISE`) ; lignes de `COUTS-SERVICES.md` committées (`ON_SLEEP`). Actif dans le preset `artefacts`, opt-in ailleurs. |
 
+## Mode solo (framework 1.28.0)
+
+Paramètres transverses, hors module : `mode` (`solo` | `equipe`, défaut `equipe`), `contre_epreuve` (`oui` | `non`,
+défaut `oui` en solo), `contre_epreuve_max` (1 à 5, défaut 2), `livraison_hors_mission` (chemins relatifs du produit
+hors de `mission/`, `;`-séparés, `@instance` facultatif). En `mode = solo` le lanceur injecte `framework/SOLO.md` à la
+place du KERNEL et des modules : la table « Modules actifs » reste exigée par la validation mais n'est pas injectée
+(`docs/holarch.md` §16.7). Preset : `solo`.
+
 ## Contraintes de composition (rappel spec §9.1)
 
 - Exactement **un** module actif par catégorie **obligatoire** : `orchestration`, `synchronisation`, `memoire`, `registre`.

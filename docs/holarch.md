@@ -666,6 +666,20 @@ Les trois points restés ouverts en fin de conception ont été tranchés. Confo
     ses garde-fous : 0 `DELIVERABLE` refusé, 1 écriture refusée par `gate-guard` et corrigée, 1 porte demandée et
     franchie, aucune `CLARIFICATION` d'orientation. Reste le dogfooding §17.6 (mission média courte sous `artefacts`).
 
+46. **Refonte « solo d'abord » (2026-09-27, framework 1.28.0, session de maintenance)** — après l'expérience « relevés »
+    (`docs/experiences/releves/RESULTATS.md` : témoin seul ACCEPTÉ sur le jeu caché pour ≈ 5,7 USD liste, HOLARCH 1.27.2
+    REFUSÉ pour 17,7 USD) et sa mesure (`docs/diagnostics/2026-09-27-refonte-apres-releves.md` : 3 × plus de tokens de
+    sortie, préfixe fixe 24 à 51 % de chaque session, sur-ajustement d'un enfant que rien n'a éprouvé), le mainteneur
+    valide : (a) **une seule instance par défaut** (`mode = solo`, preset `solo`, défaut de `holarch-init` et du modèle
+    publié), le mode équipe devenant l'exception à justifier par la mesure ; (b) **la réduction du contexte fixe** au
+    réveil — contrat `framework/SOLO.md` + `CONFIG.md` (≈ 9,5 k caractères de prompt système contre 89 k) — au titre de
+    la règle « mesure avant réglage » ; (c) **la contre-épreuve par une instance neuve** à chaque `DELIVERED`, cloisonnée
+    dans les deux sens par `path-guard`, dont seul le rapport agrégé revient à l'auteur ; (d) **la livraison hors de
+    `mission/`** par `livraison_hors_mission` ; (e) **le critère des chantiers suivants** : qualité ≥ témoin et coût
+    ≤ 1,2 × témoin sur un banc rejoué, puis un second test sur une tâche longue et mal spécifiée. La mission
+    `holarch-contre-epreuve` (chantier 19, ouverte le même jour) est arrêtée au bootstrap et archivée sans livrable :
+    une organisation qui vient de perdre contre une session seule ne conçoit pas sa propre correction.
+
 ## 16. Harnais d'exécution (v1.1 — 2026-09-02, synchronisé depuis le framework public le 2026-09-04)
 
 Le harnais est la couche entre le contrat (fichiers markdown normatifs) et le CLI Claude Code. Il n'invente aucune règle : il applique mécaniquement des règles que le KERNEL et les modules énoncent déjà — `profondeur_max`, budget d'instances, mécanique de spawn (§9), phase 9 inconditionnelle, seuil de contexte, cloisonnement des écritures — et rien d'autre. **Limite connue** : cette application est aujourd'hui inconditionnelle ; les garde-fous ne vérifient pas que le module dont ils portent la règle est effectivement actif dans `CONFIG.md`. `instance-budget` est actif par défaut dans les deux presets et dans `CONFIG.md` de cette mission précisément pour cette raison — une configuration qui le désactiverait verrait sa règle continuer de s'appliquer quand même. Trois fichiers, en Node.js sans dépendance (Node est déjà requis par Claude Code), testés par `node --test framework/tests/*.test.js` :
@@ -1011,3 +1025,49 @@ entre exécutions identiques est **non nulle** — pas sa valeur.
 ---
 
 Ces décisions actées : **rédiger les fichiers dans l'ordre de dépendance** — KERNEL → templates → MANIFEST → les 11 modules → presets → BOOTSTRAP — puis dérouler T1, puis T3 comme première mission réelle. Chaque fichier est écrit en conformité stricte avec les sections ci-dessus, qui font foi.
+
+### 16.7 Mode solo (framework 1.28.0, décision 46)
+
+Quand `CONFIG.md` porte `mode = solo` (preset `solo`, défaut depuis 1.28.0) :
+
+- **Pas de session de bootstrap.** `--bootstrap` fait écrire par le lanceur la racine `concepteur` (ROLE, STATUS,
+  MEMORY, JOURNAL, INBOX, OUTBOX, fiche, ORG, DECISIONS), commit `[bootstrap] racine solo créée par le lanceur`, puis
+  incarne la racine : la première session est déjà du travail (`framework/bin/solo.js`, `creerRacineSolo`).
+- **Contrat court.** Prompt système = `framework/SOLO.md` + `CONFIG.md` élagué + paramètres effectifs ; ni KERNEL, ni
+  modules, ni BOOTSTRAP, ni MANIFEST (la table « Modules actifs » ne sert plus qu'à `config-lint` et à l'outillage).
+  Prompt de réveil = `OBJECTIVE.md`, kits, ROLE, `CADRAGE.md`, MEMORY (≤ 12 000 caractères), STATUS, 5 derniers
+  messages de l'INBOX, 8 dernières lignes du JOURNAL.
+- **Cadrage.** Première session : `CADRAGE.md` (besoin reformulé, zones floues et hypothèses, ce que « réussi » veut dire
+  au-delà des critères, vérification sur des variations fabriquées, démarche, risques), réinjecté à chaque réveil.
+- **Écriture minimale.** MEMORY ≤ 60 lignes réécrit, une ligne de JOURNAL par session ; pas de fiche d'unité — la règle
+  `sessions_sans_unite_max` ne s'applique pas, les commits `[<chemin>]` restent la preuve de progrès.
+- **Pas d'enfant.** `spawn-guard` refuse tout lancement d'instance (hors `--dry-run`) ; les unités parallèles passent
+  par un sous-agent `holarch-unite`.
+- **Où vit le produit.** Dans les chemins de `livraison_hors_mission`, sinon sous `mission/shared/` : `mission/concepteur/`
+  ne garde que l'état et les brouillons, et la contre-épreuve n'y a pas accès.
+- **Contre-épreuve** (`contre_epreuve`, défaut `oui` ; `contre_epreuve_max`, défaut 2). Quand la racine termine une
+  session à `DELIVERED`, le lanceur (re)crée l'instance `contre-epreuve` (profil `relecture`, fichiers d'instance réécrits
+  et répertoire de travail `mission/.holarch/contre-epreuve/` vidé à chaque manche : aucun souvenir des manches
+  précédentes ; ni le budget ni les tours de la ligne de commande de la racine), l'incarne, puis lit
+  `mission/.holarch/contre-epreuve/VERDICT.md` (première ligne non vide `Verdict : ok|ko`, puis `## Synthèse`, `## Cas`).
+  **Cloison physique** (revue du 2026-09-27 : un filtre de chemins ne ferme ni un glob Bash, ni `grep -r`, ni
+  `git log -p`) : ce répertoire n'est jamais committé, et le lanceur le déplace après la manche hors du dépôt, sous
+  `~/.holarch/contre-epreuves/<mission>-<sha>-<racine>/manche-<n>/` (`HOLARCH_CONTRE_EPREUVES` pour le déplacer), avec
+  `etat.json` — le compteur de manches qui fait foi, hors de portée d'écriture de la racine ;
+  `mission/registry/CONTRE-EPREUVES.md` n'en est qu'une trace lisible (verdict, commit éprouvé, synthèse). `path-guard`
+  ajoute un filtre de chemins (normalisés, liens résolus ; `Read`, `Write`, `Edit`, `Grep`, `Glob`, `NotebookEdit`, texte
+  des commandes Bash) : la racine ne lit pas `mission/contre-epreuve/` ni ce répertoire, la contre-épreuve ne lit pas
+  `mission/concepteur/`. Issues : **ok** → trace et ligne dans l'OUTBOX ; **ko** avant la dernière manche (sans `--arret`
+  en attente ni `sessions_max_par_instance` atteint) → message `ALERT` d'origine `harnais` dans l'INBOX de la racine avec
+  la seule synthèse, STATUS `WORKING` (« hibernation volontaire (contre-épreuve ko, manche n) »), ré-incarnation ;
+  **ko final, verdict absent, manches épuisées** → racine `BLOCKED` avec la raison (jamais un faux succès) ; **manche
+  non jouée** (lancement refusé, plantage, 429) → non comptée, racine `BLOCKED`, reprise par le mainteneur :
+  `node framework/bin/holarch-spawn.js --contre-epreuve`. Limite assumée : le filtre ne garantit pas que la
+  contre-épreuve ne lise pas l'historique de l'auteur par une commande reconstruite (l'arbre le contient) ; elle n'y a
+  pas intérêt et son contrat le lui interdit.
+- **Pas d'instance lancée par une instance** : outre `spawn-guard` (texte des commandes, `npm run mission|bootstrap`
+  compris), le lanceur lui-même refuse toute invocation d'une instance en mode solo hors `--dry-run` et `--taches`.
+- **Livraison hors de `mission/`** (`livraison_hors_mission`, tous modes) : chemins relatifs séparés par `;`, chacun
+  éventuellement suivi de `@instance[+instance]` (sans `@` : la racine) ; `git-guard` les laisse stager par l'instance
+  nommée, correspondance par préfixe de répertoire ; `config-lint` refuse `framework`, `tools`, `.claude`, `docs`,
+  `.git*`, `mission`, `.`, `*` et tout chemin absolu ou contenant `..`.

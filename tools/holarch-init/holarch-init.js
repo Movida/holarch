@@ -50,8 +50,13 @@ const QUESTIONS = [
   },
   {
     cle: 'ampleur',
-    texte: 'Ampleur du travail ?\n    1) une tâche cadrée, menée seul ou presque\n    2) un projet à plusieurs étapes et plusieurs rôles',
+    texte: 'Ampleur du travail ?\n    1) une seule instance fait tout, comme une session seule, avec cadrage et contre-épreuve (recommandé)\n    2) un projet à plusieurs rôles menés en parallèle par plusieurs instances',
     choix: { 1: 'solo', 2: 'equipe' },
+  },
+  {
+    cle: 'livraison',
+    texte: 'Le produit vit-il hors de mission/ (code à la racine) ? Chemins séparés par « ; » (ex. « src ; tests ; README.md »), Entrée si non :',
+    facultatif: true,
   },
   {
     cle: 'dependances',
@@ -154,9 +159,26 @@ function deriver(r) {
     seuil_contexte_tokens: 120000,
   };
 
+  // Refonte « solo d'abord » (2026-09-27) : hors équipe et hors artefacts, une seule instance, contrat SOLO.md,
+  // racine créée par le lanceur, contre-épreuve de la livraison par une instance neuve.
+  const soloMode = !equipe && !artefacts;
+  if (soloMode) {
+    // En solo la mémoire suit SOLO.md §4 (les modules ne sont pas injectés) ; delegation-intra-session exige unites-indexees.
+    const mem = modules.find((m) => m.categorie === 'memoire');
+    if (mem && mem.nom !== 'unites-indexees') Object.assign(mem, { nom: 'unites-indexees', pourquoi: 'mode solo : la mémoire suit SOLO.md §4 (module non injecté, requis par delegation-intra-session)' });
+    // Le sous-agent holarch-unite (seule délégation du mode solo) n'est injecté que par ce module.
+    modules.push({ categorie: 'extensions', nom: 'delegation-intra-session', pourquoi: 'mode solo : les unités larges ou parallèles vont à un sous-agent holarch-unite, jamais à une instance enfant' });
+    Object.assign(parametres, {
+      autocompact_tokens: 400000,
+      mode: 'solo', contre_epreuve: 'oui', contre_epreuve_max: 2,
+      livraison_hors_mission: r.livraison && r.livraison.trim() ? r.livraison.trim() : '—',
+      budget_instances_total: r.budget_instances_total ?? 1, profondeur_max: r.profondeur_max ?? 1,
+      budget_usd_par_session: r.budget_usd_par_session ?? 8, seuil_contexte_tokens: 240000,
+    });
+  } else if (r.livraison && r.livraison.trim()) parametres.livraison_hors_mission = r.livraison.trim();
   if (artefacts) Object.assign(parametres, { budget_usd_par_session: r.budget_usd_par_session ?? 8, mode_attente: 'detache', isolation: 'worktree', sessions_sans_unite_max: 3 });
 
-  return { modules, parametres, preset: equipe ? 'team-standard' : (artefacts ? 'artefacts' : 'solo-light') };
+  return { modules, parametres, preset: equipe ? 'team-standard' : (artefacts ? 'artefacts' : 'solo') };
 }
 
 /* ------------------------------------------------------------------ *
@@ -212,7 +234,7 @@ function rendreObjective(r) {
   lignes.push('## Critères de réussite');
   lignes.push(r.reussite && r.reussite.trim()
     ? r.reussite.trim()
-    : '_Non précisés au setup._ L\'instance racine doit les expliciter à `ON_ORIENT` et, en cas d\'ambiguïté bloquante, demander une `CLARIFICATION` à l\'utilisateur (KERNEL §6.1).');
+    : '_Non précisés au setup._ L\'instance racine les explicite avant de produire (cadrage) et, en cas d\'ambiguïté bloquante, demande une `CLARIFICATION` à l\'utilisateur.');
   lignes.push('');
   lignes.push('## Périmètre');
   lignes.push(`Ampleur déclarée au setup : **${r.ampleur === 'equipe' ? 'projet à plusieurs étapes et plusieurs rôles' : 'tâche cadrée, menée seul ou presque'}**.`);
@@ -224,7 +246,7 @@ function rendreObjective(r) {
   lignes.push('## Échéance');
   lignes.push(r.echeance && r.echeance.trim()
     ? r.echeance.trim()
-    : '_Non précisée au setup._ La racine émet une `CLARIFICATION` d\'orientation (typed-escalation, ON_ORIENT) si elle lui manque.');
+    : '_Non précisée au setup._ La racine demande une `CLARIFICATION` si elle lui manque pour décider.');
   lignes.push('');
 
   lignes.push('## Commanditaire et validations');

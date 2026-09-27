@@ -22,6 +22,6 @@
   },
   "holarch": {
     "modele": "https://github.com/Movida/holarch.git",
-    "version": "1.27.2"
+    "version": "1.28.0"
   }
 }

@@ -53,6 +53,10 @@ const gardeGit = require('./gardes/git');
 // budget-session.js : les tests qui recopient holarch-spawn.js dans un bac à sable sans ce module
 // (unites-indexees-*) le chargent sans MODULE_NOT_FOUND tant qu'aucune limite 429 ne survient.
 function attenteLimite() { return require('./attente-limite'); }
+// Mode solo (refonte du 2026-09-27). Fail-open : un fixture de test peut copier ce fichier seul ; sans solo.js,
+// le lanceur se comporte comme en 1.27 (mode équipe).
+let solo;
+try { solo = require('./solo'); } catch (_) { solo = { RACINE: 'concepteur', VERIFICATEUR: 'contre-epreuve', estSolo: () => false, contreEpreuveActive: () => false }; }
 
 const VALID_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const VALID_PERMISSION_MODES = ['acceptEdits', 'default', 'manual', 'plan', 'auto', 'dontAsk', 'bypassPermissions'];
@@ -983,6 +987,15 @@ function buildSystemPrompt(root, cfg, bootstrap) {
       ? fileBlock(rel, c)
       : fileBlock(rel, reduit, 'sections « Fournisseurs » et « Catalogue de modèles » retirées : données du lanceur, pas du contrat'));
   };
+  // Mode solo (refonte du 2026-09-27) : contrat court à la place du KERNEL, des modules et du bootstrap.
+  if (solo.estSolo(cfg)) {
+    push('framework/SOLO.md');
+    pushConfig();
+    const peSolo = parametresEffectifs(root, cfg);
+    if (peSolo) add('paramètres effectifs', peSolo);
+    dernierPesage = blocs;
+    return parts.join('\n');
+  }
   if (bootstrap) push('framework/BOOTSTRAP.md');
   push('framework/KERNEL.md');
   pushConfig();
@@ -1000,7 +1013,46 @@ function buildSystemPrompt(root, cfg, bootstrap) {
   return parts.join('\n');
 }
 
+/** Prompt de réveil du mode solo : l'énoncé, le cadrage et l'état vivant, rien d'autre (SOLO.md). */
+function buildUserPromptSolo(root, chemin, meta, params, extra) {
+  const p = [];
+  const blocs = [];
+  const base = path.join(root, 'mission', chemin);
+  const bloc = (nom, rel, contenu, note) => {
+    p.push(contenu === null ? `<fichier chemin="${rel}" note="INTROUVABLE"></fichier>` : fileBlock(rel, contenu, note));
+    blocs.push({ nom, chars: contenu === null ? 0 : contenu.length, note: note || '' });
+  };
+  const n = countSessions(root, chemin);
+  p.push(`Tu incarnes l'instance \`${chemin}\` (mode solo, profil ${meta.profil}, modèle ${meta.modele}, effort ${meta.effort}). Ton contrat est framework/SOLO.md, dans ton prompt système. Session n° ${n + 1}${n ? ` ; coût cumulé ${coutCumule(root, chemin).toFixed(2)} USD au tarif liste` : ''}. Il est ${nowIso()} (UTC). Plafonds de cette session : ${params.max_tours_par_session} tours, ${params.budget_usd_par_session} USD ; un hook te dira quand hiberner (SOLO.md §7). Voici l'état exact de tes fichiers — ne les relis pas :`);
+  bloc('OBJECTIVE', 'mission/OBJECTIVE.md', readIf(path.join(root, 'mission', 'OBJECTIVE.md')));
+  const kits = require('./kits').blocKits(require('./kits').resoudreKits(root, chemin, { bootstrap: true }));
+  if (kits && kits.texte) { p.push(kits.texte); blocs.push({ nom: 'KITS', chars: kits.chars, note: kits.note }); }
+  bloc('ROLE', `mission/${chemin}/ROLE.md`, readIf(path.join(base, 'ROLE.md')));
+  const cadrage = readIf(path.join(base, 'CADRAGE.md'));
+  if (cadrage !== null) bloc('CADRAGE', `mission/${chemin}/CADRAGE.md`, cadrage);
+  else if (chemin === solo.RACINE) p.push(`Pas encore de \`mission/${chemin}/CADRAGE.md\` : commence par le cadrage (SOLO.md §2).`);
+  const memory = readIf(path.join(base, 'MEMORY.md'));
+  if (memory === null) bloc('MEMORY', `mission/${chemin}/MEMORY.md`, null);
+  else {
+    const m = tailBounded(memory, Number.MAX_SAFE_INTEGER, 12000);
+    bloc('MEMORY', `mission/${chemin}/MEMORY.md`, m.content, m.droppedLines ? `TRONQUÉ à 12000 caractères : raccourcis-le (SOLO.md §4, ≤ 60 lignes)` : '');
+  }
+  bloc('STATUS', `mission/${chemin}/STATUS.md`, readIf(path.join(base, 'STATUS.md')));
+  const inbox = readIf(path.join(base, 'INBOX.md'));
+  if (inbox !== null) {
+    const t = tailInboxBounded(inbox, 5, 12000);
+    bloc('INBOX', `mission/${chemin}/INBOX.md`, t.content, t.hidden ? `${t.hidden} message(s) plus ancien(s) non injecté(s)` : '');
+  }
+  const journal = readIf(path.join(base, 'JOURNAL.md'));
+  if (journal !== null) bloc('JOURNAL', `mission/${chemin}/JOURNAL.md`, tailLines(journal, 8), 'dernières lignes');
+  if (extra && extra.workspace && extra.workspace.cwd && path.resolve(extra.workspace.cwd) !== path.resolve(root)) {
+    p.unshift(`Ta racine de travail est \`${extra.workspace.cwd}\` : tous tes chemins sont relatifs à elle.`);
+  }
+  return { prompt: p.join('\n\n'), blocs };
+}
+
 function buildUserPromptDetail(root, chemin, meta, params, bootstrap, cfg, extra) {
+  if (solo.estSolo(cfg || {})) return buildUserPromptSolo(root, chemin, meta, params, extra);
   const p = [];
   const blocs = [];
   const num = (k, d) => { const v = Number(params[k]); return Number.isFinite(v) && v > 0 ? v : d; };
@@ -1187,7 +1239,20 @@ function buildAgentsOption(root, params) {
 // Préparation d'un lancement
 // ---------------------------------------------------------------------------
 function prepareLaunch(root, chemin, opts) {
-  const bootstrap = !!opts.bootstrap;
+  let bootstrap = !!opts.bootstrap;
+  // Mode solo : la racine est créée par le lanceur (fichiers déterministes), sans session de bootstrap ; la
+  // première session est déjà du travail. Un --dry-run n'écrit rien et décrit la future racine.
+  const soloBootstrap = bootstrap && solo.estSolo(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))));
+  if (soloBootstrap) {
+    bootstrap = false;
+    if (!opts.dryRun) {
+      const ecrits = solo.creerRacineSolo(root, parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))).nom, nowIso());
+      if (ecrits.length) {
+        commitLanceur(root, ecrits, '[bootstrap] racine solo créée par le lanceur');
+        process.stderr.write(`HOLARCH ▸ ${chemin} ▸ mode solo : racine créée par le lanceur (${ecrits.length} fichier(s)), pas de session de bootstrap\n`);
+      }
+    }
+  }
   // 1.13.2 : un lancement neuf efface une demande d'arrêt périmée ; une ré-incarnation (opts.relance) ne touche pas au
   // fichier stop — c'est launchWithRelaunches qui l'a déjà lu et consommé avant de décider de ré-incarner.
   // Un --dry-run n'incarne rien : il ne doit pas non plus consommer une demande d'arrêt en attente (constaté le 2026-09-11).
@@ -1221,7 +1286,7 @@ function prepareLaunch(root, chemin, opts) {
       params.seuil_plafonne_par_fenetre = fenetre;
     }
   }
-  if (!bootstrap) {
+  if (!bootstrap && !(soloBootstrap && opts.dryRun)) {
     const base = path.join(workspace.cwd, 'mission', chemin);
     for (const name of ['ROLE.md', 'STATUS.md']) {
       if (!fs.existsSync(path.join(base, name))) throw new Error(`instance ${chemin} : ${name} introuvable (mécanique de spawn KERNEL §9 non faite ?)`);
@@ -1845,6 +1910,84 @@ function finishLaunch(root, chemin, code, sessions) {
   return reveilles;
 }
 
+/** Commit du lanceur (identité HOLARCH) limité aux chemins donnés ; rien à committer → false. */
+function commitLanceur(root, rels, message) {
+  const env = Object.assign({}, process.env, { GIT_AUTHOR_NAME: 'HOLARCH', GIT_AUTHOR_EMAIL: 'holarch@localhost', GIT_COMMITTER_NAME: 'HOLARCH', GIT_COMMITTER_EMAIL: 'holarch@localhost' });
+  const liste = rels.filter((r) => fs.existsSync(path.join(root, r)) || spawnSync('git', ['-C', root, 'ls-files', '--error-unmatch', '--', r], { encoding: 'utf8' }).status === 0);
+  if (!liste.length) return false;
+  if (spawnSync('git', ['-C', root, 'add', '-A', '--', ...liste], { encoding: 'utf8', env }).status !== 0) return false;
+  const st = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet', '--', ...liste], { encoding: 'utf8', env });
+  if (st.status === 0) return false;
+  return spawnSync('git', ['-C', root, 'commit', '-q', '-m', message, '--', ...liste], { encoding: 'utf8', env }).status === 0;
+}
+
+/** Contre-épreuve du mode solo : la racine vient de passer DELIVERED — une instance neuve éprouve le livrable.
+ *  Retourne 'relancer' si la racine doit être ré-incarnée (verdict ko, manche suivante possible), sinon null.
+ *  Revue du 2026-09-27 : manche non jouée (429, plantage, lancement refusé) jamais comptée ; toute fin sans
+ *  acceptation passe la racine BLOCKED ; --arret et sessions_max_par_instance respectés avant de ré-incarner ;
+ *  le vérificateur ne reçoit ni le budget ni les tours de la ligne de commande de la racine. */
+function contreEpreuveApres(root, chemin, opts, runner, sessions, status) {
+  if (chemin !== solo.RACINE || status.etat !== 'DELIVERED' || opts.dryRun) return null;
+  const cfg = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
+  if (!solo.contreEpreuveActive(cfg)) return null;
+  const max = solo.contreEpreuveMax(cfg);
+  const n = solo.manchesJouees(root, cfg.nom) + 1;
+  const regs = ['mission/registry/CONTRE-EPREUVES.md', 'mission/registry/SESSIONS.md', `mission/${solo.RACINE}/INBOX.md`, `mission/${solo.RACINE}/STATUS.md`, `mission/${solo.RACINE}/OUTBOX.md`];
+  const derniere = sessions[sessions.length - 1] || {};
+  if (n > max) {
+    solo.bloquerRacine(root, nowIso(), `relivraison non éprouvée : les ${max} manche(s) de contre-épreuve sont jouées — décision du mainteneur (relever contre_epreuve_max, ou accepter en l'état)`);
+    commitLanceur(root, regs, `[harnais] contre-épreuve : manches épuisées, ${solo.RACINE} bloqué`);
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ DELIVERED mais manches de contre-épreuve épuisées (${max}) — BLOCKED, au mainteneur\n`);
+    derniere.contreEpreuve = { manche: n, verdict: 'epuisees' };
+    return null;
+  }
+  const sha = (spawnSync('git', ['-C', root, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).stdout || '').trim();
+  const livrables = solo.livraisonHorsMission(cfg.params.livraison_hors_mission).map((e) => e.chemin).join(', ');
+  const prep = solo.preparerVerificateur(root, cfg.nom, n, nowIso(), livrables);
+  commitLanceur(root, prep, `[harnais] contre-épreuve, manche ${n} (livrable ${sha})`);
+  process.stderr.write(`HOLARCH ▸ ${chemin} ▸ DELIVERED — contre-épreuve par une instance neuve, manche ${n}/${max}\n`);
+  let sv = [];
+  let erreur = null;
+  try {
+    sv = launchWithRelaunches(root, solo.VERIFICATEUR, Object.assign({}, opts, { bootstrap: false, relance: false, profil: '', modele: '', effort: '', budget: '', maxTours: '' }), runner);
+  } catch (e) { erreur = String(e.message || e).slice(0, 200); }
+  const v = solo.lireVerdict(root);
+  const cout = sv.reduce((a, x) => a + (Number(x.res && x.res.cout_usd) || 0), 0);
+  const aTourne = sv.some((x) => x.res && x.res.fin !== 'sans_resultat' && !(x.arret && x.arret.motif === 'limite-api'));
+  const verdict = v && v.verdict ? v.verdict : (aTourne && !erreur ? 'absent' : 'non-joue');
+  const synthese = v && v.verdict ? solo.rapportAgrege(v.texte) : '';
+  const archive = solo.archiverTravail(root, cfg.nom, n);
+  solo.journaliserManche(root, cfg.nom, { manche: n, date: nowIso(), verdict, sha, synthese, archive, sessions: sv.length, cout_usd: Number(cout.toFixed(4)), erreur });
+  derniere.contreEpreuve = { manche: n, verdict, sessions: sv.length, cout_usd: cout };
+  process.stderr.write(`HOLARCH ▸ ${chemin} ▸ contre-épreuve manche ${n}/${max} : ${verdict} (${sv.length} session(s), ${cout.toFixed(2)} USD)${archive ? ` — cas archivés hors du dépôt : ${archive}` : ''}\n`);
+  if (verdict === 'ok') {
+    commitLanceur(root, regs, `[harnais] contre-épreuve ok (manche ${n})`);
+    try { fs.appendFileSync(path.join(root, 'mission', solo.RACINE, 'OUTBOX.md'), `\n> [lanceur · ${nowIso()}] Contre-épreuve manche ${n}/${max} : **ok**. Cas et verdict complets (mainteneur) : \`${archive || '—'}\`.\n`); } catch (_) { /* OUTBOX absent */ }
+    commitLanceur(root, regs, `[harnais] contre-épreuve ok (manche ${n}) : OUTBOX`);
+    return null;
+  }
+  if (verdict === 'non-joue') {
+    solo.bloquerRacine(root, nowIso(), `contre-épreuve non jouée (manche ${n}${erreur ? ` : ${erreur}` : ' : limite 429 ou plantage'}) — relance : node framework/bin/holarch-spawn.js --contre-epreuve`);
+    commitLanceur(root, regs, `[harnais] contre-épreuve non jouée (manche ${n}) : ${solo.RACINE} bloqué`);
+    return null;
+  }
+  const arretDemande = fs.existsSync(stopPath(root, chemin));
+  const maxSessions = Number(resolveParams(cfg).sessions_max_par_instance) || 0;
+  const plafond = maxSessions && countSessions(root, chemin) >= maxSessions;
+  if (verdict === 'ko' && n < max && !arretDemande && !plafond) {
+    solo.renvoyerALaRacine(root, n, nowIso(), synthese);
+    commitLanceur(root, regs, `[harnais] contre-épreuve ko (manche ${n}) : ${solo.RACINE} renvoyé au travail`);
+    process.stderr.write(`HOLARCH ▸ ${chemin} ▸ contre-épreuve ko (manche ${n}) — rapport agrégé dans l'INBOX, ré-incarnation\n`);
+    return 'relancer';
+  }
+  if (verdict === 'ko' && n < max) solo.renvoyerALaRacine(root, n, nowIso(), synthese);
+  const pourquoi = verdict === 'absent' ? 'le vérificateur n\'a pas écrit de verdict lisible' : n >= max ? `verdict ko à la dernière manche (${n}/${max})` : arretDemande ? 'verdict ko, arrêt demandé (--arret)' : `verdict ko, plafond sessions_max_par_instance (${maxSessions}) atteint`;
+  solo.bloquerRacine(root, nowIso(), `livraison non acceptée par la contre-épreuve : ${pourquoi} — synthèse dans mission/registry/CONTRE-EPREUVES.md, cas complets hors du dépôt (${archive || '—'})`);
+  if (arretDemande) { try { fs.unlinkSync(stopPath(root, chemin)); } catch (_) { /* déjà retiré */ } }
+  commitLanceur(root, regs, `[harnais] contre-épreuve ${verdict} (manche ${n}) : ${solo.RACINE} bloqué`);
+  return null;
+}
+
 function commitJournalLanceur(root, chemin) {
   const rels = ['mission/registry/SESSIONS.md', 'mission/registry/REVEILS.md'].filter((r) => fs.existsSync(path.join(root, r)));
   if (!rels.length) return false;
@@ -2094,7 +2237,10 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     const maxChangements = Number(launch.params.changements_regime_max) || 0;
     const isArret = /hibernation volontaire \(arrêt demandé\)/i.test(status.note || '');
     const voluntary = status.etat === 'WORKING' && /hibernation volontaire/i.test(status.note || '') && !isArret;
-    if (!voluntary) return sessions;
+    if (!voluntary) {
+      if (contreEpreuveApres(root, chemin, opts, runner, sessions, status) === 'relancer') continue;
+      return sessions;
+    }
     // 1.13.2 : --arret posé pendant que la session finissait déjà (ON_SLEEP sur budget ou contexte) — la note ne dit
     // pas « arrêt demandé », mais le fichier stop est là : pas de ré-incarnation (trois arrêts perdus le 2026-09-11,
     // chaque prepareLaunch effaçant le fichier). Consommé ici, jamais à la tentative suivante.
@@ -2137,7 +2283,7 @@ function launchWithRelaunches(root, chemin, opts, runner) {
     let arret = null;
     if (maxSessions && total >= maxSessions) arret = { motif: 'plafond', max: maxSessions, total };
     else if (relances > maxRelances) arret = { motif: 'sans-progres', sansProgres: relances, max: maxRelances };
-    else if (maxSansUnite && sansUnite >= maxSansUnite) arret = { motif: 'sans-unite', sansUnite, max: maxSansUnite };
+    else if (maxSansUnite && sansUnite >= maxSansUnite && !solo.estSolo(launch.cfg)) arret = { motif: 'sans-unite', sansUnite, max: maxSansUnite };
     if (arret) {
       const note = (status.note || '').slice(0, 200);
       const suite = `Il ne sera plus ré-incarné tout seul : relance-le en tâche détachée (\`node framework/bin/holarch-spawn.js ${chemin} --detach\`) après lecture de sa mémoire, recadre-le (\`TASK\`), ou passe-le \`FAILED\`.`;
@@ -2244,6 +2390,7 @@ function parseArgs(argv) {
     else if (a === '--immediat') o.immediat = true;
     else if (a === '--nettoyer-worktree') o.nettoyerWorktree = next();
     else if (a === '--controle') o.controle = next();
+    else if (a === '--contre-epreuve') o.contreEpreuve = true;
     else if (a === '--check-env') o.checkEnv = true;
     else if (a === '-h' || a === '--help') { o.help = true; }
     else if (a.startsWith('-')) throw new Error(`option inconnue : ${a}`);
@@ -2455,8 +2602,11 @@ function refusInstance(root, instance, o) {
   const norm = (c) => String(c || '').replace(/^mission\//, '').replace(/\/+$/, '');
   if (o.bootstrap) return "--bootstrap : le bootstrap se lance une seule fois, par l'utilisateur";
   const reserves = [['reveil', '--reveil'], ['arret', '--arret'], ['immediat', '--immediat'], ['reprendre', '--reprendre'],
-    ['forcer', '--forcer'], ['pour', '--pour'], ['declencheur', '--declencheur']];
+    ['forcer', '--forcer'], ['pour', '--pour'], ['declencheur', '--declencheur'], ['contreEpreuve', '--contre-epreuve']];
   for (const [cle, opt] of reserves) if (o[cle]) return `${opt} est réservé au harnais et à l'utilisateur`;
+  // Mode solo (revue du 2026-09-27) : spawn-guard filtre le texte des commandes, le lanceur ferme la porte — une instance
+  // ne lance aucune instance, quelle que soit la forme de l'appel (npm run mission, node -e, glob).
+  if (!o.dryRun && !o.taches && solo.estSolo(parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md'))))) return "mode solo : une instance n'en lance aucune autre (sous-agent pour une unité, contre-épreuve lancée par le harnais)";
   if ((o.addDir || []).length) return "--add-dir est réservé à l'utilisateur";
   // --dry-run et --taches ne lancent rien : forme seulement, comme spawn-guard. --controle et --nettoyer-worktree
   // agissent même avec --dry-run : leur cible est contrôlée.
@@ -2544,6 +2694,20 @@ function main() {
     const chemin = o.arret.replace(/^mission\//, '').replace(/\/+$/, '');
     const r = demanderArret(root, chemin, { immediat: !!o.immediat });
     process.stdout.write(`HOLARCH ▸ ${chemin} ▸ ${r.message}\n`);
+    return;
+  }
+  if (o.contreEpreuve) {
+    // Geste du mainteneur : rejouer une contre-épreuve non jouée (429, plantage) ou relancée après un recadrage.
+    const cfgCe = parseConfig(readIf(path.join(root, 'framework', 'CONFIG.md')));
+    if (!solo.contreEpreuveActive(cfgCe)) { process.stderr.write('--contre-epreuve : mode solo avec contre_epreuve = oui requis\n'); process.exit(2); }
+    const factice = [{}];
+    const suite = contreEpreuveApres(root, solo.RACINE, o, null, factice, { etat: 'DELIVERED' });
+    const ce = factice[0].contreEpreuve || {};
+    process.stdout.write(`HOLARCH ▸ ${solo.RACINE} ▸ contre-épreuve manche ${ce.manche || '—'} : ${ce.verdict || '—'}\n`);
+    if (suite === 'relancer') {
+      const sessionsCe = launchWithRelaunches(root, solo.RACINE, Object.assign({}, o, { contreEpreuve: false }));
+      finishLaunch(root, solo.RACINE, 0, sessionsCe);
+    }
     return;
   }
   if (o.controle) {
@@ -2645,7 +2809,7 @@ function main() {
       `instance      : ${launch.chemin}${launch.bootstrap ? ' (bootstrap)' : ''} · profil ${launch.meta.profil} · profondeur ${launch.meta.depth}`,
       `modèle/effort : ${launch.meta.modele} / ${launch.meta.effort} (effort : ${launch.meta.origine_effort})${launch.params.modele_repli ? ` (repli ${launch.params.modele_repli})` : ''}`,
       `fusibles      : ${launch.maxTours} tours · ${launch.budget} USD · contexte ${launch.params.seuil_contexte_tokens} tokens (autocompact ${launch.params.autocompact_tokens}) · relances sans progrès ${launch.params.relances_max} · sessions/instance ${launch.params.sessions_max_par_instance} · changements de régime ${launch.params.changements_regime_max}`,
-      `prompt système: ${launch.systemPrompt.length} caractères (KERNEL + CONFIG + ${launch.cfg.modules.length} modules${launch.bootstrap ? ' + BOOTSTRAP + MANIFEST' : ''})`,
+      `prompt système: ${launch.systemPrompt.length} caractères (${solo.estSolo(launch.cfg) ? 'SOLO + CONFIG, mode solo' : `KERNEL + CONFIG + ${launch.cfg.modules.length} modules${launch.bootstrap ? ' + BOOTSTRAP + MANIFEST' : ''}`})`,
       `prompt        : ${launch.prompt.length} caractères (transmis par stdin, pas en argument — voir D41)`,
       `blocs         : ${launch.blocs.map((b) => `${b.nom} ${b.chars}${b.note ? ` (${b.note})` : ''}`).join(' · ')}`,
       `blocs système : ${(() => { const p = pesageSystemPrompt(); const total = p.reduce((s, b) => s + b.chars, 0) || 1; return p.slice().sort((a, b) => b.chars - a.chars).slice(0, 6).map((b) => `${b.nom} ${b.chars} (${Math.round(100 * b.chars / total)} %)`).join(' · '); })()} — les plus lourds, relus à chaque tour`,

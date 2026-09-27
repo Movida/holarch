@@ -32,7 +32,7 @@ test('références non vides (solo) : preset artefacts, quatre extensions et par
 test('faits à valider seuls suffisent ; blancs seuls ne suffisent pas', () => {
   assert.strictEqual(init.deriver({ ...SOLO, faits_a_valider: 'Le prénom exact des mariés.' }).preset, 'artefacts');
   const d = init.deriver({ ...SOLO, references: '   ', faits_a_valider: '' });
-  assert.strictEqual(d.preset, 'solo-light');
+  assert.strictEqual(d.preset, 'solo');
   assert.ok(!d.modules.some((m) => m.nom === 'regles-du-metier'));
 });
 

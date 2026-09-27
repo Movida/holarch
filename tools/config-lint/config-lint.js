@@ -28,6 +28,9 @@ const ENTIERS_POSITIFS = ['max_tours_par_session', 'seuil_contexte_tokens', 'aut
 // Troisième revue n° 81 : les montants USD (budget_usd_par_session, budget_usd_session_max) sont lus par la même
 // fonction que le lanceur (framework/bin/budget-session.js, lireNombre) — « 1e2 » refusé, « 8,5 » accepté, vide = absent.
 let lireMontant;
+let livraisonHorsMission = (v) => String(v || '').split(/[;,]/).map((e) => e.trim().replace(/^`+|`+$/g, '')).filter((e) => e && e !== '—' && e !== '-')
+  .map((e) => { const i = e.lastIndexOf('@'); return { chemin: (i === -1 ? e : e.slice(0, i)).trim().replace(/^\.\//, '').replace(/\/+$/, ''), instances: i === -1 ? ['concepteur'] : e.slice(i + 1).split('+').map((x) => x.trim()).filter(Boolean) }; });
+try { livraisonHorsMission = require(path.join(__dirname, '..', '..', 'framework', 'bin', 'solo.js')).livraisonHorsMission; } catch { /* lint copié seul : repli local */ }
 try { lireMontant = require(path.join(__dirname, '..', '..', 'framework', 'bin', 'budget-session.js')).lireNombre; } catch {
   // Repli (outil copié sans framework/, paquet non promu) : même règle, recopiée de budget-session.lireNombre.
   lireMontant = (v) => (typeof v === 'string' && /^[+-]?(\d+([.,]\d*)?|[.,]\d+)$/.test(v.trim()) ? Number(v.trim().replace(',', '.')) : undefined);
@@ -47,6 +50,12 @@ const PARAMETRES_CHANTIER_16 = [
   'seuil_budget_pct', 'budget_usd_session_max', 'jobs_lourds_max', 'memoire_libre_min_mo',
   'job_silence_max_min', 'budget_services_usd', 'motifs_lourds', 'job_duree_min',
 ];
+
+// Refonte « solo d'abord » (diagnostic du 2026-09-27) : mode de conduite, contre-épreuve par une instance neuve,
+// chemins que l'instance commite hors de mission/. Facultatifs, validés s'ils sont présents.
+const PARAMETRES_SOLO = ['mode', 'contre_epreuve', 'contre_epreuve_max', 'livraison_hors_mission'];
+// Préfixes que livraison_hors_mission ne peut jamais ouvrir : le harnais et l'outillage du dépôt.
+const LIVRAISON_INTERDITS = ['framework', 'tools', '.claude', 'docs', '.git', '.github', 'mission'];
 
 // Chemins pré-bootstrap dont l'existence signale une mission déjà en cours (BOOTSTRAP.md étape 1.2).
 const MARQUEURS_MISSION = ['mission/registry', 'mission/concepteur', 'mission/shared', 'mission/graveyard'];
@@ -367,7 +376,7 @@ function lintConfig(entree) {
   }
 
   // 1.3.d — paramètres requis par les modules actifs présents dans CONFIG.md.
-  const attendus = new Set([...PARAMETRES_TRANSVERSES, ...PARAMETRES_CHANTIER_16]);
+  const attendus = new Set([...PARAMETRES_TRANSVERSES, ...PARAMETRES_CHANTIER_16, ...PARAMETRES_SOLO]);
   for (const m of connus) {
     const texte = moduleTexts.get(m.nom);
     if (texte === undefined) {
@@ -532,6 +541,27 @@ function lintConfig(entree) {
     const seuil = Number(config.parametres.get('seuil_contexte_tokens'));
     if (Number.isFinite(auto) && Number.isFinite(seuil) && auto <= seuil) {
       err(`paramètre "autocompact_tokens" (${auto}) doit être strictement supérieur à "seuil_contexte_tokens" (${seuil}).`);
+    }
+  }
+  // Refonte solo : valeurs de mode, contre_epreuve, contre_epreuve_max, livraison_hors_mission.
+  const facultatifEnum = (nom, valeurs) => {
+    if (!config.parametres.has(nom)) return;
+    const v = config.parametres.get(nom);
+    if (!valeurs.includes(v)) err(`paramètre "${nom}" : valeur "${v}" non reconnue (attendu : ${valeurs.join(', ')}).`);
+  };
+  facultatifEnum('mode', ['solo', 'equipe']);
+  facultatifEnum('contre_epreuve', ['oui', 'non']);
+  if (config.parametres.has('contre_epreuve_max')) {
+    const v = config.parametres.get('contre_epreuve_max');
+    if (!/^\d+$/.test(v) || Number(v) < 1 || Number(v) > 5) err(`paramètre "contre_epreuve_max" : "${v}" doit être un entier entre 1 et 5 inclus.`);
+  }
+  if (config.parametres.has('livraison_hors_mission')) {
+    const soloActif = config.parametres.get('mode') === 'solo';
+    for (const brut of livraisonHorsMission(config.parametres.get('livraison_hors_mission'))) {
+      if (soloActif) for (const inst of brut.instances || []) if (!['concepteur', 'contre-epreuve'].includes(inst)) avert(`paramètre "livraison_hors_mission" : instance "${inst}" inconnue en mode solo (concepteur ou contre-epreuve).`);
+      const tete = brut.chemin.split('/')[0].toLowerCase();
+      if (!brut.chemin || brut.chemin.startsWith('/') || brut.chemin.split('/').includes('..')) err(`paramètre "livraison_hors_mission" : "${brut.chemin}" doit être un chemin relatif à la racine, sans "..".`);
+      else if (LIVRAISON_INTERDITS.includes(tete) || tete.startsWith('.git') || brut.chemin === '.' || brut.chemin.startsWith('*')) err(`paramètre "livraison_hors_mission" : "${brut.chemin}" ouvrirait ${tete === '.' || tete.startsWith('*') ? 'tout le dépôt' : `${tete}/`} — interdit (harnais, outillage ou mission).`);
     }
   }
   // Chantier 16, §18.1 : seuil_budget_pct (budget-watch) — entier entre 50 et 95 inclus, absence
@@ -703,7 +733,7 @@ function mainKits(options) {
   return r.erreurs.length > 0 ? 1 : 0;
 }
 
-module.exports = { parseManifest, parseConfig, parseModuleParams, lintConfig, lintDepuisDisque, parseArgs, main,
+module.exports = { livraisonHorsMission, parseManifest, parseConfig, parseModuleParams, lintConfig, lintDepuisDisque, parseArgs, main,
   effortsDeCellule, permisDeCellule, verifierBriefObjective,
   CATEGORIES_OBLIGATOIRES, PERMISSION_MODES, FORMATS_RAPPORT, EFFORTS, PROFILS };
 

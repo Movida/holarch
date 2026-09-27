@@ -12,7 +12,7 @@ parce qu'il est committé. Version du framework : voir `framework/VERSION` ; pro
    node tools/holarch-init/holarch-init.js --out /tmp/ma-mission   # puis copier les deux fichiers produits
    ```
 2. Vérifier : `npm run lint` (composition valide) puis `npm run dry-run` (le lanceur se résout sans rien lancer).
-3. Lancer : `npm run bootstrap`. Ensuite, chaque itération se relance avec `node framework/bin/holarch-spawn.js <chemin-instance>` (skill `holarch-iterate` dans une session Claude Code).
+3. Lancer : `npm run bootstrap`. En mode solo (défaut, preset `solo`), le lanceur crée lui-même l'instance unique `concepteur` et la lance aussitôt ; à sa livraison, une instance neuve `contre-epreuve` l'éprouve (`docs/holarch.md` §16.7). Déclarer dans `livraison_hors_mission` (`framework/CONFIG.md`) les chemins du produit hors de `mission/`. Ensuite, chaque itération se relance avec `node framework/bin/holarch-spawn.js <chemin-instance>` (skill `holarch-iterate` dans une session Claude Code).
 
 ## Rester à jour avec le framework
 
