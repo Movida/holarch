@@ -259,7 +259,7 @@ test('--sans-commit laisse les modifications non committées', () => {
   }
 });
 
-/** Branche la fixture sur un dépôt nu `amont` (branche amont de HEAD, comme holon-v2/main ici) ; `avancer()` y pousse un
+/** Branche la fixture sur un dépôt nu `amont` (branche amont de HEAD, comme holarch-dev/main ici) ; `avancer()` y pousse un
  *  commit depuis un second clone, sans que la fixture le sache avant son prochain fetch. */
 function brancherAmont(root) {
   const nu = fs.mkdtempSync(path.join(os.tmpdir(), 'holarch-open-amont-'));

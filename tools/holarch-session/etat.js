@@ -69,8 +69,11 @@ function collecter(root, deps) {
   e.nonCommittes = status.split('\n').filter(Boolean).map((l) => l.replace(/^[ MADRCU?!]{1,2}\s+/, '').trim());
   e.fichiersInstance = e.nonCommittes.filter((f) => /^mission\/(?!OBJECTIVE\.md$)/.test(f));
   e.commits = (d.git(['log', '--oneline', '-5']) || '').split('\n').filter(Boolean).map((l) => l.slice(0, 100));
-  // Commits locaux non poussés vers le remote de travail (holon-v2), et âge de la dernière passation en mémoire.
-  const nonPousses = d.git(['rev-list', '--count', 'holon-v2/main..HEAD']);
+  // Commits locaux non poussés vers l'amont de la branche (`@{u}`, holarch-dev/main ici — lu, jamais écrit en dur
+  // depuis le renommage du 2026-09-27), et âge de la dernière passation en mémoire.
+  const amont = d.git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  e.amont = amont ? amont.split('/')[0] : null;
+  const nonPousses = amont ? d.git(['rev-list', '--count', `${amont}..HEAD`]) : null;
   e.nonPousses = nonPousses === null ? null : Number(nonPousses) || 0;
   const mt = d.mtimePassation();
   e.passationHeures = mt ? Math.round(((d.maintenant().getTime() - mt.getTime()) / 3600000) * 10) / 10 : null;
@@ -152,7 +155,7 @@ function formater(e, bref) {
   l.push(e.processus.length ? `⚠ ${e.processus.length} processus de mission en cours : ${e.processus.map((p) => `${p.pid} ${p.commande.split(' ').slice(0, 4).join(' ')}`).join(' ; ')} — ne pas toucher mission/ ni changer de branche (skill holarch-pause)` : 'aucune session de mission en cours');
   l.push(`derniers commits : ${e.commits.map((c) => (bref ? c.slice(0, 60) : c)).join(' · ')}`);
   const suivi = [];
-  if (e.nonPousses) suivi.push(`${e.nonPousses} commit(s) non poussé(s) vers holon-v2`);
+  if (e.nonPousses) suivi.push(`${e.nonPousses} commit(s) non poussé(s) vers ${e.amont || "l'amont"}`);
   if (e.passationHeures !== null) suivi.push(`dernière passation en mémoire il y a ${e.passationHeures} h${e.passationHeures >= 12 ? ' (à relire avec prudence, skill holarch-session)' : ''}`);
   else suivi.push('aucune passation en mémoire (skill holarch-session §3 avant de rendre la main)');
   suivi.push(`${e.ideesOuvertes} idée(s) ouverte(s) dans docs/IDEES.md${e.ideesOuvertes ? ' (à prendre quand la main est libre, à compléter à chaque passation)' : ''}`);

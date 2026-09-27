@@ -285,8 +285,10 @@ function collecter(root, depsSur) {
   e.git.worktrees = parseWorktrees(d.git(['worktree', 'list', '--porcelain'])).filter((w) => path.resolve(w.chemin) !== path.resolve(root));
   const branches = (d.git(['branch', '--list', '--format=%(refname:short)', `${prefixe}*`]) || '').split('\n').map((s) => s.trim()).filter(Boolean);
   e.git.branchesInstance = branches;
-  const ecart = (d.git(['rev-list', '--left-right', '--count', `${BRANCHE_PRINCIPALE}...holon-v2/${BRANCHE_PRINCIPALE}`]) || '').trim().split(/\s+/);
-  e.git.ecartHolonV2 = ecart.length === 2 ? { avance: num(ecart[0]), retard: num(ecart[1]) } : null;
+  // Écart avec l'amont de la branche principale (`main@{u}`, holarch-dev/main ici), lu et jamais écrit en dur.
+  const amont = (d.git(['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${BRANCHE_PRINCIPALE}@{u}`]) || '').trim();
+  const ecart = amont ? (d.git(['rev-list', '--left-right', '--count', `${BRANCHE_PRINCIPALE}...${amont}`]) || '').trim().split(/\s+/) : [];
+  e.git.ecartAmont = ecart.length === 2 ? { amont, avance: num(ecart[0]), retard: num(ecart[1]) } : null;
   if (e.git.branche !== BRANCHE_PRINCIPALE) anomalie('alerte', 'branche-principale', '', `l'arbre principal est sur « ${e.git.branche} », pas sur ${BRANCHE_PRINCIPALE} (bascule oubliée par une session tuée ?)`);
   if (e.git.fichiersLanceur.length) anomalie('info', 'journal-lanceur-non-committe', '', `${e.git.fichiersLanceur.join(', ')} non committé(s) : journal du lanceur, la racine le committe à sa prochaine session`);
 

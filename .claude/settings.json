@@ -1,25 +1,24 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git init)",
-      "Bash(git add -A)",
-      "Bash(git commit -m *)",
-      "Bash(git status)",
-      "Bash(git status *)",
-      "Bash(git log)",
-      "Bash(git log *)",
-      "Bash(git diff)",
-      "Bash(git diff *)",
-      "Bash(git show *)",
+      "Bash(rm -rf -- /home/vscode/.claude/projects/-tmp-*)",
+      "Bash(rm -rf -- /home/vscode/.claude/projects/-workspaces-holon*)",
+      "Bash(rm -rf /tmp/claude-1000/*)",
+
+      "Bash(npm run *)",
+      "Bash(npm test*)",
       "Bash(node framework/bin/holarch-spawn.js *)",
-      "Bash(node --test *)",
-      "Bash(python3 *)",
-      "Bash(pytest *)",
-      "Bash(node *)",
-      "Bash(npm test)",
-      "Bash(npm run *)"
+      "Bash(node tools/*)",
+
+      "Bash(git push holarch-dev *)",
+      "Bash(git worktree remove *)",
+      "Bash(git worktree prune*)",
+      "Bash(git branch -D *)",
+      "Bash(git tag *)"
     ]
-  },
+  }
+}
+,
   "hooks": {
     "SessionStart": [
       {

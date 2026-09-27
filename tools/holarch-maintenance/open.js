@@ -2,7 +2,7 @@
 'use strict';
 // Ouverture d'une nouvelle mission. Préconditions (dans l'ordre, arrêt au premier refus) : mission/
 // contient déjà autre chose que mission/.holarch/ (résidu jetable, non significatif), aucune tâche
-// détachée vivante, branche courante pas en retard sur son amont fraîchement lu (`git fetch`, holon-v2/main ici :
+// détachée vivante, branche courante pas en retard sur son amont fraîchement lu (`git fetch`, holarch-dev/main ici :
 // un chantier s'ouvre sur ce que le dépôt de référence a de plus récent ; fetch impossible = avertissement, pas
 // refus). Si tout passe : mission/OBJECTIVE.md depuis framework/templates/OBJECTIVE.template.md,
 // framework/CONFIG.md réécrit (ligne de nom + table Paramètres depuis le preset choisi, surchargée par

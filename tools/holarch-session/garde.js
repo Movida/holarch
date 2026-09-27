@@ -5,7 +5,7 @@
  * symétriques de ceux des instances (framework/hooks/holarch-hooks.js). Ils rendent mécaniques
  * trois règles de docs/ENVIRONNEMENT.md §7 et §8 :
  *   - Bash `git push` : refusé vers `origin` (lecture seule), refusé en force, refusé sans remote
- *     explicite (l'amont de `main` peut pointer `origin`) — `git push holon-v2 <branche>` passe ;
+ *     explicite (l'amont de `main` peut pointer `origin`) — `git push holarch-dev <branche>` passe ;
  *   - Bash `git switch` / `checkout` / `reset --hard` / `clean` / `stash` / `worktree remove`
  *     pendant qu'une mission tourne : refusé (une instance écrit dans l'arbre de travail) ;
  *   - Write/Edit dans `mission/<instance>/…` (tout sauf `mission/OBJECTIVE.md`) : demande de
@@ -48,8 +48,8 @@ function analyserBash(cmd, ctx) {
     if (sub === 'push') {
       if (args.some((a) => a === '--force' || a === '-f' || a.startsWith('--force-with-lease') || a.startsWith('+'))) return { decision: 'deny', reason: 'push forcé réservé au mainteneur (docs/ENVIRONNEMENT.md §7).' };
       const positionnels = args.filter((a) => !a.startsWith('-'));
-      if (positionnels.includes('origin')) return { decision: 'deny', reason: '`origin` (Movida/holon, ancien nom) est en lecture seule : `git push holon-v2 <branche>` (docs/ENVIRONNEMENT.md §3).' };
-      if (!positionnels.length) return { decision: 'deny', reason: 'précise le remote et la branche — `git push holon-v2 main` — l\'amont implicite peut pointer `origin` (docs/ENVIRONNEMENT.md §3).' };
+      if (positionnels.includes('origin')) return { decision: 'deny', reason: '`origin` (Movida/holon, ancien dépôt public archivé) est en lecture seule : `git push holarch-dev <branche>` (docs/ENVIRONNEMENT.md §3).' };
+      if (!positionnels.length) return { decision: 'deny', reason: 'précise le remote et la branche — `git push holarch-dev main` — l\'amont implicite peut pointer `origin` (docs/ENVIRONNEMENT.md §3).' };
     }
     const touchePlan = sub === 'switch' || (sub === 'checkout' && !args.includes('--') && args.some((a) => !a.startsWith('-'))) || (sub === 'reset' && args.includes('--hard')) || sub === 'clean' || sub === 'stash' || (sub === 'worktree' && args.includes('remove'));
     if (touchePlan && ctx.missionEnCours) return { decision: 'deny', reason: `une mission tourne (processus holarch-spawn / claude -p) : pas de \`git ${sub}\` qui change l'arbre de travail pendant qu'une instance y écrit — arrêter d'abord (skill holarch-pause, docs/ENVIRONNEMENT.md §8).` };

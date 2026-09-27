@@ -31,7 +31,7 @@ const PS_CALME = '  1 /sbin/init\n 59956 /x/native-binary/claude --output-format
 test('etat : collecte et formate branche, fichiers d\'instance, mission, processus, sessions, versions', () => {
   const root = makeRoot();
   const deps = {
-    git: (args) => ({ 'branch --show-current': 'main', 'status --short --untracked-files=all': 'M mission/concepteur/enfant/MEMORY.md\n M README.md\n?? tools/x.js', 'log --oneline -5': 'abc1234 Un commit\ndef5678 Un autre', 'remote -v': 'holon-v2\thttps://x/holon-v2.git (fetch)\nholon-v2\thttps://x/holon-v2.git (push)' }[args.join(' ')] || ''),
+    git: (args) => ({ 'branch --show-current': 'main', 'status --short --untracked-files=all': 'M mission/concepteur/enfant/MEMORY.md\n M README.md\n?? tools/x.js', 'log --oneline -5': 'abc1234 Un commit\ndef5678 Un autre', 'remote -v': 'holarch-dev\thttps://x/holarch-dev.git (fetch)\nholarch-dev\thttps://x/holarch-dev.git (push)' }[args.join(' ')] || ''),
     ps: () => PS_MISSION,
     versionClaude: () => '2.1.263 (Claude Code)',
     versionNode: () => 'v24.20.0',
@@ -54,7 +54,7 @@ test('etat : collecte et formate branche, fichiers d\'instance, mission, process
   assert.equal(e.ideesOuvertes, 1);
   assert.match(t, /suivi : dernière passation en mémoire il y a 3 h · 1 idée\(s\) ouverte\(s\) dans docs\/IDEES\.md/);
   assert.match(t, /paramètres : mode_attente=detache · isolation=worktree \(défaut\) · 8 USD\/session · 200 tours · seuil contexte \? \(défaut\) · relances sans progrès 2 \(défaut\)/);
-  assert.match(t, /framework v\S+ · Claude Code 2\.1\.263 · Node v24\.20\.0 · remotes : holon-v2 https:\/\/x\/holon-v2\.git/);
+  assert.match(t, /framework v\S+ · Claude Code 2\.1\.263 · Node v24\.20\.0 · remotes : holarch-dev https:\/\/x\/holarch-dev\.git/);
   const calme = etat.formater(etat.collecter(root, Object.assign({}, deps, { ps: () => PS_CALME })), false);
   assert.match(calme, /aucune session de mission en cours/);
   assert.match(calme, /  · mission\/concepteur\/enfant\/MEMORY\.md/);
@@ -124,16 +124,16 @@ test('etat --hook : JSON additionalContext hors instance, {} dans une session d\
   assert.equal(inst.stdout, '{}');
 });
 
-test('garde : git push — origin refusé, force refusé, sans remote refusé, holon-v2 accepté', () => {
+test('garde : git push — origin refusé, force refusé, sans remote refusé, holarch-dev accepté', () => {
   const ctx = { missionEnCours: false };
   assert.equal(garde.analyserBash('git push origin main', ctx).decision, 'deny');
-  assert.equal(garde.analyserBash('git push holon-v2 main --force', ctx).decision, 'deny');
-  assert.equal(garde.analyserBash('git push -f holon-v2 main', ctx).decision, 'deny');
-  assert.equal(garde.analyserBash('git push holon-v2 +main', ctx).decision, 'deny');
+  assert.equal(garde.analyserBash('git push holarch-dev main --force', ctx).decision, 'deny');
+  assert.equal(garde.analyserBash('git push -f holarch-dev main', ctx).decision, 'deny');
+  assert.equal(garde.analyserBash('git push holarch-dev +main', ctx).decision, 'deny');
   assert.equal(garde.analyserBash('git push', ctx).decision, 'deny');
-  assert.equal(garde.analyserBash('git add -A && git commit -m x && git push holon-v2 main', ctx).decision, 'ok');
-  assert.equal(garde.analyserBash('git push holon-v2 main mission-holon-v2-final', ctx).decision, 'ok');
-  assert.equal(garde.analyserBash('git push --dry-run holon-v2 main', ctx).decision, 'ok');
+  assert.equal(garde.analyserBash('git add -A && git commit -m x && git push holarch-dev main', ctx).decision, 'ok');
+  assert.equal(garde.analyserBash('git push holarch-dev main mission-holon-v2-final', ctx).decision, 'ok');
+  assert.equal(garde.analyserBash('git push --dry-run holarch-dev main', ctx).decision, 'ok');
   assert.equal(garde.analyserBash('echo "git push origin"', ctx).decision, 'ok'); // pas une invocation de git
   // 2026-09-12 : jamais de commit enchaîné derrière un test filtré.
   assert.equal(garde.analyserBash('npm test 2>&1 | grep pass && git add x && git commit -m y', ctx).decision, 'deny');

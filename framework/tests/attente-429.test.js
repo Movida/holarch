@@ -712,6 +712,13 @@ test(
 );
 
 // -- Troisième revue n° 72, 73, 74 : occupation d'une instance, un seul prédicat ------------------------------------
+/** Horloge monotone en ms, commune à tous les processus de la machine (CLOCK_MONOTONIC, `process.hrtime`) : l'horloge
+ *  murale peut reculer — sous WSL2, d'environ 1,4 s toutes les 28 s (resynchronisation de la VM, mesuré le 2026-09-27) —,
+ *  et des horodatages muraux pris dans des processus différents faisaient voir deux sessions successives comme
+ *  superposées, ou une session d'après la livraison comme antérieure (le test échouait une fois sur deux sans défaut du
+ *  lanceur). */
+function mono() { return Number(process.hrtime.bigint() / 1000000n); }
+
 /** Environnement d'un processus de test : sans aucune variable HOLARCH_* héritée de la session qui lance les tests. */
 function envPropre(root, extra) {
   const env = {};
@@ -723,10 +730,10 @@ function envPropre(root, extra) {
  *  `fichier:mission/go` — ce qu'une vraie session fait à ON_SLEEP avant la traîne de son lanceur. */
 const FAKE_SESSION = `const fs = require('fs'); const path = require('path'); const root = process.cwd();
 const log = path.join(root, 'sessions.log');
-fs.appendFileSync(log, 'start ' + process.pid + ' ' + Date.now() + '\\n');
+fs.appendFileSync(log, 'start ' + process.pid + ' ' + Number(process.hrtime.bigint() / 1000000n) + '\\n');
 Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.T_SESSION_MS || 300));
 fs.writeFileSync(path.join(root, 'mission', 'x', 'STATUS.md'), '# Statut — x\\n\\n| Champ | Valeur |\\n|---|---|\\n| État | WAITING_CHILDREN |\\n| Depuis | ' + new Date().toISOString() + ' |\\n| Posé par | soi |\\n| Note |  |\\n| Réveil | fichier:mission/go |\\n');
-fs.appendFileSync(log, 'end ' + process.pid + ' ' + Date.now() + '\\n');
+fs.appendFileSync(log, 'end ' + process.pid + ' ' + Number(process.hrtime.bigint() / 1000000n) + '\\n');
 process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', session_id: 's-' + process.pid, total_cost_usd: 0.001, num_turns: 1, usage: { input_tokens: 1, output_tokens: 1 }, is_error: false }));
 `;
 
@@ -746,8 +753,8 @@ function finDe(p) { return new Promise((r) => { if (p.exitCode !== null || p.sig
 /** Attend qu'aucun lanceur de x ne vive plus (tâches closes ou mortes, verrou live/ absent ou mort), au plus ms. */
 async function attendreCalme(root, ms) {
   const { isLive, tacheVivantePour } = require(SPAWN_JS);
-  const fin = Date.now() + ms;
-  while (Date.now() < fin) {
+  const fin = mono() + ms;
+  while (mono() < fin) {
     if (!isLive(root, 'x') && !tacheVivantePour(root, 'x')) return true;
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -765,12 +772,12 @@ async function tourLivraison(decalage, dureeLanceur) {
     execFileSync('git', ['add', '-A'], { cwd: root });
     execFileSync('git', ['commit', '-q', '-m', 'x'], { cwd: root });
     const env = envPropre(root, { HOLARCH_FAKE_CLAUDE: path.join(root, 'fake-sessions.js'), T_SESSION_MS: '300' });
-    const t0 = Date.now();
+    const t0 = mono();
     const lanceur = spawn(process.execPath, [SPAWN_JS, 'x', '--root', root], { cwd: root, env, stdio: 'ignore' });
-    const finLanceur = finDe(lanceur).then(() => Date.now());
+    const finLanceur = finDe(lanceur).then(() => mono());
     if (decalage === null) await finLanceur; // étalonnage : livraison après la fin du lanceur
     else await new Promise((r) => setTimeout(r, Math.max(0, dureeLanceur + decalage)));
-    const tLivraison = Date.now();
+    const tLivraison = mono();
     fs.writeFileSync(path.join(root, 'mission', 'go'), 'go\n');
     const reveils = [0, 1, 2].map(() => spawn(process.execPath, [SPAWN_JS, '--reveil', '--declencheur', 'x/c', '--root', root], { cwd: root, env, stdio: 'ignore' }));
     const tFin = await finLanceur;

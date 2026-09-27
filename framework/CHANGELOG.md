@@ -10,6 +10,15 @@
 > sous l'ancienne version peut ne plus être valide (section obligatoire ajoutée à un template,
 > module retiré ou renommé, catégorie ou incompatibilité nouvelle).
 
+## 1.27.2 — 2026-09-27
+
+Correctif de test (aucun comportement changé) — `attente-429.test.js`, « troisième revue n° 72 + 74 », échouait environ une
+fois sur deux (CI « Harnais HOLARCH » rouge) sans défaut du lanceur : il comparait des `Date.now()` relevés dans des
+processus différents, et l'horloge murale du conteneur recule d'environ 1,4 s toutes les 28 s sous WSL2 (mesuré le
+2026-09-27 contre `process.hrtime`) — deux sessions successives paraissaient superposées, une session d'après la livraison
+paraissait antérieure. Le test mesure désormais sur l'horloge monotone commune (`process.hrtime`, CLOCK_MONOTONIC) :
+12 exécutions sur 12 vertes, contre 3 à 4 échecs sur 10 avant.
+
 ## 1.27.1 — 2026-09-26
 
 Correctif (aucun comportement changé) — `framework/COMMANDEMENTS.md` sort du produit et du modèle publié : il se

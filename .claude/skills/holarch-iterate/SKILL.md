@@ -46,8 +46,8 @@ Une commande, `npm run etat` (la ligne injectée au démarrage suffit si rien n'
    <INBOX.md> --blame`. Racine : `mission/<racine>/INBOX.md` sur `main`, commit humain sans préfixe. Enfant sous
    worktree : dans `mission/<enfant>/INBOX.md` de l'arbre du parent, jamais dans `mission/.holarch/worktrees/` —
    le lanceur relaie à l'incarnation (framework 1.14.0).
-5. **Amont relu** : `git fetch holon-v2` puis `git rev-list --left-right --count main...holon-v2/main` → `N 0` (rien en
-   retard). En retard avant un `--bootstrap` : `git pull --ff-only holon-v2 main` d'abord ; en retard pendant une mission
+5. **Amont relu** : `git fetch holarch-dev` puis `git rev-list --left-right --count main...holarch-dev/main` → `N 0` (rien en
+   retard). En retard avant un `--bootstrap` : `git pull --ff-only holarch-dev main` d'abord ; en retard pendant une mission
    (commits d'instance sur `main`) : ne pas tirer, le signaler au mainteneur. `npm run open` fait ce contrôle lui-même.
 
 Un fichier `mission/.holarch/stop/<chemin-tirets>` restant d'un arrêt précédent est effacé par le lancement neuf

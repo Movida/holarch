@@ -38,7 +38,7 @@ test('formater : une ligne par tour, la compaction sous le tour qui la précède
 });
 
 test('slugProjet et cheminTranscription : convention de Claude Code', () => {
-  assert.equal(slugProjet('/workspaces/holon'), '-workspaces-holon');
-  assert.equal(cheminTranscription('abc', { slug: '-workspaces-holon', projets: '/p' }), path.join('/p', '-workspaces-holon', 'abc.jsonl'));
+  assert.equal(slugProjet('/workspaces/holarch-dev'), '-workspaces-holarch-dev');
+  assert.equal(cheminTranscription('abc', { slug: '-workspaces-holarch-dev', projets: '/p' }), path.join('/p', '-workspaces-holarch-dev', 'abc.jsonl'));
   assert.equal(cheminTranscription('/tmp/x.jsonl'), '/tmp/x.jsonl');
 });

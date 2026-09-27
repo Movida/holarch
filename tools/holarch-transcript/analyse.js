@@ -12,7 +12,7 @@
  *   node tools/holarch-transcript/analyse.js <session-id | fichier.jsonl> [...] [--json] [--projet <slug>]
  *   Les identifiants de session viennent de mission/registry/SESSIONS.md (colonne Session).
  *   <slug> : nom du répertoire sous ~/.claude/projects/ ; par défaut, dérivé de la racine du dépôt
- *   courant (`/workspaces/holon` → `-workspaces-holon`).
+ *   courant (`/workspaces/holarch-dev` → `-workspaces-holarch-dev`).
  * Aucune dépendance, aucun réseau, lecture seule.
  */
 const fs = require('fs');

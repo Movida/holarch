@@ -124,7 +124,7 @@ function verifierAncres(liste) {
 
 /** `git add -A -- <cibles...>` ciblé (jamais un `add -A` global sans pathspec) puis `git commit -m
  *  message`. `cibles` doit contenir au moins un pathspec explicite. */
-/** Écart de la branche courante avec sa branche amont (`@{u}`, ici holon-v2/main), après un `git fetch` du remote
+/** Écart de la branche courante avec sa branche amont (`@{u}`, ici holarch-dev/main), après un `git fetch` du remote
  *  amont borné par `delaiMs` et sans invite d'authentification. Retourne {amont, avance, retard, erreur} : amont null =
  *  aucune branche amont configurée (fixture, clone local) ; erreur = fetch impossible (hors ligne, clé absente), écart
  *  alors calculé sur la dernière copie locale de l'amont. */

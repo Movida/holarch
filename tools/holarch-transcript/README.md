@@ -28,7 +28,7 @@ node tools/holarch-transcript/analyse.js <id> --projet -workspaces-autre-depot
 node tools/holarch-transcript/analyse.js <id> --json
 ```
 
-Le slug du projet est dérivé du répertoire courant (`/workspaces/holon` → `-workspaces-holon`) :
+Le slug du projet est dérivé du répertoire courant (`/workspaces/holarch-dev` → `-workspaces-holarch-dev`) :
 lancer depuis la racine du dépôt.
 
 ## Lire la sortie

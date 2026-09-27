@@ -50,7 +50,7 @@ function formater(e, opts) {
   const pm = e.messagesPourMainteneur.filter((m) => !m.repondu);
   l.push(`Messages : pour le mainteneur ${pm.length ? pm.map((m) => `${m.type} ${m.id} de ${m.from} (${m.date.slice(0, 16)})`).join(' ; ') : 'aucun'} · sans réponse entre instances ${e.messagesSansReponse.length}${e.reveils.length ? ` · dernier réveil ${e.reveils[e.reveils.length - 1].chemin} ${e.reveils[e.reveils.length - 1].date.slice(0, 16)}` : ''}`);
   const g = e.git;
-  l.push(`Git : ${g.nonCommittes.length ? `${g.nonCommittes.length} non committé(s) (${g.fichiersInstance.length} d'instance, ${g.fichiersLanceur.length} du lanceur, ${g.fichiersMaintenance.length} hors mission/)` : 'arbre principal propre'}${g.worktrees.length ? ` · worktrees : ${g.worktrees.map((w) => `${path.basename(w.chemin)} @${w.head}`).join(', ')}` : ''}${g.ecartHolonV2 ? ` · holon-v2/main : +${g.ecartHolonV2.avance}/-${g.ecartHolonV2.retard}` : ''}`);
+  l.push(`Git : ${g.nonCommittes.length ? `${g.nonCommittes.length} non committé(s) (${g.fichiersInstance.length} d'instance, ${g.fichiersLanceur.length} du lanceur, ${g.fichiersMaintenance.length} hors mission/)` : 'arbre principal propre'}${g.worktrees.length ? ` · worktrees : ${g.worktrees.map((w) => `${path.basename(w.chemin)} @${w.head}`).join(', ')}` : ''}${g.ecartAmont ? ` · ${g.ecartAmont.amont} : +${g.ecartAmont.avance}/-${g.ecartAmont.retard}` : ''}`);
   const al = e.anomalies.filter((a) => a.niveau === 'alerte');
   const inf = e.anomalies.filter((a) => a.niveau !== 'alerte');
   l.push(`Anomalies : ${al.length} alerte(s), ${inf.length} info(s)`);
